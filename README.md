@@ -31,7 +31,7 @@ agent/
 | Component | Description |
 |-----------|-------------|
 | Agent loop | Reads user input, sends conversation to model, executes requested tools, continues until completion |
-| Inference client | Calls `POST /chat/completions` on Vultr Inference with model + tool schema payload |
+| Inference client | Calls `POST /chat/completions` on Vultr Inference using `kimi-k2-instruct` (+ delegated `gpt-oss-120b` reasoning tool) |
 | Tool system | Defines tool metadata + JSON schema and executes tool calls from model responses |
 | File tools | `read_file`, `list_files`, `edit_file` for workspace interaction |
 
@@ -45,8 +45,12 @@ agent/
 Environment variables:
 
 - `VULTR_API_KEY` (required): API token for Vultr Inference
-- `VULTR_MODEL` (optional): model name (default: `kimi-k2-instruct`)
 - `VULTR_BASE_URL` (optional): API base URL (default: `https://api.vultrinference.com/v1`)
+
+Model behavior is fixed:
+
+- Primary model: `kimi-k2-instruct`
+- Delegated reasoning model: `gpt-oss-120b` via `reason_with_gpt_oss` tool
 
 ## Building
 
@@ -63,10 +67,9 @@ export VULTR_API_KEY="your-token"
 go run .
 ```
 
-Optional model/base URL override:
+Optional base URL override:
 
 ```bash
-export VULTR_MODEL="kimi-k2-instruct"
 export VULTR_BASE_URL="https://api.vultrinference.com/v1"
 go run .
 ```
@@ -75,7 +78,7 @@ go run .
 
 - Prompt shows as `You:`
 - Assistant responses print as `Assistant:`
-- Tool executions are logged as `tool: <name>(<json-args>)`
+- Tool execution now emits event-style, human-readable logs (`started`/`succeeded`/`failed`) per call
 - Exit with `Ctrl+C` or EOF (`Ctrl+D`)
 
 ## Testing
@@ -97,4 +100,3 @@ VULTR_API_KEY="your-token" go test -run E2E ./...
 Design docs are indexed in `specs/README.md`.
 
 Current status: the index references additional spec files that are not yet present in `specs/`.
-

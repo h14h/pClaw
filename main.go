@@ -11,13 +11,24 @@ import (
 	"os"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/invopop/jsonschema"
 )
 
 const (
-	defaultVultrBaseURL = "https://api.vultrinference.com/v1"
-	defaultVultrModel   = "kimi-k2-instruct"
+	defaultVultrBaseURL   = "https://api.vultrinference.com/v1"
+	defaultReasoningLimit = 2
+	reasoningCallTimeout  = 45 * time.Second
+	reasoningMaxTokens    = 1024
+	primaryMaxTokens      = 1024
+)
+
+type Model string
+
+const (
+	Instruct  Model = "kimi-k2-instruct"
+	Reasoning Model = "gpt-oss-120b"
 )
 
 type ToolDefinition struct {
@@ -28,17 +39,65 @@ type ToolDefinition struct {
 }
 
 type Agent struct {
-	baseURL        string
-	apiKey         string
-	model          string
-	httpClient     *http.Client
-	getUserMessage func() (string, bool)
-	tools          []ToolDefinition
+	baseURL            string
+	apiKey             string
+	primaryModel       Model
+	reasoningModel     Model
+	httpClient         *http.Client
+	getUserMessage     func() (string, bool)
+	tools              []ToolDefinition
+	toolEventSink      ToolEventSink
+	reasoningCallCount int
+}
+
+type ToolEventType string
+
+const (
+	ToolEventStarted   ToolEventType = "tool_call.started"
+	ToolEventSucceeded ToolEventType = "tool_call.succeeded"
+	ToolEventFailed    ToolEventType = "tool_call.failed"
+)
+
+type ToolEvent struct {
+	Type       ToolEventType
+	ToolCallID string
+	ToolName   string
+	ArgsRaw    string
+	ArgsParsed map[string]interface{}
+	Stats      map[string]interface{}
+	ResultRaw  string
+	Err        string
+	StartedAt  time.Time
+	Duration   time.Duration
+}
+
+type ToolEventSink interface {
+	HandleToolEvent(ctx context.Context, event ToolEvent)
+}
+
+type CLIToolEventSink struct {
+	out io.Writer
+}
+
+func (s *CLIToolEventSink) HandleToolEvent(_ context.Context, event ToolEvent) {
+	out := s.out
+	if out == nil {
+		out = os.Stdout
+	}
+	switch event.Type {
+	case ToolEventStarted:
+		fmt.Fprintf(out, "\u001b[92mtool\u001b[0m: %s\n", summarizeToolStart(event))
+	case ToolEventSucceeded:
+		fmt.Fprintf(out, "\u001b[92mtool\u001b[0m: %s\n", summarizeToolSuccess(event))
+	case ToolEventFailed:
+		fmt.Fprintf(out, "\u001b[92mtool\u001b[0m: %s\n", summarizeToolFailure(event))
+	}
 }
 
 type ChatMessage struct {
 	Role       string         `json:"role"`
 	Content    interface{}    `json:"content,omitempty"`
+	Reasoning  string         `json:"reasoning,omitempty"`
 	ToolCalls  []ChatToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string         `json:"tool_call_id,omitempty"`
 }
@@ -95,21 +154,10 @@ func main() {
 		return scanner.Text(), true
 	}
 
-	tools := []ToolDefinition{
-		ReadFileDefinition,
-		ListFilesDefinition,
-		EditFileDefinition,
-	}
-
 	apiKey := os.Getenv("VULTR_API_KEY")
 	if apiKey == "" {
 		fmt.Println("Error: VULTR_API_KEY is required")
 		os.Exit(1)
-	}
-
-	model := os.Getenv("VULTR_MODEL")
-	if model == "" {
-		model = defaultVultrModel
 	}
 
 	baseURL := os.Getenv("VULTR_BASE_URL")
@@ -118,14 +166,14 @@ func main() {
 	}
 	baseURL = strings.TrimRight(baseURL, "/")
 
-	agent := NewAgent(baseURL, apiKey, model, http.DefaultClient, getUserMessage, tools)
+	agent := NewAgent(baseURL, apiKey, http.DefaultClient, getUserMessage, nil)
 	if err := agent.Run(context.Background()); err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
 	}
 }
 
 func NewAgent(
-	baseURL, apiKey, model string,
+	baseURL, apiKey string,
 	httpClient *http.Client,
 	getUserMessage func() (string, bool),
 	tools []ToolDefinition,
@@ -133,13 +181,49 @@ func NewAgent(
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	return &Agent{
+
+	agent := &Agent{
 		baseURL:        baseURL,
 		apiKey:         apiKey,
-		model:          model,
+		primaryModel:   Instruct,
+		reasoningModel: Reasoning,
 		httpClient:     httpClient,
 		getUserMessage: getUserMessage,
-		tools:          tools,
+		toolEventSink:  &CLIToolEventSink{out: os.Stdout},
+	}
+	agent.tools = agent.buildTools(tools)
+	return agent
+}
+
+func (a *Agent) buildTools(extraTools []ToolDefinition) []ToolDefinition {
+	tools := []ToolDefinition{
+		ReadFileDefinition,
+		ListFilesDefinition,
+		EditFileDefinition,
+	}
+	tools = append(tools, a.reasoningToolDefinition())
+	for _, extra := range extraTools {
+		replaced := false
+		for i := range tools {
+			if tools[i].Name == extra.Name {
+				tools[i] = extra
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			tools = append(tools, extra)
+		}
+	}
+	return tools
+}
+
+func (a *Agent) reasoningToolDefinition() ToolDefinition {
+	return ToolDefinition{
+		Name:        "reason_with_gpt_oss",
+		Description: "Use for hard reasoning/planning tasks. Provide the question plus concise context. Returns a distilled reasoning result from gpt-oss-120b.",
+		InputSchema: ReasonWithGptOssInputSchema,
+		Function:    a.reasonWithGptOss,
 	}
 }
 
@@ -151,6 +235,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	readUserInput := true
 	for {
 		if readUserInput {
+			a.reasoningCallCount = 0
 			fmt.Print("\u001b[94mYou\u001b[0m: ")
 			userInput, ok := a.getUserMessage()
 			if !ok {
@@ -179,7 +264,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 
 		for _, toolCall := range message.ToolCalls {
-			toolResult := a.executeTool(toolCall)
+			toolResult := a.executeTool(ctx, toolCall)
 			conversation = append(conversation, toolResult)
 		}
 		readUserInput = false
@@ -189,9 +274,19 @@ func (a *Agent) Run(ctx context.Context) error {
 }
 
 func (a *Agent) runInference(ctx context.Context, conversation []ChatMessage) (ChatMessage, error) {
-	tools := []ChatTool{}
-	for _, tool := range a.tools {
-		tools = append(tools, ChatTool{
+	return a.runInferenceWithModel(ctx, a.primaryModel, conversation, a.tools, primaryMaxTokens)
+}
+
+func (a *Agent) runInferenceWithModel(
+	ctx context.Context,
+	model Model,
+	conversation []ChatMessage,
+	tools []ToolDefinition,
+	maxTokens int,
+) (ChatMessage, error) {
+	chatTools := []ChatTool{}
+	for _, tool := range tools {
+		chatTools = append(chatTools, ChatTool{
 			Type: "function",
 			Function: ChatToolFunction{
 				Name:        tool.Name,
@@ -202,12 +297,12 @@ func (a *Agent) runInference(ctx context.Context, conversation []ChatMessage) (C
 	}
 
 	requestBody := ChatCompletionRequest{
-		Model:     a.model,
-		MaxTokens: 1024,
+		Model:     string(model),
+		MaxTokens: maxTokens,
 		Messages:  conversation,
-		Tools:     tools,
+		Tools:     chatTools,
 	}
-	if len(tools) > 0 {
+	if len(chatTools) > 0 {
 		requestBody.ToolChoice = "auto"
 	}
 
@@ -254,7 +349,24 @@ func (a *Agent) runInference(ctx context.Context, conversation []ChatMessage) (C
 	return completion.Choices[0].Message, nil
 }
 
-func (a *Agent) executeTool(toolCall ChatToolCall) ChatMessage {
+func (a *Agent) executeTool(ctx context.Context, toolCall ChatToolCall) ChatMessage {
+	startedAt := time.Now()
+	rawArgs := "{}"
+	if toolCall.Function.Arguments != "" {
+		rawArgs = toolCall.Function.Arguments
+	}
+	parsedArgs := parseToolArgs(rawArgs)
+	stats := precomputeToolStats(toolCall.Function.Name, parsedArgs)
+	a.emitToolEvent(ctx, ToolEvent{
+		Type:       ToolEventStarted,
+		ToolCallID: toolCall.ID,
+		ToolName:   toolCall.Function.Name,
+		ArgsRaw:    rawArgs,
+		ArgsParsed: parsedArgs,
+		Stats:      stats,
+		StartedAt:  startedAt,
+	})
+
 	var toolDef ToolDefinition
 	found := false
 	for _, tool := range a.tools {
@@ -266,6 +378,17 @@ func (a *Agent) executeTool(toolCall ChatToolCall) ChatMessage {
 	}
 
 	if !found {
+		a.emitToolEvent(ctx, ToolEvent{
+			Type:       ToolEventFailed,
+			ToolCallID: toolCall.ID,
+			ToolName:   toolCall.Function.Name,
+			ArgsRaw:    rawArgs,
+			ArgsParsed: parsedArgs,
+			Stats:      stats,
+			Err:        "tool not found",
+			StartedAt:  startedAt,
+			Duration:   time.Since(startedAt),
+		})
 		return ChatMessage{
 			Role:       "tool",
 			ToolCallID: toolCall.ID,
@@ -278,20 +401,238 @@ func (a *Agent) executeTool(toolCall ChatToolCall) ChatMessage {
 		rawInput = json.RawMessage(toolCall.Function.Arguments)
 	}
 
-	fmt.Printf("\u001b[92mtool\u001b[0m: %s(%s)\n", toolCall.Function.Name, rawInput)
 	response, err := toolDef.Function(rawInput)
 	if err != nil {
+		a.emitToolEvent(ctx, ToolEvent{
+			Type:       ToolEventFailed,
+			ToolCallID: toolCall.ID,
+			ToolName:   toolCall.Function.Name,
+			ArgsRaw:    rawArgs,
+			ArgsParsed: parsedArgs,
+			Stats:      stats,
+			Err:        err.Error(),
+			StartedAt:  startedAt,
+			Duration:   time.Since(startedAt),
+		})
 		return ChatMessage{
 			Role:       "tool",
 			ToolCallID: toolCall.ID,
 			Content:    err.Error(),
 		}
 	}
+	a.emitToolEvent(ctx, ToolEvent{
+		Type:       ToolEventSucceeded,
+		ToolCallID: toolCall.ID,
+		ToolName:   toolCall.Function.Name,
+		ArgsRaw:    rawArgs,
+		ArgsParsed: parsedArgs,
+		Stats:      stats,
+		ResultRaw:  response,
+		StartedAt:  startedAt,
+		Duration:   time.Since(startedAt),
+	})
 	return ChatMessage{
 		Role:       "tool",
 		ToolCallID: toolCall.ID,
 		Content:    response,
 	}
+}
+
+func (a *Agent) emitToolEvent(ctx context.Context, event ToolEvent) {
+	if a.toolEventSink == nil {
+		return
+	}
+	a.toolEventSink.HandleToolEvent(ctx, event)
+}
+
+func parseToolArgs(raw string) map[string]interface{} {
+	args := map[string]interface{}{}
+	if strings.TrimSpace(raw) == "" {
+		return args
+	}
+	if err := json.Unmarshal([]byte(raw), &args); err != nil {
+		return map[string]interface{}{}
+	}
+	return args
+}
+
+func summarizeToolStart(event ToolEvent) string {
+	switch event.ToolName {
+	case "read_file":
+		return fmt.Sprintf("Reading file: %s", quotedPath(event.ArgsParsed["path"], ""))
+	case "list_files":
+		return fmt.Sprintf("Listing directory: %s", quotedPath(event.ArgsParsed["path"], "."))
+	case "edit_file":
+		return fmt.Sprintf("Editing file: %s", quotedPath(event.ArgsParsed["path"], ""))
+	case "reason_with_gpt_oss":
+		return "Delegating reasoning to gpt-oss-120b"
+	default:
+		return fmt.Sprintf("Calling %s(%s)", event.ToolName, event.ArgsRaw)
+	}
+}
+
+func summarizeToolSuccess(event ToolEvent) string {
+	switch event.ToolName {
+	case "read_file":
+		pathText := quotedPath(event.ArgsParsed["path"], "")
+		return fmt.Sprintf("Read %s (%d bytes, %d lines) in %s", pathText, len(event.ResultRaw), countLines(event.ResultRaw), formatDuration(event.Duration))
+	case "list_files":
+		pathText := quotedPath(event.ArgsParsed["path"], ".")
+		total, files, dirs := summarizeListedEntries(event.ResultRaw)
+		return fmt.Sprintf("Listed %s (%d entries: %d files, %d dirs) in %s", pathText, total, files, dirs, formatDuration(event.Duration))
+	case "edit_file":
+		pathText := quotedPath(event.ArgsParsed["path"], "")
+		if strings.HasPrefix(event.ResultRaw, "Successfully created file ") {
+			return fmt.Sprintf("Created %s (%d bytes) in %s", pathText, intStat(event.Stats, "create_bytes"), formatDuration(event.Duration))
+		}
+		return fmt.Sprintf("Edited %s (%d replacements) in %s", pathText, intStat(event.Stats, "replacement_count"), formatDuration(event.Duration))
+	case "reason_with_gpt_oss":
+		return fmt.Sprintf("Reasoning complete (%d chars) in %s", len(event.ResultRaw), formatDuration(event.Duration))
+	default:
+		return fmt.Sprintf("Completed %s in %s", event.ToolName, formatDuration(event.Duration))
+	}
+}
+
+func summarizeToolFailure(event ToolEvent) string {
+	switch event.ToolName {
+	case "read_file":
+		return fmt.Sprintf("Failed to read %s: %s in %s", quotedPath(event.ArgsParsed["path"], ""), event.Err, formatDuration(event.Duration))
+	case "list_files":
+		return fmt.Sprintf("Failed to list %s: %s in %s", quotedPath(event.ArgsParsed["path"], "."), event.Err, formatDuration(event.Duration))
+	case "edit_file":
+		return fmt.Sprintf("Failed to edit %s: %s in %s", quotedPath(event.ArgsParsed["path"], ""), event.Err, formatDuration(event.Duration))
+	case "reason_with_gpt_oss":
+		return fmt.Sprintf("Reasoning failed: %s in %s", event.Err, formatDuration(event.Duration))
+	default:
+		if event.Err == "tool not found" {
+			return fmt.Sprintf("Tool not found: %s in %s", event.ToolName, formatDuration(event.Duration))
+		}
+		return fmt.Sprintf("Failed %s: %s in %s", event.ToolName, event.Err, formatDuration(event.Duration))
+	}
+}
+
+func quotedPath(v interface{}, fallback string) string {
+	s, _ := v.(string)
+	if strings.TrimSpace(s) == "" {
+		s = fallback
+	}
+	return fmt.Sprintf("%q", s)
+}
+
+func countLines(s string) int {
+	if s == "" {
+		return 0
+	}
+	return strings.Count(s, "\n") + 1
+}
+
+func summarizeListedEntries(raw string) (total int, files int, dirs int) {
+	var entries []string
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		return 0, 0, 0
+	}
+	total = len(entries)
+	for _, entry := range entries {
+		if strings.HasSuffix(entry, "/") {
+			dirs++
+			continue
+		}
+		files++
+	}
+	return total, files, dirs
+}
+
+func formatDuration(d time.Duration) string {
+	if d < time.Millisecond {
+		return "<1ms"
+	}
+	return fmt.Sprintf("%dms", d.Milliseconds())
+}
+
+func precomputeToolStats(toolName string, args map[string]interface{}) map[string]interface{} {
+	stats := map[string]interface{}{}
+	if toolName != "edit_file" {
+		return stats
+	}
+
+	pathVal, _ := args["path"].(string)
+	oldStr, _ := args["old_str"].(string)
+	newStr, _ := args["new_str"].(string)
+	if oldStr == "" {
+		stats["create_bytes"] = len(newStr)
+		return stats
+	}
+	content, err := os.ReadFile(pathVal)
+	if err != nil {
+		return stats
+	}
+	stats["replacement_count"] = strings.Count(string(content), oldStr)
+	return stats
+}
+
+func intStat(stats map[string]interface{}, key string) int {
+	v, ok := stats[key]
+	if !ok {
+		return 0
+	}
+	n, ok := v.(int)
+	if !ok {
+		return 0
+	}
+	return n
+}
+
+type ReasonWithGptOssInput struct {
+	Question string `json:"question" jsonschema_description:"The question or sub-problem that needs deeper reasoning."`
+	Context  string `json:"context,omitempty" jsonschema_description:"Optional compact supporting context for the reasoning task."`
+}
+
+var ReasonWithGptOssInputSchema = GenerateSchema[ReasonWithGptOssInput]()
+
+func (a *Agent) reasonWithGptOss(input json.RawMessage) (string, error) {
+	if a.reasoningCallCount >= defaultReasoningLimit {
+		return "", fmt.Errorf("reasoning call limit reached for this turn")
+	}
+
+	payload := ReasonWithGptOssInput{}
+	if err := json.Unmarshal(input, &payload); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(payload.Question) == "" {
+		return "", fmt.Errorf("question is required")
+	}
+
+	a.reasoningCallCount++
+
+	reasoningPrompt := strings.TrimSpace(strings.Join([]string{
+		"You are an auxiliary reasoning model.",
+		"Analyze the question and context and return a concise, actionable answer.",
+		"Do not emit tool calls.",
+		"Question:",
+		payload.Question,
+		"Context:",
+		payload.Context,
+	}, "\n"))
+
+	timeoutCtx, cancel := context.WithTimeout(context.Background(), reasoningCallTimeout)
+	defer cancel()
+
+	msg, err := a.runInferenceWithModel(timeoutCtx, a.reasoningModel, []ChatMessage{{
+		Role:    "user",
+		Content: reasoningPrompt,
+	}}, nil, reasoningMaxTokens)
+	if err != nil {
+		return "", err
+	}
+
+	content, ok := msg.Content.(string)
+	if ok && strings.TrimSpace(content) != "" {
+		return strings.TrimSpace(content), nil
+	}
+	if strings.TrimSpace(msg.Reasoning) != "" {
+		return strings.TrimSpace(msg.Reasoning), nil
+	}
+	return "", fmt.Errorf("reasoning model returned no usable text output")
 }
 
 func GenerateSchema[T any]() map[string]interface{} {

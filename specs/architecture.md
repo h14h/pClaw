@@ -34,6 +34,7 @@ agent/
 | `Agent` | `main.go` | Maintains configuration and executes chat/tool loop |
 | `runInference` | `main.go` | Builds request payload, calls Vultr API, parses response |
 | `executeTool` | `main.go` | Dispatches model tool calls to registered Go functions |
+| `reasonWithGptOss` | `main.go` | Delegates hard reasoning sub-tasks to `gpt-oss-120b` |
 | Tool functions | `main.go` | Perform filesystem operations (`read_file`, `list_files`, `edit_file`) |
 | Startup wiring (`main`) | `main.go` | Reads env config, builds `Agent`, starts interactive session |
 
@@ -80,12 +81,15 @@ agent/
 
 This lets the model call tools, receive tool outputs, and produce a final response inside one turn.
 
+Reasoning call count is reset for each new user turn to bound delegated reasoning usage.
+
 ## Design Constraints
 
 1. Single-process, single-threaded control loop
 2. No conversation persistence outside process memory
 3. No workspace sandboxing; tools operate on provided paths
 4. Tool and inference schemas are static per process start
+5. Primary model is fixed to `kimi-k2-instruct`; reasoning model is fixed to `gpt-oss-120b`
 
 ## Extension Points
 

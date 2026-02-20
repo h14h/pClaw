@@ -18,16 +18,19 @@ Each tool is registered as a `ToolDefinition` with:
 | `ChatTool` | `main.go` | Tool definition shape sent to Vultr API |
 | `ChatToolCall` | `main.go` | Tool invocation emitted by model |
 | `GenerateSchema[T]` | `main.go` | Generates JSON schema from Go structs |
+| `ToolEvent` | `main.go` | Runtime event payload for tool lifecycle updates |
+| `ToolEventSink` | `main.go` | Consumer interface for tool lifecycle events |
 
 ## Registration and Dispatch
 
 ### Registration
 
-At startup, `main()` registers three built-ins:
+At startup, `Agent` registers four built-ins:
 
 1. `read_file`
 2. `list_files`
 3. `edit_file`
+4. `reason_with_gpt_oss`
 
 These are stored in `Agent.tools`.
 
@@ -39,15 +42,54 @@ Model returns tool call
         ▼
 Agent.executeTool(call)
         │
+        ├─ emit tool_call.started event
         ├─ find tool by name
         ├─ parse JSON args (or "{}" when empty)
         ├─ execute Go function
+        ├─ emit tool_call.succeeded or tool_call.failed event
         └─ return role="tool" message
 ```
 
 If the tool name is unknown, the returned tool message content is `tool not found`.
 
+### Tool Event Stream
+
+`executeTool` emits a normalized event stream around each call:
+
+1. `tool_call.started`
+2. `tool_call.succeeded`
+3. `tool_call.failed`
+
+The default `CLIToolEventSink` renders these events into concise human-readable lines.
+This event layer decouples execution from presentation and is intended to support future streaming outputs.
+
 ## Built-in Tools
+
+## `reason_with_gpt_oss`
+
+Delegates deeper reasoning to `gpt-oss-120b`.
+
+Input:
+
+```json
+{
+  "question": "sub-problem to reason about",
+  "context": "optional supporting context"
+}
+```
+
+Behavior:
+
+1. Enforces per-user-turn call limit (2)
+2. Calls Vultr chat completions with model `gpt-oss-120b`
+3. Sends no filesystem tools to the delegated model
+4. Returns concise delegated output from `content` or fallback `reasoning`
+
+Error conditions:
+
+1. Missing/empty `question`
+2. Delegation limit reached
+3. Timeout/API errors from delegated inference call
 
 ## `read_file`
 
@@ -129,4 +171,4 @@ If reflection or conversion fails, it falls back to a minimal `{ "type": "object
 1. No path boundary checks (tools can access files outside workspace)
 2. No file size limits for reads
 3. `edit_file` performs global replace without match-count enforcement
-4. No per-tool timeout or cancellation boundary
+4. No per-tool timeout or cancellation boundary for filesystem tools

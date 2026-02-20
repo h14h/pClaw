@@ -10,13 +10,18 @@ Inference is handled by `Agent.runInference()` via Vultr's chat completions endp
 
 The request always includes conversation history and may include tool definitions.
 
+Two models are used:
+
+1. Primary chat model: `kimi-k2-instruct`
+2. Delegated reasoning model: `gpt-oss-120b` (called only via `reason_with_gpt_oss` tool)
+
 ## Request Model
 
 `ChatCompletionRequest` fields:
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `model` | string | From `VULTR_MODEL` or default |
+| `model` | string | Fixed by runtime path (`kimi-k2-instruct` primary, `gpt-oss-120b` reasoning) |
 | `messages` | `[]ChatMessage` | Full conversation history |
 | `max_tokens` | int | Fixed to `1024` |
 | `tools` | `[]ChatTool` | Populated from registered agent tools |
@@ -37,6 +42,11 @@ Authentication and content headers:
 4. At least one `choice` must exist
 
 On success, it returns `choices[0].message`.
+
+For `gpt-oss-120b` reasoning calls, output can be returned as either:
+
+1. `message.content` string
+2. `message.reasoning` string (fallback when content is empty)
 
 ## Message/Tool Loop
 
@@ -67,6 +77,12 @@ assistant ChatMessage
 6. Empty choices (`vultr api returned no choices`)
 
 These bubble to `Agent.Run()` and terminate the session.
+
+`reason_with_gpt_oss` adds guardrails:
+
+1. Per-turn delegation limit of 2 calls
+2. Per-call timeout of 45 seconds
+3. No tools exposed to the reasoning model
 
 ## Operational Notes
 
