@@ -9,12 +9,11 @@ if expand('%') == '' && !&modified && line('$') <= 1 && getline(1) == ''
 endif
 let s:shortmess_save = &shortmess
 set shortmess+=aoO
-badd +0 main.go
+badd +111 main.go
 argglobal
 %argdel
 edit main.go
 argglobal
-balt main.go
 setlocal keymap=
 setlocal noarabic
 setlocal autoindent
@@ -103,7 +102,7 @@ setlocal spellfile=
 setlocal spelllang=en
 setlocal spelloptions=
 setlocal statuscolumn=
-setlocal statusline=%#lualine_a_command#\ COMMAND\ %<%#lualine_c_command#\ main.go\ %#lualine_c_command#%=%#lualine_x_filetype_DevIconGo_command#\ \ %#lualine_c_command#go\ %#lualine_b_command#\ 24%%\ %#lualine_a_command#\ 111:14\ 
+setlocal statusline=%#lualine_a_command#\ COMMAND\ %#lualine_b_command#\ \ main\ %<%#lualine_c_command#\ main.go\ %#lualine_c_command#%=%#lualine_x_filetype_DevIconGo_command#\ \ %#lualine_c_command#go\ %#lualine_b_command#\ 78%%\ %#lualine_a_command#\ 354:53\ 
 setlocal suffixesadd=
 setlocal noswapfile
 setlocal synmaxcol=3000
@@ -125,17 +124,12 @@ setlocal nowrap
 setlocal wrapmargin=0
 silent! normal! zE
 let &fdl = &fdl
-let s:l = 111 - ((8 * winheight(0) + 18) / 36)
+let s:l = 354 - ((24 * winheight(0) + 18) / 36)
 if s:l < 1 | let s:l = 1 | endif
 keepjumps exe s:l
 normal! zt
-keepjumps 111
-let s:c = 15 - ((9 * winwidth(0) + 82) / 165)
-if s:c > 0
-  exe 'normal! ' . s:c . '|zs' . 15 . '|'
-else
-  normal! 015|
-endif
+keepjumps 354
+normal! 053|
 tabnext 1
 if exists('s:wipebuf') && len(win_findbuf(s:wipebuf)) == 0 && getbufvar(s:wipebuf, '&buftype') isnot# 'terminal'
   silent exe 'bwipe ' . s:wipebuf
