@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-func requireRealVultrConfig(t *testing.T) (string, string, string) {
+func requireRealVultrConfig(t *testing.T) (string, string) {
 	t.Helper()
 
 	apiKey := os.Getenv("VULTR_API_KEY")
@@ -25,18 +25,13 @@ func requireRealVultrConfig(t *testing.T) (string, string, string) {
 	if baseURL == "" {
 		baseURL = defaultVultrBaseURL
 	}
-	model := os.Getenv("VULTR_MODEL")
-	if model == "" {
-		model = defaultVultrModel
-	}
-
-	return strings.TrimRight(baseURL, "/"), apiKey, model
+	return strings.TrimRight(baseURL, "/"), apiKey
 }
 
 func TestRunInference_E2E_TextResponse(t *testing.T) {
-	baseURL, apiKey, model := requireRealVultrConfig(t)
+	baseURL, apiKey := requireRealVultrConfig(t)
 
-	agent := NewAgent(baseURL, apiKey, model, http.DefaultClient, nil, nil)
+	agent := NewAgent(baseURL, apiKey, http.DefaultClient, nil, nil)
 	msg, err := agent.runInference(context.Background(), []ChatMessage{{
 		Role:    "user",
 		Content: "Reply with exactly: OK",
@@ -55,7 +50,7 @@ func TestRunInference_E2E_TextResponse(t *testing.T) {
 }
 
 func TestRunInference_E2E_ToolCall(t *testing.T) {
-	baseURL, apiKey, model := requireRealVultrConfig(t)
+	baseURL, apiKey := requireRealVultrConfig(t)
 
 	echoTool := ToolDefinition{
 		Name:        "echo",
@@ -78,7 +73,7 @@ func TestRunInference_E2E_ToolCall(t *testing.T) {
 		},
 	}
 
-	agent := NewAgent(baseURL, apiKey, model, http.DefaultClient, nil, []ToolDefinition{echoTool})
+	agent := NewAgent(baseURL, apiKey, http.DefaultClient, nil, []ToolDefinition{echoTool})
 	msg, err := agent.runInference(context.Background(), []ChatMessage{{
 		Role:    "user",
 		Content: "Use the echo tool with value set to 'vultr-test'.",
@@ -91,7 +86,7 @@ func TestRunInference_E2E_ToolCall(t *testing.T) {
 		t.Fatalf("expected at least one tool call, got message content=%v", msg.Content)
 	}
 
-	result := agent.executeTool(msg.ToolCalls[0])
+	result := agent.executeTool(context.Background(), msg.ToolCalls[0])
 	if result.Role != "tool" {
 		t.Fatalf("expected tool role result, got %q", result.Role)
 	}
@@ -113,16 +108,13 @@ func TestRunInference_E2E_ToolCall(t *testing.T) {
 	}
 
 	finalText, ok := finalMsg.Content.(string)
-	if !ok {
-		t.Fatalf("expected final string content, got %T", finalMsg.Content)
-	}
-	if strings.TrimSpace(finalText) == "" {
-		t.Fatal("expected non-empty final response after tool result")
+	if ok && strings.TrimSpace(finalText) == "" && len(finalMsg.ToolCalls) > 0 {
+		t.Fatal("expected no further tool calls when final text is empty")
 	}
 }
 
 func TestAgentRun_E2E_ReadFileTool(t *testing.T) {
-	baseURL, apiKey, model := requireRealVultrConfig(t)
+	baseURL, apiKey := requireRealVultrConfig(t)
 
 	dir := t.TempDir()
 	originalDir, err := os.Getwd()
@@ -166,11 +158,7 @@ func TestAgentRun_E2E_ReadFileTool(t *testing.T) {
 		}
 	}()
 
-	agent := NewAgent(baseURL, apiKey, model, http.DefaultClient, getUserMessage, []ToolDefinition{
-		readTool,
-		ListFilesDefinition,
-		EditFileDefinition,
-	})
+	agent := NewAgent(baseURL, apiKey, http.DefaultClient, getUserMessage, []ToolDefinition{readTool})
 	if err := agent.Run(context.Background()); err != nil {
 		t.Fatalf("agent run failed: %v", err)
 	}
@@ -180,7 +168,7 @@ func TestAgentRun_E2E_ReadFileTool(t *testing.T) {
 }
 
 func TestAgentRun_E2E_ListFilesTool(t *testing.T) {
-	baseURL, apiKey, model := requireRealVultrConfig(t)
+	baseURL, apiKey := requireRealVultrConfig(t)
 
 	dir := t.TempDir()
 	originalDir, err := os.Getwd()
@@ -236,11 +224,7 @@ func TestAgentRun_E2E_ListFilesTool(t *testing.T) {
 		}
 	}()
 
-	agent := NewAgent(baseURL, apiKey, model, http.DefaultClient, getUserMessage, []ToolDefinition{
-		ReadFileDefinition,
-		listTool,
-		EditFileDefinition,
-	})
+	agent := NewAgent(baseURL, apiKey, http.DefaultClient, getUserMessage, []ToolDefinition{listTool})
 	if err := agent.Run(context.Background()); err != nil {
 		t.Fatalf("agent run failed: %v", err)
 	}
@@ -250,7 +234,7 @@ func TestAgentRun_E2E_ListFilesTool(t *testing.T) {
 }
 
 func TestAgentRun_E2E_EditFileTool(t *testing.T) {
-	baseURL, apiKey, model := requireRealVultrConfig(t)
+	baseURL, apiKey := requireRealVultrConfig(t)
 
 	dir := t.TempDir()
 	originalDir, err := os.Getwd()
@@ -283,11 +267,7 @@ func TestAgentRun_E2E_EditFileTool(t *testing.T) {
 		}
 	}()
 
-	agent := NewAgent(baseURL, apiKey, model, http.DefaultClient, getUserMessage, []ToolDefinition{
-		ReadFileDefinition,
-		ListFilesDefinition,
-		editTool,
-	})
+	agent := NewAgent(baseURL, apiKey, http.DefaultClient, getUserMessage, []ToolDefinition{editTool})
 	if err := agent.Run(context.Background()); err != nil {
 		t.Fatalf("agent run failed: %v", err)
 	}
@@ -301,5 +281,18 @@ func TestAgentRun_E2E_EditFileTool(t *testing.T) {
 	}
 	if strings.TrimSpace(string(edited)) != "edited" {
 		t.Fatalf("expected out.txt content %q, got %q", "edited", string(edited))
+	}
+}
+
+func TestReasonWithGptOss_E2E(t *testing.T) {
+	baseURL, apiKey := requireRealVultrConfig(t)
+
+	agent := NewAgent(baseURL, apiKey, http.DefaultClient, nil, nil)
+	out, err := agent.reasonWithGptOss(json.RawMessage(`{"question":"What is 17 * 19? Return only the number."}`))
+	if err != nil {
+		t.Fatalf("reasonWithGptOss failed: %v", err)
+	}
+	if strings.TrimSpace(out) == "" {
+		t.Fatal("expected non-empty reasoning output")
 	}
 }

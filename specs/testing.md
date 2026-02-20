@@ -18,6 +18,10 @@ The test suite has two layers:
 | `TestEditFileInvalidInput` | Rejects empty path and identical old/new strings |
 | `TestExecuteToolNotFound` | Returns tool role with `tool not found` content |
 | `TestExecuteToolArgs` | Passes JSON tool args and returns tool output |
+| `TestNewAgentDefaults` | Confirms fixed default models and reasoning tool registration |
+| `TestRunInferenceUsesPrimaryModel` | Verifies primary inference uses provider-compatible `kimi-k2-instruct` |
+| `TestReasonWithGptOssUsesReasoningModel` | Verifies delegated call uses `gpt-oss-120b` with no tools |
+| `TestReasonWithGptOssLimit` | Enforces per-turn delegation limit |
 
 ## Integration Tests (E2E)
 
@@ -30,6 +34,7 @@ Integration tests require `VULTR_API_KEY` and call real API endpoints.
 | `TestAgentRun_E2E_ReadFileTool` | Full agent loop invokes `read_file` |
 | `TestAgentRun_E2E_ListFilesTool` | Full agent loop invokes `list_files` |
 | `TestAgentRun_E2E_EditFileTool` | Full agent loop invokes `edit_file` and writes expected output |
+| `TestReasonWithGptOss_E2E` | Live delegated reasoning call to `gpt-oss-120b` |
 
 ## How to Run
 
@@ -52,6 +57,7 @@ Well covered:
 1. Core tool happy-path and basic invalid input behavior
 2. Basic agent tool dispatch behavior
 3. Real API compatibility for text + tool-call flows
+4. Model routing and delegated reasoning guardrails
 
 Not yet covered:
 
