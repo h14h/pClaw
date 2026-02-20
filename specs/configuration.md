@@ -41,7 +41,7 @@ Initialization sequence:
 
 1. `VULTR_API_KEY` is mandatory for both runtime and integration tests
 2. Base URL normalization avoids `//chat/completions` construction issues
-3. Tool registry includes built-ins and `reason_with_gpt_oss`
+3. Tool registry includes built-ins and `delegate_reasoning`
 4. HTTP client defaults to `http.DefaultClient` unless explicitly injected
 
 ## Integration Test Configuration

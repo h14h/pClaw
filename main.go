@@ -220,10 +220,10 @@ func (a *Agent) buildTools(extraTools []ToolDefinition) []ToolDefinition {
 
 func (a *Agent) reasoningToolDefinition() ToolDefinition {
 	return ToolDefinition{
-		Name:        "reason_with_gpt_oss",
-		Description: "Use for hard reasoning/planning tasks. Provide the question plus concise context. Returns a distilled reasoning result from gpt-oss-120b.",
-		InputSchema: ReasonWithGptOssInputSchema,
-		Function:    a.reasonWithGptOss,
+		Name:        "delegate_reasoning",
+		Description: "Use only for hard reasoning/planning tasks that require multi-step analysis, tradeoff evaluation, or synthesis (e.g., strategy, architecture, proofs, constraint-solving). Do not use for simple arithmetic, factual lookups, definitions, day/date lookups, rewriting, or straightforward formatting/minification. Provide the question plus concise context. Returns a distilled reasoning result from gpt-oss-120b.",
+		InputSchema: DelegateReasoningInputSchema,
+		Function:    a.delegateReasoning,
 	}
 }
 
@@ -464,8 +464,8 @@ func summarizeToolStart(event ToolEvent) string {
 		return fmt.Sprintf("Listing directory: %s", quotedPath(event.ArgsParsed["path"], "."))
 	case "edit_file":
 		return fmt.Sprintf("Editing file: %s", quotedPath(event.ArgsParsed["path"], ""))
-	case "reason_with_gpt_oss":
-		return "Delegating reasoning to gpt-oss-120b"
+	case "delegate_reasoning":
+		return "Thinking..."
 	default:
 		return fmt.Sprintf("Calling %s(%s)", event.ToolName, event.ArgsRaw)
 	}
@@ -486,8 +486,8 @@ func summarizeToolSuccess(event ToolEvent) string {
 			return fmt.Sprintf("Created %s (%d bytes) in %s", pathText, intStat(event.Stats, "create_bytes"), formatDuration(event.Duration))
 		}
 		return fmt.Sprintf("Edited %s (%d replacements) in %s", pathText, intStat(event.Stats, "replacement_count"), formatDuration(event.Duration))
-	case "reason_with_gpt_oss":
-		return fmt.Sprintf("Reasoning complete (%d chars) in %s", len(event.ResultRaw), formatDuration(event.Duration))
+	case "delegate_reasoning":
+		return fmt.Sprintf("Finished thinking (%d chars) in %s", len(event.ResultRaw), formatDuration(event.Duration))
 	default:
 		return fmt.Sprintf("Completed %s in %s", event.ToolName, formatDuration(event.Duration))
 	}
@@ -501,7 +501,7 @@ func summarizeToolFailure(event ToolEvent) string {
 		return fmt.Sprintf("Failed to list %s: %s in %s", quotedPath(event.ArgsParsed["path"], "."), event.Err, formatDuration(event.Duration))
 	case "edit_file":
 		return fmt.Sprintf("Failed to edit %s: %s in %s", quotedPath(event.ArgsParsed["path"], ""), event.Err, formatDuration(event.Duration))
-	case "reason_with_gpt_oss":
+	case "delegate_reasoning":
 		return fmt.Sprintf("Reasoning failed: %s in %s", event.Err, formatDuration(event.Duration))
 	default:
 		if event.Err == "tool not found" {
@@ -582,19 +582,19 @@ func intStat(stats map[string]interface{}, key string) int {
 	return n
 }
 
-type ReasonWithGptOssInput struct {
+type DelegateReasoningInput struct {
 	Question string `json:"question" jsonschema_description:"The question or sub-problem that needs deeper reasoning."`
 	Context  string `json:"context,omitempty" jsonschema_description:"Optional compact supporting context for the reasoning task."`
 }
 
-var ReasonWithGptOssInputSchema = GenerateSchema[ReasonWithGptOssInput]()
+var DelegateReasoningInputSchema = GenerateSchema[DelegateReasoningInput]()
 
-func (a *Agent) reasonWithGptOss(input json.RawMessage) (string, error) {
+func (a *Agent) delegateReasoning(input json.RawMessage) (string, error) {
 	if a.reasoningCallCount >= defaultReasoningLimit {
 		return "", fmt.Errorf("reasoning call limit reached for this turn")
 	}
 
-	payload := ReasonWithGptOssInput{}
+	payload := DelegateReasoningInput{}
 	if err := json.Unmarshal(input, &payload); err != nil {
 		return "", err
 	}

@@ -321,7 +321,7 @@ func TestCLIToolEventSinkSummary(t *testing.T) {
 	})
 	sink.HandleToolEvent(context.Background(), ToolEvent{
 		Type:     ToolEventFailed,
-		ToolName: "reason_with_gpt_oss",
+		ToolName: "delegate_reasoning",
 		Err:      "timeout",
 	})
 
@@ -349,13 +349,13 @@ func TestNewAgentDefaults(t *testing.T) {
 
 	found := false
 	for _, tool := range agent.tools {
-		if tool.Name == "reason_with_gpt_oss" {
+		if tool.Name == "delegate_reasoning" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatal("expected reason_with_gpt_oss tool to be registered")
+		t.Fatal("expected delegate_reasoning tool to be registered")
 	}
 }
 
@@ -386,7 +386,7 @@ func TestRunInferenceUsesPrimaryModel(t *testing.T) {
 	}
 }
 
-func TestReasonWithGptOssUsesReasoningModel(t *testing.T) {
+func TestDelegateReasoningUsesReasoningModel(t *testing.T) {
 	var seenModel string
 	var seenTools int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -406,9 +406,9 @@ func TestReasonWithGptOssUsesReasoningModel(t *testing.T) {
 	defer server.Close()
 
 	agent := NewAgent(server.URL, "key", server.Client(), nil, nil)
-	out, err := agent.reasonWithGptOss(json.RawMessage(`{"question":"why","context":"ctx"}`))
+	out, err := agent.delegateReasoning(json.RawMessage(`{"question":"why","context":"ctx"}`))
 	if err != nil {
-		t.Fatalf("reasonWithGptOss: %v", err)
+		t.Fatalf("delegateReasoning: %v", err)
 	}
 	if strings.TrimSpace(out) == "" {
 		t.Fatal("expected non-empty response")
@@ -421,11 +421,11 @@ func TestReasonWithGptOssUsesReasoningModel(t *testing.T) {
 	}
 }
 
-func TestReasonWithGptOssLimit(t *testing.T) {
+func TestDelegateReasoningLimit(t *testing.T) {
 	agent := NewAgent("http://example.com", "key", nil, nil, nil)
 	agent.reasoningCallCount = defaultReasoningLimit
 
-	_, err := agent.reasonWithGptOss(json.RawMessage(`{"question":"why"}`))
+	_, err := agent.delegateReasoning(json.RawMessage(`{"question":"why"}`))
 	if err == nil {
 		t.Fatal("expected limit error")
 	}

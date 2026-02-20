@@ -50,7 +50,7 @@ Environment variables:
 Model behavior is fixed:
 
 - Primary model: `kimi-k2-instruct`
-- Delegated reasoning model: `gpt-oss-120b` via `reason_with_gpt_oss` tool
+- Delegated reasoning model: `gpt-oss-120b` via `delegate_reasoning` tool
 
 ## Building
 
@@ -93,6 +93,18 @@ Run only integration tests against real Vultr API:
 
 ```bash
 VULTR_API_KEY="your-token" go test -run E2E ./...
+```
+
+Run delegation policy harness (opt-in, live API):
+
+```bash
+VULTR_API_KEY="your-token" RUN_DELEGATION_HARNESS=1 go test -run TestDelegationPolicyHarness_E2E ./...
+```
+
+Or use the on-demand wrapper script with useful stdout reporting:
+
+```bash
+VULTR_API_KEY="your-token" ./scripts/run-delegation-harness.sh
 ```
 
 ## Specifications

@@ -284,13 +284,13 @@ func TestAgentRun_E2E_EditFileTool(t *testing.T) {
 	}
 }
 
-func TestReasonWithGptOss_E2E(t *testing.T) {
+func TestDelegateReasoning_E2E(t *testing.T) {
 	baseURL, apiKey := requireRealVultrConfig(t)
 
 	agent := NewAgent(baseURL, apiKey, http.DefaultClient, nil, nil)
-	out, err := agent.reasonWithGptOss(json.RawMessage(`{"question":"What is 17 * 19? Return only the number."}`))
+	out, err := agent.delegateReasoning(json.RawMessage(`{"question":"What is 17 * 19? Return only the number."}`))
 	if err != nil {
-		t.Fatalf("reasonWithGptOss failed: %v", err)
+		t.Fatalf("delegateReasoning failed: %v", err)
 	}
 	if strings.TrimSpace(out) == "" {
 		t.Fatal("expected non-empty reasoning output")
