@@ -30,7 +30,7 @@ At startup, `Agent` registers four built-ins:
 1. `read_file`
 2. `list_files`
 3. `edit_file`
-4. `reason_with_gpt_oss`
+4. `delegate_reasoning`
 
 These are stored in `Agent.tools`.
 
@@ -65,7 +65,7 @@ This event layer decouples execution from presentation and is intended to suppor
 
 ## Built-in Tools
 
-## `reason_with_gpt_oss`
+## `delegate_reasoning`
 
 Delegates deeper reasoning to `gpt-oss-120b`.
 

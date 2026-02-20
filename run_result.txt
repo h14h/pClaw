@@ -1,0 +1,717 @@
+$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.S$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.u$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.b$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.-$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.s$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.c$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.o$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.r$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.e$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.s$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.0$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.-$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.1$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.0$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.0$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.
+$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.A$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.:$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.S$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.p$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.e$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.e$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.d$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.6$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.0$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.,$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.R$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.e$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.l$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.i$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.a$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.b$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.i$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.l$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.i$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.t$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.y$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.3$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.0$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.,$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.C$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.o$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.s$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.t$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.8$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.0$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.
+$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.B$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.:$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.S$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.p$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.e$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.e$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.d$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.8$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.0$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.,$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.R$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.e$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.l$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.i$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.a$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.b$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.i$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.l$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.i$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.t$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.y$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.7$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.0$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.,$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.C$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.o$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.s$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.t$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.5$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.0$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.
+$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.C$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.:$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.S$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.p$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.e$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.e$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.d$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.1$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.0$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.0$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.,$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.R$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.e$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.l$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.i$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.a$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.b$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.i$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.l$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.i$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.t$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.y$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.9$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.5$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.,$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.C$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.o$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.s$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.t$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.2$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.0$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.
+$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.
+$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.W$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.e$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.i$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.g$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.h$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.t$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.e$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.d$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.O$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.v$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.e$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.r$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.a$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.l$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.l$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.S$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.c$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.o$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.r$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.e$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.s$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.($ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.0$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.-$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.1$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.0$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.0$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.)$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.
+$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.{$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.'$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.A$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.'$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.:$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.6$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.1$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice..$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.5$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.,$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.'$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.B$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.'$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.:$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.7$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.9$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice..$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.2$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.5$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.,$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.'$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.C$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.'$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.:$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.9$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.4$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice..$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.2$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.5$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.}$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.
+$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.
+$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.C$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.h$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.o$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.s$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.e$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.n$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.p$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.r$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.o$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.j$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.e$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.c$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.t$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.-$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.>$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.C$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.w$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.i$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.t$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.h$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.s$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.c$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.o$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.r$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.e$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice. $ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.9$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.4$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice..$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.2$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.5$ bash run.sh
+Weighted scores => {'A': 0.65, 'B': 0.625, 'C': 0.65}
+Recommended: Project A
+The framework confirms that with speed as the dominant factor (50 %), Project A (3 months) edges out the others and is the optimal choice.

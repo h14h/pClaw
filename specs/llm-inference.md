@@ -13,7 +13,7 @@ The request always includes conversation history and may include tool definition
 Two models are used:
 
 1. Primary chat model: `kimi-k2-instruct`
-2. Delegated reasoning model: `gpt-oss-120b` (called only via `reason_with_gpt_oss` tool)
+2. Delegated reasoning model: `gpt-oss-120b` (called only via `delegate_reasoning` tool)
 
 ## Request Model
 
@@ -78,7 +78,7 @@ assistant ChatMessage
 
 These bubble to `Agent.Run()` and terminate the session.
 
-`reason_with_gpt_oss` adds guardrails:
+`delegate_reasoning` adds guardrails:
 
 1. Per-turn delegation limit of 2 calls
 2. Per-call timeout of 45 seconds

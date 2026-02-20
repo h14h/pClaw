@@ -34,7 +34,7 @@ agent/
 | `Agent` | `main.go` | Maintains configuration and executes chat/tool loop |
 | `runInference` | `main.go` | Builds request payload, calls Vultr API, parses response |
 | `executeTool` | `main.go` | Dispatches model tool calls to registered Go functions |
-| `reasonWithGptOss` | `main.go` | Delegates hard reasoning sub-tasks to `gpt-oss-120b` |
+| `delegateReasoning` | `main.go` | Delegates hard reasoning sub-tasks to `gpt-oss-120b` |
 | Tool functions | `main.go` | Perform filesystem operations (`read_file`, `list_files`, `edit_file`) |
 | Startup wiring (`main`) | `main.go` | Reads env config, builds `Agent`, starts interactive session |
 

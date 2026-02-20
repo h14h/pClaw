@@ -20,8 +20,8 @@ The test suite has two layers:
 | `TestExecuteToolArgs` | Passes JSON tool args and returns tool output |
 | `TestNewAgentDefaults` | Confirms fixed default models and reasoning tool registration |
 | `TestRunInferenceUsesPrimaryModel` | Verifies primary inference uses provider-compatible `kimi-k2-instruct` |
-| `TestReasonWithGptOssUsesReasoningModel` | Verifies delegated call uses `gpt-oss-120b` with no tools |
-| `TestReasonWithGptOssLimit` | Enforces per-turn delegation limit |
+| `TestDelegateReasoningUsesReasoningModel` | Verifies delegated call uses `gpt-oss-120b` with no tools |
+| `TestDelegateReasoningLimit` | Enforces per-turn delegation limit |
 
 ## Integration Tests (E2E)
 
@@ -34,7 +34,8 @@ Integration tests require `VULTR_API_KEY` and call real API endpoints.
 | `TestAgentRun_E2E_ReadFileTool` | Full agent loop invokes `read_file` |
 | `TestAgentRun_E2E_ListFilesTool` | Full agent loop invokes `list_files` |
 | `TestAgentRun_E2E_EditFileTool` | Full agent loop invokes `edit_file` and writes expected output |
-| `TestReasonWithGptOss_E2E` | Live delegated reasoning call to `gpt-oss-120b` |
+| `TestDelegateReasoning_E2E` | Live delegated reasoning call to `gpt-oss-120b` |
+| `TestDelegationPolicyHarness_E2E` | Prompt-suite harness that checks delegation-rate thresholds for opinion vs simple prompts |
 
 ## How to Run
 
@@ -49,6 +50,21 @@ Run only integration tests:
 ```bash
 VULTR_API_KEY="..." go test -run E2E ./...
 ```
+
+Run delegation harness (opt-in, live API):
+
+```bash
+VULTR_API_KEY="..." \
+RUN_DELEGATION_HARNESS=1 \
+go test -run TestDelegationPolicyHarness_E2E ./...
+```
+
+Optional harness tuning env vars:
+
+1. `DELEGATION_HARNESS_RUNS` (default `2`)
+2. `DELEGATION_HARNESS_MIN_OPINION_RATE` (default `0.80`)
+3. `DELEGATION_HARNESS_MIN_OPINION_PROMPT_RATE` (default `0.50`)
+4. `DELEGATION_HARNESS_MAX_SIMPLE_RATE` (default `0.20`)
 
 ## Current Coverage Shape
 
