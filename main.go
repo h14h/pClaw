@@ -9,8 +9,11 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
 	"path"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/invopop/jsonschema"
@@ -22,6 +25,9 @@ const (
 	reasoningCallTimeout  = 45 * time.Second
 	reasoningMaxTokens    = 1024
 	primaryMaxTokens      = 1024
+	statusDelay           = 150 * time.Millisecond
+	statusFrameInterval   = 100 * time.Millisecond
+	toolStatusDelay       = 200 * time.Millisecond
 )
 
 type Model string
@@ -29,6 +35,13 @@ type Model string
 const (
 	Instruct  Model = "kimi-k2-instruct"
 	Reasoning Model = "gpt-oss-120b"
+)
+
+type ToolEventLogMode string
+
+const (
+	ToolEventLogOff   ToolEventLogMode = "off"
+	ToolEventLogDebug ToolEventLogMode = "debug"
 )
 
 type ToolDefinition struct {
@@ -47,6 +60,7 @@ type Agent struct {
 	getUserMessage     func() (string, bool)
 	tools              []ToolDefinition
 	toolEventSink      ToolEventSink
+	outputWriter       io.Writer
 	reasoningCallCount int
 }
 
@@ -86,12 +100,83 @@ func (s *CLIToolEventSink) HandleToolEvent(_ context.Context, event ToolEvent) {
 	}
 	switch event.Type {
 	case ToolEventStarted:
-		fmt.Fprintf(out, "\u001b[92mtool\u001b[0m: %s\n", summarizeToolStart(event))
+		fmt.Fprintf(out, "tool_event type=%s call_id=%q tool=%q args=%s\n", event.Type, event.ToolCallID, event.ToolName, event.ArgsRaw)
 	case ToolEventSucceeded:
-		fmt.Fprintf(out, "\u001b[92mtool\u001b[0m: %s\n", summarizeToolSuccess(event))
+		fmt.Fprintf(out, "tool_event type=%s call_id=%q tool=%q duration_ms=%d result_bytes=%d\n", event.Type, event.ToolCallID, event.ToolName, event.Duration.Milliseconds(), len(event.ResultRaw))
 	case ToolEventFailed:
-		fmt.Fprintf(out, "\u001b[92mtool\u001b[0m: %s\n", summarizeToolFailure(event))
+		fmt.Fprintf(out, "tool_event type=%s call_id=%q tool=%q duration_ms=%d error=%q\n", event.Type, event.ToolCallID, event.ToolName, event.Duration.Milliseconds(), event.Err)
 	}
+}
+
+type StatusIndicator struct {
+	out      io.Writer
+	label    string
+	delay    time.Duration
+	interval time.Duration
+	done     chan struct{}
+	once     sync.Once
+	wg       sync.WaitGroup
+}
+
+func NewStatusIndicator(out io.Writer, label string) *StatusIndicator {
+	return NewStatusIndicatorWithDelay(out, label, statusDelay)
+}
+
+func NewStatusIndicatorWithDelay(out io.Writer, label string, delay time.Duration) *StatusIndicator {
+	if out == nil {
+		out = os.Stdout
+	}
+	return &StatusIndicator{
+		out:      out,
+		label:    label,
+		delay:    delay,
+		interval: statusFrameInterval,
+		done:     make(chan struct{}),
+	}
+}
+
+func (s *StatusIndicator) Start() {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		timer := time.NewTimer(s.delay)
+		defer timer.Stop()
+		select {
+		case <-s.done:
+			return
+		case <-timer.C:
+		}
+
+		frames := []string{"|", "/", "-", "\\"}
+		idx := 0
+		render := func() {
+			fmt.Fprintf(s.out, "\r\u001b[90m%s %s\u001b[0m", frames[idx%len(frames)], s.label)
+			idx++
+		}
+		render()
+
+		ticker := time.NewTicker(s.interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-s.done:
+				fmt.Fprint(s.out, "\r\u001b[2K\r")
+				return
+			case <-ticker.C:
+				render()
+			}
+		}
+	}()
+}
+
+func (s *StatusIndicator) Stop() {
+	if s == nil {
+		return
+	}
+	s.once.Do(func() {
+		close(s.done)
+	})
+	s.wg.Wait()
 }
 
 type ChatMessage struct {
@@ -176,6 +261,13 @@ type ChatToolCallDelta struct {
 }
 
 func main() {
+	if strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN")) != "" {
+		if err := runDiscordBot(context.Background()); err != nil {
+			fmt.Printf("Error: %s\n", err.Error())
+		}
+		return
+	}
+
 	scanner := bufio.NewScanner(os.Stdin)
 	getUserMessage := func() (string, bool) {
 		if !scanner.Scan() {
@@ -197,6 +289,7 @@ func main() {
 	baseURL = strings.TrimRight(baseURL, "/")
 
 	agent := NewAgent(baseURL, apiKey, http.DefaultClient, getUserMessage, nil)
+	configureToolEventLogging(agent)
 	if err := agent.Run(context.Background()); err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
 	}
@@ -219,10 +312,37 @@ func NewAgent(
 		reasoningModel: Reasoning,
 		httpClient:     httpClient,
 		getUserMessage: getUserMessage,
-		toolEventSink:  &CLIToolEventSink{out: os.Stdout},
+		outputWriter:   os.Stdout,
 	}
 	agent.tools = agent.buildTools(tools)
 	return agent
+}
+
+func configureToolEventLogging(agent *Agent) {
+	mode, ok := parseToolEventLogMode(os.Getenv("TOOL_EVENT_LOG"))
+	if !ok {
+		fmt.Fprintf(os.Stderr, "Warning: invalid TOOL_EVENT_LOG=%q; defaulting to %q\n", os.Getenv("TOOL_EVENT_LOG"), ToolEventLogOff)
+		mode = ToolEventLogOff
+	}
+	switch mode {
+	case ToolEventLogDebug:
+		agent.toolEventSink = &CLIToolEventSink{out: os.Stderr}
+	default:
+		agent.toolEventSink = nil
+	}
+}
+
+func parseToolEventLogMode(raw string) (ToolEventLogMode, bool) {
+	value := strings.TrimSpace(strings.ToLower(raw))
+	if value == "" {
+		return ToolEventLogOff, true
+	}
+	switch ToolEventLogMode(value) {
+	case ToolEventLogOff, ToolEventLogDebug:
+		return ToolEventLogMode(value), true
+	default:
+		return ToolEventLogOff, false
+	}
 }
 
 func (a *Agent) buildTools(extraTools []ToolDefinition) []ToolDefinition {
@@ -278,12 +398,16 @@ func (a *Agent) Run(ctx context.Context) error {
 			conversation = append(conversation, userMessage)
 		}
 
+		spinner := NewStatusIndicator(a.cliOutputWriter(), "waiting for model...")
+		spinner.Start()
+
 		streamedAnyText := false
 		assistantHeaderPrinted := false
 		message, err := a.runInferenceStream(ctx, conversation, func(delta string) {
 			if delta == "" {
 				return
 			}
+			spinner.Stop()
 			if !assistantHeaderPrinted {
 				fmt.Print("\u001b[93mAssistant\u001b[0m: ")
 				assistantHeaderPrinted = true
@@ -291,6 +415,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			streamedAnyText = true
 			fmt.Print(delta)
 		})
+		spinner.Stop()
 		if err != nil {
 			if streamedAnyText {
 				fmt.Print("\n[stream interrupted]\n")
@@ -648,7 +773,16 @@ func (a *Agent) executeTool(ctx context.Context, toolCall ChatToolCall) ChatMess
 		rawInput = json.RawMessage(toolCall.Function.Arguments)
 	}
 
+	var spinner *StatusIndicator
+	if toolCall.Function.Name != "delegate_reasoning" {
+		spinner = NewStatusIndicatorWithDelay(a.cliOutputWriter(), fmt.Sprintf("running %s...", toolCall.Function.Name), toolStatusDelay)
+		spinner.Start()
+	}
+
 	response, err := toolDef.Function(rawInput)
+	if spinner != nil {
+		spinner.Stop()
+	}
 	if err != nil {
 		a.emitToolEvent(ctx, ToolEvent{
 			Type:       ToolEventFailed,
@@ -690,6 +824,74 @@ func (a *Agent) emitToolEvent(ctx context.Context, event ToolEvent) {
 		return
 	}
 	a.toolEventSink.HandleToolEvent(ctx, event)
+}
+
+func (a *Agent) cliOutputWriter() io.Writer {
+	if a.outputWriter != nil {
+		return a.outputWriter
+	}
+	if sink, ok := a.toolEventSink.(*CLIToolEventSink); ok {
+		if sink.out != nil {
+			return sink.out
+		}
+	}
+	return os.Stdout
+}
+
+func (a *Agent) setOutputWriter(w io.Writer) {
+	a.outputWriter = w
+}
+
+func (a *Agent) HandleUserMessage(ctx context.Context, conversation []ChatMessage, userInput string) ([]ChatMessage, string, error) {
+	a.reasoningCallCount = 0
+	conversation = append(conversation, ChatMessage{
+		Role:    "user",
+		Content: userInput,
+	})
+
+	var responseParts []string
+	for {
+		message, err := a.runInference(ctx, conversation)
+		if err != nil {
+			return nil, "", err
+		}
+		conversation = append(conversation, message)
+
+		if text, ok := message.Content.(string); ok && strings.TrimSpace(text) != "" {
+			responseParts = append(responseParts, text)
+		}
+
+		if len(message.ToolCalls) == 0 {
+			break
+		}
+
+		for _, toolCall := range message.ToolCalls {
+			toolResult := a.executeTool(ctx, toolCall)
+			conversation = append(conversation, toolResult)
+		}
+	}
+
+	finalResponse := strings.TrimSpace(strings.Join(responseParts, "\n\n"))
+	if finalResponse == "" {
+		finalResponse = "(no text response)"
+	}
+
+	return conversation, finalResponse, nil
+}
+
+func waitForShutdownSignal(ctx context.Context) {
+	select {
+	case <-ctx.Done():
+		return
+	case <-signalChan():
+		return
+	}
+}
+
+func signalChan() <-chan os.Signal {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
+	return ch
 }
 
 func parseToolArgs(raw string) map[string]interface{} {
@@ -864,10 +1066,13 @@ func (a *Agent) delegateReasoning(input json.RawMessage) (string, error) {
 	timeoutCtx, cancel := context.WithTimeout(context.Background(), reasoningCallTimeout)
 	defer cancel()
 
+	spinner := NewStatusIndicator(a.cliOutputWriter(), "delegating reasoning...")
+	spinner.Start()
 	msg, err := a.runInferenceWithModel(timeoutCtx, a.reasoningModel, []ChatMessage{{
 		Role:    "user",
 		Content: reasoningPrompt,
 	}}, nil, reasoningMaxTokens)
+	spinner.Stop()
 	if err != nil {
 		return "", err
 	}

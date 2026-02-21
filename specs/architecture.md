@@ -8,6 +8,7 @@ It combines:
 1. Interactive chat loop for user input/output
 2. LLM inference requests to Vultr chat completions
 3. Tool-calling for local filesystem actions
+4. Optional Discord slash-command transport
 
 The architecture is intentionally compact: orchestration, inference client, message types, and tool
 implementations are all in `main.go`.
@@ -34,8 +35,11 @@ agent/
 | `Agent` | `main.go` | Maintains configuration and executes chat/tool loop |
 | `runInferenceStreamWithModel` | `main.go` | Primary-model streaming inference for CLI token output |
 | `runInferenceWithModel` | `main.go` | Non-streaming inference path and delegated reasoning calls |
+| `StatusIndicator` | `main.go` | Delayed ephemeral CLI progress indicator for wait states |
 | `executeTool` | `main.go` | Dispatches model tool calls to registered Go functions |
 | `delegateReasoning` | `main.go` | Delegates hard reasoning sub-tasks to `gpt-oss-120b` |
+| `HandleUserMessage` | `main.go` | Transport-agnostic single-turn model/tool loop for external adapters |
+| Discord runtime | `discord.go` | Registers `/agent`, handles interactions, and manages per-session conversations |
 | Tool functions | `main.go` | Perform filesystem operations (`read_file`, `list_files`, `edit_file`) |
 | Startup wiring (`main`) | `main.go` | Reads env config, builds `Agent`, starts interactive session |
 
@@ -60,7 +64,8 @@ agent/
      │ text deltas + ChatMessage
      ▼
 ┌──────────────────────────┐
-│ Assistant output         │
+│ Assistant output +       │
+│ wait indicators          │
 │ - streamed text and/or   │
 │   final tool_calls       │
 └────┬─────────────────────┘
@@ -85,6 +90,19 @@ This lets the model call tools, receive tool outputs, and produce a final respon
 
 Reasoning call count is reset for each new user turn to bound delegated reasoning usage.
 
+`Agent.Run()` and tool execution paths include delayed ephemeral status indicators:
+
+1. `waiting for model...` while awaiting first primary-model output
+2. `delegating reasoning...` during delegated reasoning inference
+3. `running <tool_name>...` for slow non-reasoning tool execution
+
+Current indicator delay configuration:
+
+1. General wait indicator delay: `150ms`
+2. Tool-running indicator delay: `200ms`
+
+Tool lifecycle events (`tool_call.started|succeeded|failed`) remain available internally and can be surfaced in CLI debug mode with `TOOL_EVENT_LOG=debug`.
+
 ## Design Constraints
 
 1. Single-process, single-threaded control loop
@@ -92,6 +110,8 @@ Reasoning call count is reset for each new user turn to bound delegated reasonin
 3. No workspace sandboxing; tools operate on provided paths
 4. Tool and inference schemas are static per process start
 5. Primary model is fixed to `kimi-k2-instruct`; reasoning model is fixed to `gpt-oss-120b`
+
+In Discord mode, each `(channel_id, user_id)` conversation key is isolated with a dedicated in-memory agent/session state and mutex.
 
 ## Extension Points
 

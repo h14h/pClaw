@@ -46,6 +46,11 @@ Environment variables:
 
 - `VULTR_API_KEY` (required): API token for Vultr Inference
 - `VULTR_BASE_URL` (optional): API base URL (default: `https://api.vultrinference.com/v1`)
+- `DISCORD_BOT_TOKEN` (optional): enables Discord mode when set
+- `DISCORD_APPLICATION_ID` (optional): Discord application ID for slash command registration
+- `DISCORD_GUILD_ID` (optional): registers slash command to one guild for faster propagation
+- `DISCORD_ALLOWED_CHANNEL_IDS` (optional): comma-separated channel allowlist
+- `DISCORD_ALLOWED_USER_IDS` (optional): comma-separated user allowlist
 
 Model behavior is fixed:
 
@@ -67,6 +72,18 @@ export VULTR_API_KEY="your-token"
 go run .
 ```
 
+Run in Discord mode:
+
+```bash
+export VULTR_API_KEY="your-token"
+export DISCORD_BOT_TOKEN="your-bot-token"
+# Optional but recommended for reliable command registration:
+export DISCORD_APPLICATION_ID="your-application-id"
+# Optional for fast guild-scoped command registration:
+export DISCORD_GUILD_ID="your-guild-id"
+go run .
+```
+
 Optional base URL override:
 
 ```bash
@@ -80,6 +97,15 @@ go run .
 - Assistant responses print as `Assistant:`
 - Tool execution now emits event-style, human-readable logs (`started`/`succeeded`/`failed`) per call
 - Exit with `Ctrl+C` or EOF (`Ctrl+D`)
+
+### Discord behavior
+
+- When `DISCORD_BOT_TOKEN` is set, startup runs Discord mode instead of terminal REPL mode
+- Registers `/agent` slash command with a required `prompt` argument
+- Supports mention-based chat in channels: `@your-bot <prompt>`
+- Maintains conversation context per `(channel_id, user_id)` session key
+- Splits long responses into multiple Discord messages under platform size limits
+- Requires bot intents for message events; enable `Message Content Intent` in the Discord Developer Portal
 
 ## Testing
 
