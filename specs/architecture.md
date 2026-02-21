@@ -116,6 +116,7 @@ Tool lifecycle events (`tool_call.started|succeeded|failed`) remain available in
 
 In Discord mode, each `(channel_id, user_id)` conversation key is isolated with a dedicated in-memory agent/session state and mutex.
 Discord uses progressive part callbacks to emit multiple messages within one logical turn as assistant/tool iterations produce text.
+Message splitting honors optional model-inserted `<<MSG_SPLIT>>` markers first, then falls back to balanced boundary-aware chunking under Discord size limits.
 
 ## Extension Points
 

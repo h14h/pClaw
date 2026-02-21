@@ -34,6 +34,8 @@ The test suite has three layers:
 | `TestHandleUserMessageProgressive_EmitsPartsInOrder` | Verifies progressive callback emits assistant text parts in order across tool loop iterations |
 | `TestProgressiveDiscordSender_UsesFirstThenNext` | Verifies first progressive Discord part uses first-send path and later parts use follow-up path |
 | `TestProgressiveDiscordSender_SplitsLongPart` | Verifies progressive sender applies Discord-safe chunking per emitted part |
+| `TestSplitForDiscord_HonorsSplitMarker` | Verifies explicit `<<MSG_SPLIT>>` marker boundaries are preferred when splitting |
+| `TestSplitForDiscord_BalancedAvoidsTinyTrailingChunk` | Verifies fallback chunking produces roughly even Discord message sizes |
 | `TestStartTypingHeartbeat_EmitsUntilStopped` | Verifies typing heartbeat keeps emitting until explicitly stopped |
 
 ## Integration Tests (E2E)

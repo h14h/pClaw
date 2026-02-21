@@ -14,11 +14,11 @@ import (
 )
 
 const (
-	discordCommandName        = "agent"
-	discordPromptOptionName   = "prompt"
-	discordMessageLimit       = 2000
-	discordMessageChunkTarget = 1900
-	discordTypingInterval     = 8 * time.Second
+	discordCommandName      = "agent"
+	discordPromptOptionName = "prompt"
+	discordMessageLimit     = 2000
+	discordSplitMarker      = "<<MSG_SPLIT>>"
+	discordTypingInterval   = 8 * time.Second
 )
 
 type discordSessionState struct {
@@ -391,11 +391,30 @@ func runDiscordPromptProgressive(
 	totalParts := 0
 	totalChunks := 0
 	totalChars := 0
+	globalChunkIndex := 0
+	verboseContentLogs := serverEventSinkIncludesVerboseContent(serverEventSink)
 	wrappedOnResponsePart := func(part string) error {
 		chunks := splitForDiscord(part)
 		totalParts++
 		totalChunks += len(chunks)
 		totalChars += len(part)
+		if verboseContentLogs {
+			emitServerEventWithSink(ctx, serverEventSink, ServerLogLevelInfo, "discord.response.part_content", "response part content", map[string]interface{}{
+				"part_index": partIndex,
+				"chars":      len(part),
+				"content":    part,
+			})
+			for chunkIndex, chunk := range chunks {
+				emitServerEventWithSink(ctx, serverEventSink, ServerLogLevelInfo, "discord.response.chunk_content", "response chunk content", map[string]interface{}{
+					"part_index":         partIndex,
+					"chunk_index":        chunkIndex,
+					"global_chunk_index": globalChunkIndex,
+					"chars":              len(chunk),
+					"content":            chunk,
+				})
+				globalChunkIndex++
+			}
+		}
 		if onResponsePart != nil {
 			if err := onResponsePart(part); err != nil {
 				emitServerEventWithSink(ctx, serverEventSink, ServerLogLevelError, "discord.response.failed", "response send failed", map[string]interface{}{
@@ -424,12 +443,16 @@ func runDiscordPromptProgressive(
 		return "", err
 	}
 	state.conversation = updatedConversation
-	emitServerEventWithSink(ctx, serverEventSink, ServerLogLevelInfo, "discord.response.completed", "response completed", map[string]interface{}{
+	completedFields := map[string]interface{}{
 		"duration_ms":  time.Since(requestStartedAt).Milliseconds(),
 		"total_parts":  totalParts,
 		"total_chunks": totalChunks,
 		"total_chars":  totalChars,
-	})
+	}
+	if verboseContentLogs {
+		completedFields["content"] = response
+	}
+	emitServerEventWithSink(ctx, serverEventSink, ServerLogLevelInfo, "discord.response.completed", "response completed", completedFields)
 	return response, nil
 }
 
@@ -461,13 +484,31 @@ func splitForDiscord(text string) []string {
 		return nil
 	}
 
-	var chunks []string
-	remaining := trimmed
-	for len(remaining) > discordMessageLimit {
-		splitAt := strings.LastIndex(remaining[:discordMessageChunkTarget], "\n")
-		if splitAt <= 0 {
-			splitAt = discordMessageChunkTarget
+	if strings.Contains(trimmed, discordSplitMarker) {
+		parts := strings.Split(trimmed, discordSplitMarker)
+		chunks := make([]string, 0, len(parts))
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			chunks = append(chunks, splitForDiscordBalanced(part)...)
 		}
+		if len(chunks) > 0 {
+			return chunks
+		}
+	}
+
+	return splitForDiscordBalanced(trimmed)
+}
+
+func splitForDiscordBalanced(text string) []string {
+	var chunks []string
+	remaining := text
+	for len(remaining) > discordMessageLimit {
+		chunkCount := (len(remaining) + discordMessageLimit - 1) / discordMessageLimit
+		target := len(remaining) / chunkCount
+		splitAt := findBalancedSplitPoint(remaining, target, discordMessageLimit)
 		chunks = append(chunks, strings.TrimSpace(remaining[:splitAt]))
 		remaining = strings.TrimSpace(remaining[splitAt:])
 	}
@@ -475,6 +516,76 @@ func splitForDiscord(text string) []string {
 		chunks = append(chunks, remaining)
 	}
 	return chunks
+}
+
+func findBalancedSplitPoint(text string, target, hardLimit int) int {
+	if hardLimit <= 0 {
+		return len(text)
+	}
+	if len(text) <= hardLimit {
+		return len(text)
+	}
+	if target <= 0 || target > hardLimit {
+		target = hardLimit
+	}
+
+	searchEnd := hardLimit
+	window := target / 4
+	if window < 120 {
+		window = 120
+	}
+	if window > 500 {
+		window = 500
+	}
+	searchStart := target - window
+	if searchStart < 1 {
+		searchStart = 1
+	}
+	searchWindowEnd := target + window
+	if searchWindowEnd > searchEnd {
+		searchWindowEnd = searchEnd
+	}
+
+	candidate := text[:searchEnd]
+	for _, delimiter := range []string{"\n\n", "\n", ". ", "? ", "! ", "; ", ", ", " "} {
+		if idx := closestSplitAfterDelimiter(candidate, delimiter, searchStart, searchWindowEnd, target); idx > 0 {
+			return idx
+		}
+	}
+
+	return target
+}
+
+func closestSplitAfterDelimiter(text, delimiter string, start, end, target int) int {
+	if delimiter == "" || start >= end || start < 0 || end > len(text) {
+		return -1
+	}
+
+	bestIndex := -1
+	bestDistance := 0
+	searchFrom := 0
+	for {
+		idx := strings.Index(text[searchFrom:], delimiter)
+		if idx < 0 {
+			break
+		}
+		idx += searchFrom
+		splitAt := idx + len(delimiter)
+		searchFrom = idx + 1
+
+		if splitAt < start || splitAt > end {
+			continue
+		}
+		distance := splitAt - target
+		if distance < 0 {
+			distance = -distance
+		}
+		if bestIndex == -1 || distance < bestDistance {
+			bestIndex = splitAt
+			bestDistance = distance
+		}
+	}
+	return bestIndex
 }
 
 func csvToSet(raw string) map[string]struct{} {

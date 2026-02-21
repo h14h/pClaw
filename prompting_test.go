@@ -21,6 +21,9 @@ func TestSectionedPromptBuilderFullIncludesCoreSections(t *testing.T) {
 	if !strings.Contains(prompt, "read_file") {
 		t.Fatalf("expected tool name in prompt, got: %s", prompt)
 	}
+	if !strings.Contains(prompt, "<<MSG_SPLIT>>") {
+		t.Fatalf("expected runtime split marker instruction in prompt, got: %s", prompt)
+	}
 }
 
 func TestSectionedPromptBuilderMinimalOmitsIdentityAndTooling(t *testing.T) {

@@ -95,6 +95,12 @@ assistant ChatMessage
                                 └─ call runInference() again with expanded conversation
 ```
 
+Discord adapter post-processing for emitted text parts:
+
+1. Honor explicit split markers (`<<MSG_SPLIT>>`) when present
+2. Enforce Discord hard per-message limits
+3. Use balanced boundary-aware fallback splitting when no markers are available
+
 ## Error Surface
 
 `runInferenceWithModel()` and `runInferenceStreamWithModel()` return errors for:

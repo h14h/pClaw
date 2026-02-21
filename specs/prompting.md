@@ -74,6 +74,24 @@ Before every chat completion request:
 
 This allows runtime-aware wording without changing core policy.
 
+## Runtime Split Contract
+
+For transports that split long messages (for example Discord), runtime instructions may ask the model to:
+
+1. Insert `<<MSG_SPLIT>>` between logical sections when output is likely to exceed transport limits
+2. Prefer roughly even chunk sizes across splits
+3. Avoid leaving a tiny trailing fragment as the final chunk
+
+Split markers are advisory and not guaranteed to appear. Transport adapters must keep deterministic fallback splitting.
+
+## Tool-Call User Messaging
+
+Runtime instructions can require user-facing tool-call transparency:
+
+1. Send one brief status sentence before the first tool call
+2. For delegated reasoning, explicitly note that a deeper thinking step is in progress and a complete answer will follow
+3. Avoid repeated status chatter when multiple tools are called in one turn
+
 ## Validation and Tests
 
 Unit tests should verify:

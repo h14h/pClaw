@@ -23,6 +23,45 @@ func TestSplitForDiscord(t *testing.T) {
 	}
 }
 
+func TestSplitForDiscord_HonorsSplitMarker(t *testing.T) {
+	text := "alpha section\n\n" + discordSplitMarker + "\n\nbeta section"
+	chunks := splitForDiscord(text)
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks, got %d (%#v)", len(chunks), chunks)
+	}
+	if chunks[0] != "alpha section" {
+		t.Fatalf("unexpected first chunk %q", chunks[0])
+	}
+	if chunks[1] != "beta section" {
+		t.Fatalf("unexpected second chunk %q", chunks[1])
+	}
+}
+
+func TestSplitForDiscord_BalancedAvoidsTinyTrailingChunk(t *testing.T) {
+	text := strings.Repeat("word ", 850)
+	chunks := splitForDiscord(text)
+	if len(chunks) != 3 {
+		t.Fatalf("expected 3 chunks, got %d", len(chunks))
+	}
+
+	minLen := len(chunks[0])
+	maxLen := len(chunks[0])
+	for i, chunk := range chunks {
+		if len(chunk) > discordMessageLimit {
+			t.Fatalf("chunk %d exceeds limit: %d", i, len(chunk))
+		}
+		if len(chunk) < minLen {
+			minLen = len(chunk)
+		}
+		if len(chunk) > maxLen {
+			maxLen = len(chunk)
+		}
+	}
+	if maxLen-minLen > 300 {
+		t.Fatalf("expected balanced chunks, got lengths: %d, %d, %d", len(chunks[0]), len(chunks[1]), len(chunks[2]))
+	}
+}
+
 func TestDiscordConversationKey(t *testing.T) {
 	key := discordConversationKey("chan_1", "user_1")
 	if key != "chan_1:user_1" {

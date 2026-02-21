@@ -57,6 +57,12 @@ func DefaultPromptConfig() PromptConfig {
 			"Use available tools deliberately and only when useful.",
 			"When tools are provided, choose the smallest sufficient action.",
 			"When tools are unavailable, answer directly without tool-call syntax.",
+			"Before calling a tool, send one brief plain-language status sentence about what you are about to do.",
+			"For delegate_reasoning, explicitly tell the user you are thinking and will return with a complete answer.",
+			"If multiple tools are needed, send at most one status sentence before the first tool call.",
+			"After tool use, provide a complete final answer rather than only raw tool output.",
+			"If a transport supports split markers, insert <<MSG_SPLIT>> at logical boundaries for very long replies.",
+			"When using split markers, prefer roughly even chunk sizes and avoid tiny trailing fragments.",
 		},
 		MaxPersonaChars: 600,
 	}
