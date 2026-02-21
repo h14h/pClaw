@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,8 +13,11 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -60,8 +65,185 @@ type Agent struct {
 	getUserMessage     func() (string, bool)
 	tools              []ToolDefinition
 	toolEventSink      ToolEventSink
+	serverEventSink    ServerEventSink
 	outputWriter       io.Writer
 	reasoningCallCount int
+}
+
+type ServerEventLogMode string
+
+const (
+	ServerEventLogOff  ServerEventLogMode = "off"
+	ServerEventLogLine ServerEventLogMode = "line"
+)
+
+type ServerLogLevel string
+
+const (
+	ServerLogLevelInfo  ServerLogLevel = "INFO"
+	ServerLogLevelWarn  ServerLogLevel = "WARN"
+	ServerLogLevelError ServerLogLevel = "ERROR"
+)
+
+type ServerEvent struct {
+	TS            time.Time
+	Level         ServerLogLevel
+	Event         string
+	Message       string
+	TraceID       string
+	TurnID        string
+	SessionKey    string
+	Source        string
+	ChannelID     string
+	UserIDHash    string
+	MessageID     string
+	InteractionID string
+	Fields        map[string]interface{}
+}
+
+type ServerEventSink interface {
+	HandleServerEvent(ctx context.Context, event ServerEvent)
+}
+
+type LineServerEventSink struct {
+	out io.Writer
+	mu  sync.Mutex
+}
+
+func (s *LineServerEventSink) HandleServerEvent(_ context.Context, event ServerEvent) {
+	out := s.out
+	if out == nil {
+		out = os.Stdout
+	}
+	if event.TS.IsZero() {
+		event.TS = time.Now().UTC()
+	}
+	if event.Level == "" {
+		event.Level = ServerLogLevelInfo
+	}
+
+	parts := []string{
+		event.TS.UTC().Format(time.RFC3339Nano),
+		string(event.Level),
+		"event=" + formatLogValue(event.Event),
+	}
+	if event.TraceID != "" {
+		parts = append(parts, "trace="+formatLogValue(event.TraceID))
+	}
+	if event.TurnID != "" {
+		parts = append(parts, "turn="+formatLogValue(event.TurnID))
+	}
+	if event.SessionKey != "" {
+		parts = append(parts, "session="+formatLogValue(event.SessionKey))
+	}
+	if event.Message != "" {
+		parts = append(parts, "msg="+formatLogValue(event.Message))
+	}
+	if event.Source != "" {
+		parts = append(parts, "source="+formatLogValue(event.Source))
+	}
+	if event.ChannelID != "" {
+		parts = append(parts, "channel="+formatLogValue(event.ChannelID))
+	}
+	if event.UserIDHash != "" {
+		parts = append(parts, "user="+formatLogValue(event.UserIDHash))
+	}
+	if event.MessageID != "" {
+		parts = append(parts, "message_id="+formatLogValue(event.MessageID))
+	}
+	if event.InteractionID != "" {
+		parts = append(parts, "interaction_id="+formatLogValue(event.InteractionID))
+	}
+	if len(event.Fields) > 0 {
+		keys := make([]string, 0, len(event.Fields))
+		for k := range event.Fields {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			parts = append(parts, k+"="+formatLogValue(event.Fields[k]))
+		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fmt.Fprintln(out, strings.Join(parts, " "))
+}
+
+func formatLogValue(v interface{}) string {
+	switch value := v.(type) {
+	case nil:
+		return `""`
+	case string:
+		return quoteIfNeeded(value)
+	case bool:
+		if value {
+			return "true"
+		}
+		return "false"
+	case int:
+		return strconv.Itoa(value)
+	case int64:
+		return strconv.FormatInt(value, 10)
+	case float64:
+		return strconv.FormatFloat(value, 'f', -1, 64)
+	default:
+		return quoteIfNeeded(fmt.Sprint(value))
+	}
+}
+
+func quoteIfNeeded(s string) string {
+	if s == "" {
+		return `""`
+	}
+	if strings.ContainsAny(s, " \t\n\r\"=") {
+		return strconv.Quote(s)
+	}
+	return s
+}
+
+type serverLogMeta struct {
+	TraceID       string
+	TurnID        string
+	SessionKey    string
+	Source        string
+	ChannelID     string
+	UserIDHash    string
+	MessageID     string
+	InteractionID string
+}
+
+type serverLogContextKey struct{}
+
+var serverEventIDCounter uint64
+
+func withServerLogMeta(ctx context.Context, meta serverLogMeta) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, serverLogContextKey{}, meta)
+}
+
+func serverLogMetaFromContext(ctx context.Context) serverLogMeta {
+	if ctx == nil {
+		return serverLogMeta{}
+	}
+	meta, _ := ctx.Value(serverLogContextKey{}).(serverLogMeta)
+	return meta
+}
+
+func nextServerEventID(prefix string) string {
+	n := atomic.AddUint64(&serverEventIDCounter, 1)
+	return fmt.Sprintf("%s_%d_%d", prefix, time.Now().UTC().UnixNano(), n)
+}
+
+func hashIdentifier(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(trimmed))
+	return "sha256:" + hex.EncodeToString(sum[:8])
 }
 
 type ToolEventType string
@@ -290,6 +472,7 @@ func main() {
 
 	agent := NewAgent(baseURL, apiKey, http.DefaultClient, getUserMessage, nil)
 	configureToolEventLogging(agent)
+	configureServerEventLogging(agent, os.Stdout)
 	if err := agent.Run(context.Background()); err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
 	}
@@ -332,6 +515,24 @@ func configureToolEventLogging(agent *Agent) {
 	}
 }
 
+func configureServerEventLogging(agent *Agent, out io.Writer) {
+	agent.serverEventSink = newServerEventSinkFromEnv(out)
+}
+
+func newServerEventSinkFromEnv(out io.Writer) ServerEventSink {
+	mode, ok := parseServerEventLogMode(os.Getenv("SERVER_EVENT_LOG"))
+	if !ok {
+		fmt.Fprintf(os.Stderr, "Warning: invalid SERVER_EVENT_LOG=%q; defaulting to %q\n", os.Getenv("SERVER_EVENT_LOG"), ServerEventLogOff)
+		mode = ServerEventLogOff
+	}
+	switch mode {
+	case ServerEventLogLine:
+		return &LineServerEventSink{out: out}
+	default:
+		return nil
+	}
+}
+
 func parseToolEventLogMode(raw string) (ToolEventLogMode, bool) {
 	value := strings.TrimSpace(strings.ToLower(raw))
 	if value == "" {
@@ -342,6 +543,19 @@ func parseToolEventLogMode(raw string) (ToolEventLogMode, bool) {
 		return ToolEventLogMode(value), true
 	default:
 		return ToolEventLogOff, false
+	}
+}
+
+func parseServerEventLogMode(raw string) (ServerEventLogMode, bool) {
+	value := strings.TrimSpace(strings.ToLower(raw))
+	if value == "" {
+		return ServerEventLogOff, true
+	}
+	switch ServerEventLogMode(value) {
+	case ServerEventLogOff, ServerEventLogLine:
+		return ServerEventLogMode(value), true
+	default:
+		return ServerEventLogOff, false
 	}
 }
 
@@ -464,6 +678,14 @@ func (a *Agent) runInferenceWithModel(
 	tools []ToolDefinition,
 	maxTokens int,
 ) (ChatMessage, error) {
+	startedAt := time.Now()
+	a.emitServerEvent(ctx, ServerLogLevelInfo, "llm.request.started", "inference request started", map[string]interface{}{
+		"model":    string(model),
+		"stream":   false,
+		"messages": len(conversation),
+		"tools":    len(tools),
+	})
+
 	chatTools := []ChatTool{}
 	for _, tool := range tools {
 		chatTools = append(chatTools, ChatTool{
@@ -488,11 +710,23 @@ func (a *Agent) runInferenceWithModel(
 
 	body, err := json.Marshal(requestBody)
 	if err != nil {
+		a.emitServerEvent(ctx, ServerLogLevelError, "llm.request.failed", "inference request failed", map[string]interface{}{
+			"model":       string(model),
+			"stream":      false,
+			"duration_ms": time.Since(startedAt).Milliseconds(),
+			"error":       err.Error(),
+		})
 		return ChatMessage{}, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
+		a.emitServerEvent(ctx, ServerLogLevelError, "llm.request.failed", "inference request failed", map[string]interface{}{
+			"model":       string(model),
+			"stream":      false,
+			"duration_ms": time.Since(startedAt).Milliseconds(),
+			"error":       err.Error(),
+		})
 		return ChatMessage{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+a.apiKey)
@@ -500,33 +734,81 @@ func (a *Agent) runInferenceWithModel(
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
+		a.emitServerEvent(ctx, ServerLogLevelError, "llm.request.failed", "inference request failed", map[string]interface{}{
+			"model":       string(model),
+			"stream":      false,
+			"duration_ms": time.Since(startedAt).Milliseconds(),
+			"error":       err.Error(),
+		})
 		return ChatMessage{}, err
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
+		a.emitServerEvent(ctx, ServerLogLevelError, "llm.request.failed", "inference request failed", map[string]interface{}{
+			"model":       string(model),
+			"stream":      false,
+			"duration_ms": time.Since(startedAt).Milliseconds(),
+			"error":       err.Error(),
+		})
 		return ChatMessage{}, err
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return ChatMessage{}, fmt.Errorf("vultr api error (%d): %s", resp.StatusCode, string(respBody))
+		requestErr := fmt.Errorf("vultr api error (%d): %s", resp.StatusCode, string(respBody))
+		a.emitServerEvent(ctx, ServerLogLevelError, "llm.request.failed", "inference request failed", map[string]interface{}{
+			"model":       string(model),
+			"stream":      false,
+			"duration_ms": time.Since(startedAt).Milliseconds(),
+			"status_code": resp.StatusCode,
+			"error":       requestErr.Error(),
+		})
+		return ChatMessage{}, requestErr
 	}
 
 	var completion ChatCompletionResponse
 	if err := json.Unmarshal(respBody, &completion); err != nil {
+		a.emitServerEvent(ctx, ServerLogLevelError, "llm.request.failed", "inference request failed", map[string]interface{}{
+			"model":       string(model),
+			"stream":      false,
+			"duration_ms": time.Since(startedAt).Milliseconds(),
+			"error":       err.Error(),
+		})
 		return ChatMessage{}, err
 	}
 
 	if completion.Error != nil && completion.Error.Message != "" {
-		return ChatMessage{}, fmt.Errorf("vultr api error: %s", completion.Error.Message)
+		requestErr := fmt.Errorf("vultr api error: %s", completion.Error.Message)
+		a.emitServerEvent(ctx, ServerLogLevelError, "llm.request.failed", "inference request failed", map[string]interface{}{
+			"model":       string(model),
+			"stream":      false,
+			"duration_ms": time.Since(startedAt).Milliseconds(),
+			"error":       requestErr.Error(),
+		})
+		return ChatMessage{}, requestErr
 	}
 
 	if len(completion.Choices) == 0 {
-		return ChatMessage{}, fmt.Errorf("vultr api returned no choices")
+		requestErr := fmt.Errorf("vultr api returned no choices")
+		a.emitServerEvent(ctx, ServerLogLevelError, "llm.request.failed", "inference request failed", map[string]interface{}{
+			"model":       string(model),
+			"stream":      false,
+			"duration_ms": time.Since(startedAt).Milliseconds(),
+			"error":       requestErr.Error(),
+		})
+		return ChatMessage{}, requestErr
 	}
 
-	return completion.Choices[0].Message, nil
+	message := completion.Choices[0].Message
+	a.emitServerEvent(ctx, ServerLogLevelInfo, "llm.request.completed", "inference completed", map[string]interface{}{
+		"model":        string(model),
+		"stream":       false,
+		"duration_ms":  time.Since(startedAt).Milliseconds(),
+		"output_chars": len(streamContentToString(message.Content)),
+		"tool_calls":   len(message.ToolCalls),
+	})
+	return message, nil
 }
 
 func (a *Agent) runInferenceStreamWithModel(
@@ -537,6 +819,14 @@ func (a *Agent) runInferenceStreamWithModel(
 	maxTokens int,
 	onTextDelta func(string),
 ) (ChatMessage, error) {
+	startedAt := time.Now()
+	a.emitServerEvent(ctx, ServerLogLevelInfo, "llm.request.started", "inference request started", map[string]interface{}{
+		"model":    string(model),
+		"stream":   true,
+		"messages": len(conversation),
+		"tools":    len(tools),
+	})
+
 	chatTools := []ChatTool{}
 	for _, tool := range tools {
 		chatTools = append(chatTools, ChatTool{
@@ -562,11 +852,23 @@ func (a *Agent) runInferenceStreamWithModel(
 
 	body, err := json.Marshal(requestBody)
 	if err != nil {
+		a.emitServerEvent(ctx, ServerLogLevelError, "llm.request.failed", "inference request failed", map[string]interface{}{
+			"model":       string(model),
+			"stream":      true,
+			"duration_ms": time.Since(startedAt).Milliseconds(),
+			"error":       err.Error(),
+		})
 		return ChatMessage{}, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
+		a.emitServerEvent(ctx, ServerLogLevelError, "llm.request.failed", "inference request failed", map[string]interface{}{
+			"model":       string(model),
+			"stream":      true,
+			"duration_ms": time.Since(startedAt).Milliseconds(),
+			"error":       err.Error(),
+		})
 		return ChatMessage{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+a.apiKey)
@@ -574,6 +876,12 @@ func (a *Agent) runInferenceStreamWithModel(
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
+		a.emitServerEvent(ctx, ServerLogLevelError, "llm.request.failed", "inference request failed", map[string]interface{}{
+			"model":       string(model),
+			"stream":      true,
+			"duration_ms": time.Since(startedAt).Milliseconds(),
+			"error":       err.Error(),
+		})
 		return ChatMessage{}, err
 	}
 	defer resp.Body.Close()
@@ -581,9 +889,25 @@ func (a *Agent) runInferenceStreamWithModel(
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {
-			return ChatMessage{}, fmt.Errorf("vultr api error (%d): failed to read body: %w", resp.StatusCode, readErr)
+			requestErr := fmt.Errorf("vultr api error (%d): failed to read body: %w", resp.StatusCode, readErr)
+			a.emitServerEvent(ctx, ServerLogLevelError, "llm.request.failed", "inference request failed", map[string]interface{}{
+				"model":       string(model),
+				"stream":      true,
+				"duration_ms": time.Since(startedAt).Milliseconds(),
+				"status_code": resp.StatusCode,
+				"error":       requestErr.Error(),
+			})
+			return ChatMessage{}, requestErr
 		}
-		return ChatMessage{}, fmt.Errorf("vultr api error (%d): %s", resp.StatusCode, string(respBody))
+		requestErr := fmt.Errorf("vultr api error (%d): %s", resp.StatusCode, string(respBody))
+		a.emitServerEvent(ctx, ServerLogLevelError, "llm.request.failed", "inference request failed", map[string]interface{}{
+			"model":       string(model),
+			"stream":      true,
+			"duration_ms": time.Since(startedAt).Milliseconds(),
+			"status_code": resp.StatusCode,
+			"error":       requestErr.Error(),
+		})
+		return ChatMessage{}, requestErr
 	}
 
 	reader := bufio.NewReader(resp.Body)
@@ -593,6 +917,19 @@ func (a *Agent) runInferenceStreamWithModel(
 	toolCallsByIndex := map[int]*ChatToolCall{}
 	toolCallOrder := []int{}
 	var eventLines []string
+	sawFirstText := false
+	wrappedTextDelta := func(delta string) {
+		if delta != "" && !sawFirstText {
+			sawFirstText = true
+			a.emitServerEvent(ctx, ServerLogLevelInfo, "llm.stream.first_token", "first token received", map[string]interface{}{
+				"model":   string(model),
+				"ttfb_ms": time.Since(startedAt).Milliseconds(),
+			})
+		}
+		if onTextDelta != nil {
+			onTextDelta(delta)
+		}
+	}
 
 	for {
 		line, readErr := reader.ReadString('\n')
@@ -602,7 +939,13 @@ func (a *Agent) runInferenceStreamWithModel(
 		}
 
 		if line == "" && len(eventLines) > 0 {
-			if err := a.processStreamEvent(strings.Join(eventLines, "\n"), &message, &contentBuilder, &reasoningBuilder, toolCallsByIndex, &toolCallOrder, onTextDelta); err != nil {
+			if err := a.processStreamEvent(strings.Join(eventLines, "\n"), &message, &contentBuilder, &reasoningBuilder, toolCallsByIndex, &toolCallOrder, wrappedTextDelta); err != nil {
+				a.emitServerEvent(ctx, ServerLogLevelError, "llm.request.failed", "inference request failed", map[string]interface{}{
+					"model":       string(model),
+					"stream":      true,
+					"duration_ms": time.Since(startedAt).Milliseconds(),
+					"error":       err.Error(),
+				})
 				return ChatMessage{}, err
 			}
 			eventLines = eventLines[:0]
@@ -611,12 +954,24 @@ func (a *Agent) runInferenceStreamWithModel(
 		if readErr != nil {
 			if readErr == io.EOF {
 				if len(eventLines) > 0 {
-					if err := a.processStreamEvent(strings.Join(eventLines, "\n"), &message, &contentBuilder, &reasoningBuilder, toolCallsByIndex, &toolCallOrder, onTextDelta); err != nil {
+					if err := a.processStreamEvent(strings.Join(eventLines, "\n"), &message, &contentBuilder, &reasoningBuilder, toolCallsByIndex, &toolCallOrder, wrappedTextDelta); err != nil {
+						a.emitServerEvent(ctx, ServerLogLevelError, "llm.request.failed", "inference request failed", map[string]interface{}{
+							"model":       string(model),
+							"stream":      true,
+							"duration_ms": time.Since(startedAt).Milliseconds(),
+							"error":       err.Error(),
+						})
 						return ChatMessage{}, err
 					}
 				}
 				break
 			}
+			a.emitServerEvent(ctx, ServerLogLevelError, "llm.request.failed", "inference request failed", map[string]interface{}{
+				"model":       string(model),
+				"stream":      true,
+				"duration_ms": time.Since(startedAt).Milliseconds(),
+				"error":       readErr.Error(),
+			})
 			return ChatMessage{}, readErr
 		}
 	}
@@ -632,6 +987,13 @@ func (a *Agent) runInferenceStreamWithModel(
 			message.ToolCalls = append(message.ToolCalls, *call)
 		}
 	}
+	a.emitServerEvent(ctx, ServerLogLevelInfo, "llm.request.completed", "inference completed", map[string]interface{}{
+		"model":        string(model),
+		"stream":       true,
+		"duration_ms":  time.Since(startedAt).Milliseconds(),
+		"output_chars": len(streamContentToString(message.Content)),
+		"tool_calls":   len(message.ToolCalls),
+	})
 
 	return message, nil
 }
@@ -821,9 +1183,71 @@ func (a *Agent) executeTool(ctx context.Context, toolCall ChatToolCall) ChatMess
 
 func (a *Agent) emitToolEvent(ctx context.Context, event ToolEvent) {
 	if a.toolEventSink == nil {
+		a.emitServerEventFromToolEvent(ctx, event)
 		return
 	}
 	a.toolEventSink.HandleToolEvent(ctx, event)
+	a.emitServerEventFromToolEvent(ctx, event)
+}
+
+func (a *Agent) emitServerEventFromToolEvent(ctx context.Context, event ToolEvent) {
+	fields := map[string]interface{}{
+		"tool":    event.ToolName,
+		"call_id": event.ToolCallID,
+	}
+	switch event.Type {
+	case ToolEventStarted:
+		fields["args_present"] = strings.TrimSpace(event.ArgsRaw) != "{}"
+		a.emitServerEvent(ctx, ServerLogLevelInfo, string(ToolEventStarted), "tool execution started", fields)
+	case ToolEventSucceeded:
+		fields["duration_ms"] = event.Duration.Milliseconds()
+		fields["result_bytes"] = len(event.ResultRaw)
+		for k, v := range event.Stats {
+			fields[k] = v
+		}
+		a.emitServerEvent(ctx, ServerLogLevelInfo, string(ToolEventSucceeded), "tool execution succeeded", fields)
+	case ToolEventFailed:
+		fields["duration_ms"] = event.Duration.Milliseconds()
+		fields["error"] = event.Err
+		a.emitServerEvent(ctx, ServerLogLevelError, string(ToolEventFailed), "tool execution failed", fields)
+	}
+}
+
+func (a *Agent) emitServerEvent(
+	ctx context.Context,
+	level ServerLogLevel,
+	eventName, message string,
+	fields map[string]interface{},
+) {
+	emitServerEventWithSink(ctx, a.serverEventSink, level, eventName, message, fields)
+}
+
+func emitServerEventWithSink(
+	ctx context.Context,
+	sink ServerEventSink,
+	level ServerLogLevel,
+	eventName, message string,
+	fields map[string]interface{},
+) {
+	if sink == nil {
+		return
+	}
+	meta := serverLogMetaFromContext(ctx)
+	sink.HandleServerEvent(ctx, ServerEvent{
+		TS:            time.Now().UTC(),
+		Level:         level,
+		Event:         eventName,
+		Message:       message,
+		TraceID:       meta.TraceID,
+		TurnID:        meta.TurnID,
+		SessionKey:    meta.SessionKey,
+		Source:        meta.Source,
+		ChannelID:     meta.ChannelID,
+		UserIDHash:    meta.UserIDHash,
+		MessageID:     meta.MessageID,
+		InteractionID: meta.InteractionID,
+		Fields:        fields,
+	})
 }
 
 func (a *Agent) cliOutputWriter() io.Writer {
@@ -852,6 +1276,11 @@ func (a *Agent) HandleUserMessageProgressive(
 	userInput string,
 	onResponsePart func(part string) error,
 ) ([]ChatMessage, string, error) {
+	turnStartedAt := time.Now()
+	a.emitServerEvent(ctx, ServerLogLevelInfo, "agent.turn.started", "turn started", map[string]interface{}{
+		"conversation_len_before": len(conversation),
+	})
+
 	a.reasoningCallCount = 0
 	conversation = append(conversation, ChatMessage{
 		Role:    "user",
@@ -859,9 +1288,14 @@ func (a *Agent) HandleUserMessageProgressive(
 	})
 
 	var responseParts []string
+	toolCallsTotal := 0
 	for {
 		message, err := a.runInference(ctx, conversation)
 		if err != nil {
+			a.emitServerEvent(ctx, ServerLogLevelError, "agent.turn.failed", "turn failed", map[string]interface{}{
+				"duration_ms": time.Since(turnStartedAt).Milliseconds(),
+				"error":       err.Error(),
+			})
 			return nil, "", err
 		}
 		conversation = append(conversation, message)
@@ -870,6 +1304,10 @@ func (a *Agent) HandleUserMessageProgressive(
 			responseParts = append(responseParts, text)
 			if onResponsePart != nil {
 				if err := onResponsePart(text); err != nil {
+					a.emitServerEvent(ctx, ServerLogLevelError, "agent.turn.failed", "turn failed", map[string]interface{}{
+						"duration_ms": time.Since(turnStartedAt).Milliseconds(),
+						"error":       err.Error(),
+					})
 					return nil, "", err
 				}
 			}
@@ -880,6 +1318,7 @@ func (a *Agent) HandleUserMessageProgressive(
 		}
 
 		for _, toolCall := range message.ToolCalls {
+			toolCallsTotal++
 			toolResult := a.executeTool(ctx, toolCall)
 			conversation = append(conversation, toolResult)
 		}
@@ -889,6 +1328,12 @@ func (a *Agent) HandleUserMessageProgressive(
 	if finalResponse == "" {
 		finalResponse = "(no text response)"
 	}
+	a.emitServerEvent(ctx, ServerLogLevelInfo, "agent.turn.completed", "turn completed", map[string]interface{}{
+		"duration_ms":      time.Since(turnStartedAt).Milliseconds(),
+		"tool_calls_total": toolCallsTotal,
+		"response_chars":   len(finalResponse),
+		"conversation_len": len(conversation),
+	})
 
 	return conversation, finalResponse, nil
 }

@@ -17,6 +17,7 @@ Precedence is:
 | `VULTR_API_KEY` | Yes | none | Bearer token for Vultr Inference |
 | `VULTR_BASE_URL` | No | `https://api.vultrinference.com/v1` | API base URL |
 | `TOOL_EVENT_LOG` | No | `off` | CLI tool event logging mode (`off` or `debug`) |
+| `SERVER_EVENT_LOG` | No | `off` | Server event logging mode (`off` or `line`) |
 | `DISCORD_BOT_TOKEN` | No | none | Enables Discord mode and authenticates bot session |
 | `DISCORD_APPLICATION_ID` | No | inferred from bot user when possible | Application ID for slash command registration |
 | `DISCORD_GUILD_ID` | No | empty (global registration) | Guild scope for slash command registration |
@@ -44,6 +45,7 @@ Initialization sequence:
 4. Trim trailing slash from base URL with `strings.TrimRight(baseURL, "/")`
 5. Build runtime (`Agent` for CLI, session-scoped `Agent`s for Discord)
 6. Configure tool event logging from `TOOL_EVENT_LOG` (CLI mode)
+7. Configure server event logging from `SERVER_EVENT_LOG`
 
 CLI initialization sequence:
 
@@ -52,6 +54,7 @@ CLI initialization sequence:
 3. Trim trailing slash from base URL with `strings.TrimRight(baseURL, "/")`
 4. Create `Agent` via `NewAgent(...)`
 5. Configure tool event logging from `TOOL_EVENT_LOG`
+6. Configure server event logging from `SERVER_EVENT_LOG`
 
 ## Behavioral Notes
 
@@ -61,7 +64,8 @@ CLI initialization sequence:
 4. HTTP client defaults to `http.DefaultClient` unless explicitly injected
 5. `TOOL_EVENT_LOG=off` keeps tool-event output silent while preserving spinner-based wait feedback
 6. `TOOL_EVENT_LOG=debug` emits structured `tool_event` lines to stderr
-7. Discord mode disables spinner output, routes responses through slash commands (`/agent`) and mention-based chat, emits assistant text progressively as it is produced, and refreshes typing indicators while work is ongoing
+7. `SERVER_EVENT_LOG=line` emits single-line `key=value` server events to stdout for Discord request, session, turn, inference, tool, and response lifecycle tracking
+8. Discord mode disables spinner output, routes responses through slash commands (`/agent`) and mention-based chat, emits assistant text progressively as it is produced, and refreshes typing indicators while work is ongoing
 
 ## Integration Test Configuration
 

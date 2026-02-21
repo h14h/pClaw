@@ -40,18 +40,18 @@ func newDiscordSessionManager(newAgent func() *Agent) *discordSessionManager {
 	}
 }
 
-func (m *discordSessionManager) get(sessionKey string) *discordSessionState {
+func (m *discordSessionManager) get(sessionKey string) (*discordSessionState, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	state, ok := m.sessions[sessionKey]
 	if ok {
-		return state
+		return state, false
 	}
 
 	state = &discordSessionState{agent: m.newAgent()}
 	m.sessions[sessionKey] = state
-	return state
+	return state, true
 }
 
 func runDiscordBot(ctx context.Context) error {
@@ -75,10 +75,12 @@ func runDiscordBot(ctx context.Context) error {
 	guildID := strings.TrimSpace(os.Getenv("DISCORD_GUILD_ID"))
 	allowedChannelIDs := csvToSet(os.Getenv("DISCORD_ALLOWED_CHANNEL_IDS"))
 	allowedUserIDs := csvToSet(os.Getenv("DISCORD_ALLOWED_USER_IDS"))
+	serverEventSink := newServerEventSinkFromEnv(os.Stdout)
 
 	manager := newDiscordSessionManager(func() *Agent {
 		agent := NewAgent(baseURL, apiKey, http.DefaultClient, nil, nil)
 		agent.setOutputWriter(io.Discard)
+		agent.serverEventSink = serverEventSink
 		return agent
 	})
 
@@ -96,17 +98,49 @@ func runDiscordBot(ctx context.Context) error {
 			return
 		}
 
+		interactionID := ""
+		if i.Interaction != nil {
+			interactionID = i.Interaction.ID
+		}
+
 		userID := interactionUserID(i)
+		sessionKey := discordConversationKey(i.ChannelID, userID)
+		eventCtx := withServerLogMeta(ctx, serverLogMeta{
+			TraceID:       nextServerEventID("trc"),
+			TurnID:        nextServerEventID("turn"),
+			SessionKey:    sessionKey,
+			Source:        "discord",
+			ChannelID:     i.ChannelID,
+			UserIDHash:    hashIdentifier(userID),
+			InteractionID: interactionID,
+		})
+		emitServerEventWithSink(eventCtx, serverEventSink, ServerLogLevelInfo, "discord.request.received", "discord slash command received", map[string]interface{}{
+			"source":       "slash",
+			"command_name": i.ApplicationCommandData().Name,
+		})
+
 		if !isAllowedDiscordRequest(i.ChannelID, userID, allowedChannelIDs, allowedUserIDs) {
+			emitServerEventWithSink(eventCtx, serverEventSink, ServerLogLevelWarn, "discord.request.rejected", "discord request rejected", map[string]interface{}{
+				"reason": "not_allowed",
+				"source": "slash",
+			})
 			respondInteractionError(s, i.Interaction, "You are not allowed to use this bot here.")
 			return
 		}
 
 		prompt := commandStringOption(i.ApplicationCommandData().Options, discordPromptOptionName)
 		if strings.TrimSpace(prompt) == "" {
+			emitServerEventWithSink(eventCtx, serverEventSink, ServerLogLevelWarn, "discord.request.rejected", "discord request rejected", map[string]interface{}{
+				"reason": "empty_prompt",
+				"source": "slash",
+			})
 			respondInteractionError(s, i.Interaction, "Prompt is required.")
 			return
 		}
+		emitServerEventWithSink(eventCtx, serverEventSink, ServerLogLevelInfo, "discord.request.accepted", "discord request accepted", map[string]interface{}{
+			"source":       "slash",
+			"prompt_chars": len(prompt),
+		})
 
 		err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
@@ -131,8 +165,12 @@ func runDiscordBot(ctx context.Context) error {
 			},
 		}
 
-		response, runErr := runDiscordPromptProgressive(ctx, manager, i.ChannelID, userID, prompt, sender.SendPart)
+		response, runErr := runDiscordPromptProgressive(eventCtx, serverEventSink, manager, i.ChannelID, userID, prompt, sender.SendPart)
 		if runErr != nil {
+			emitServerEventWithSink(eventCtx, serverEventSink, ServerLogLevelError, "discord.request.failed", "discord request failed", map[string]interface{}{
+				"source": "slash",
+				"error":  runErr.Error(),
+			})
 			errText := "Agent error: " + runErr.Error()
 			_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Content: &errText})
 			return
@@ -158,14 +196,39 @@ func runDiscordBot(ctx context.Context) error {
 		if !messageMentionsUser(m.Message, botUserID) {
 			return
 		}
+		sessionKey := discordConversationKey(m.ChannelID, m.Author.ID)
+		eventCtx := withServerLogMeta(ctx, serverLogMeta{
+			TraceID:    nextServerEventID("trc"),
+			TurnID:     nextServerEventID("turn"),
+			SessionKey: sessionKey,
+			Source:     "discord",
+			ChannelID:  m.ChannelID,
+			UserIDHash: hashIdentifier(m.Author.ID),
+			MessageID:  m.ID,
+		})
+		emitServerEventWithSink(eventCtx, serverEventSink, ServerLogLevelInfo, "discord.request.received", "discord mention received", map[string]interface{}{
+			"source": "mention",
+		})
 		if !isAllowedDiscordRequest(m.ChannelID, m.Author.ID, allowedChannelIDs, allowedUserIDs) {
+			emitServerEventWithSink(eventCtx, serverEventSink, ServerLogLevelWarn, "discord.request.rejected", "discord request rejected", map[string]interface{}{
+				"reason": "not_allowed",
+				"source": "mention",
+			})
 			return
 		}
 
 		prompt := promptFromMention(m.Content, botUserID)
 		if prompt == "" {
+			emitServerEventWithSink(eventCtx, serverEventSink, ServerLogLevelWarn, "discord.request.rejected", "discord request rejected", map[string]interface{}{
+				"reason": "empty_prompt",
+				"source": "mention",
+			})
 			return
 		}
+		emitServerEventWithSink(eventCtx, serverEventSink, ServerLogLevelInfo, "discord.request.accepted", "discord request accepted", map[string]interface{}{
+			"source":       "mention",
+			"prompt_chars": len(prompt),
+		})
 
 		_ = s.ChannelTyping(m.ChannelID)
 		stopTyping := startTypingHeartbeat(ctx, discordTypingInterval, func() {
@@ -182,8 +245,12 @@ func runDiscordBot(ctx context.Context) error {
 				return err
 			},
 		}
-		response, err := runDiscordPromptProgressive(ctx, manager, m.ChannelID, m.Author.ID, prompt, sender.SendPart)
+		response, err := runDiscordPromptProgressive(eventCtx, serverEventSink, manager, m.ChannelID, m.Author.ID, prompt, sender.SendPart)
 		if err != nil {
+			emitServerEventWithSink(eventCtx, serverEventSink, ServerLogLevelError, "discord.request.failed", "discord request failed", map[string]interface{}{
+				"source": "mention",
+				"error":  err.Error(),
+			})
 			_, _ = s.ChannelMessageSendReply(m.ChannelID, "Agent error: "+err.Error(), m.Reference())
 			return
 		}
@@ -298,26 +365,70 @@ func promptFromMention(content, botUserID string) string {
 }
 
 func runDiscordPrompt(ctx context.Context, manager *discordSessionManager, channelID, userID, prompt string) (string, error) {
-	return runDiscordPromptProgressive(ctx, manager, channelID, userID, prompt, nil)
+	return runDiscordPromptProgressive(ctx, nil, manager, channelID, userID, prompt, nil)
 }
 
 func runDiscordPromptProgressive(
 	ctx context.Context,
+	serverEventSink ServerEventSink,
 	manager *discordSessionManager,
 	channelID, userID, prompt string,
 	onResponsePart func(part string) error,
 ) (string, error) {
+	requestStartedAt := time.Now()
 	sessionKey := discordConversationKey(channelID, userID)
-	state := manager.get(sessionKey)
+	state, isNew := manager.get(sessionKey)
 
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	emitServerEventWithSink(ctx, serverEventSink, ServerLogLevelInfo, "discord.session.resolved", "session resolved", map[string]interface{}{
+		"is_new":           isNew,
+		"conversation_len": len(state.conversation),
+	})
 
-	updatedConversation, response, err := state.agent.HandleUserMessageProgressive(ctx, state.conversation, prompt, onResponsePart)
+	partIndex := 0
+	totalParts := 0
+	totalChunks := 0
+	totalChars := 0
+	wrappedOnResponsePart := func(part string) error {
+		chunks := splitForDiscord(part)
+		totalParts++
+		totalChunks += len(chunks)
+		totalChars += len(part)
+		if onResponsePart != nil {
+			if err := onResponsePart(part); err != nil {
+				emitServerEventWithSink(ctx, serverEventSink, ServerLogLevelError, "discord.response.failed", "response send failed", map[string]interface{}{
+					"duration_ms": time.Since(requestStartedAt).Milliseconds(),
+					"part_index":  partIndex,
+					"error":       err.Error(),
+				})
+				return err
+			}
+		}
+		emitServerEventWithSink(ctx, serverEventSink, ServerLogLevelInfo, "discord.response.part_sent", "response chunk sent", map[string]interface{}{
+			"part_index": partIndex,
+			"chars":      len(part),
+			"chunks":     len(chunks),
+		})
+		partIndex++
+		return nil
+	}
+
+	updatedConversation, response, err := state.agent.HandleUserMessageProgressive(ctx, state.conversation, prompt, wrappedOnResponsePart)
 	if err != nil {
+		emitServerEventWithSink(ctx, serverEventSink, ServerLogLevelError, "discord.response.failed", "response failed", map[string]interface{}{
+			"duration_ms": time.Since(requestStartedAt).Milliseconds(),
+			"error":       err.Error(),
+		})
 		return "", err
 	}
 	state.conversation = updatedConversation
+	emitServerEventWithSink(ctx, serverEventSink, ServerLogLevelInfo, "discord.response.completed", "response completed", map[string]interface{}{
+		"duration_ms":  time.Since(requestStartedAt).Milliseconds(),
+		"total_parts":  totalParts,
+		"total_chunks": totalChunks,
+		"total_chars":  totalChars,
+	})
 	return response, nil
 }
 
