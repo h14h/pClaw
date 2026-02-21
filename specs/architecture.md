@@ -32,7 +32,8 @@ agent/
 | Component | Location | Responsibility |
 |-----------|----------|----------------|
 | `Agent` | `main.go` | Maintains configuration and executes chat/tool loop |
-| `runInference` | `main.go` | Builds request payload, calls Vultr API, parses response |
+| `runInferenceStreamWithModel` | `main.go` | Primary-model streaming inference for CLI token output |
+| `runInferenceWithModel` | `main.go` | Non-streaming inference path and delegated reasoning calls |
 | `executeTool` | `main.go` | Dispatches model tool calls to registered Go functions |
 | `delegateReasoning` | `main.go` | Delegates hard reasoning sub-tasks to `gpt-oss-120b` |
 | Tool functions | `main.go` | Perform filesystem operations (`read_file`, `list_files`, `edit_file`) |
@@ -53,14 +54,15 @@ agent/
      │ calls
      ▼
 ┌──────────────────────────┐
-│ runInference()           │
+│ runInferenceStreamWith...│
 │ POST /chat/completions   │
 └────┬─────────────────────┘
-     │ ChatMessage
+     │ text deltas + ChatMessage
      ▼
 ┌──────────────────────────┐
-│ Assistant message        │
-│ - text and/or tool_calls │
+│ Assistant output         │
+│ - streamed text and/or   │
+│   final tool_calls       │
 └────┬─────────────────────┘
      │ if tool_calls
      ▼

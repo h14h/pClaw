@@ -129,6 +129,7 @@ type ChatCompletionRequest struct {
 	Model      string        `json:"model"`
 	Messages   []ChatMessage `json:"messages"`
 	MaxTokens  int           `json:"max_tokens,omitempty"`
+	Stream     bool          `json:"stream,omitempty"`
 	Tools      []ChatTool    `json:"tools,omitempty"`
 	ToolChoice string        `json:"tool_choice,omitempty"`
 }
@@ -143,6 +144,35 @@ type ChatCompletionResponse struct {
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error,omitempty"`
+}
+
+type ChatCompletionStreamResponse struct {
+	ID      string `json:"id"`
+	Model   string `json:"model"`
+	Choices []struct {
+		Index int `json:"index"`
+		Delta struct {
+			Role      string              `json:"role,omitempty"`
+			Content   interface{}         `json:"content,omitempty"`
+			Reasoning string              `json:"reasoning,omitempty"`
+			ToolCalls []ChatToolCallDelta `json:"tool_calls,omitempty"`
+		} `json:"delta"`
+		Message      ChatMessage `json:"message,omitempty"`
+		FinishReason string      `json:"finish_reason,omitempty"`
+	} `json:"choices"`
+	Error *struct {
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
+}
+
+type ChatToolCallDelta struct {
+	Index    int    `json:"index"`
+	ID       string `json:"id,omitempty"`
+	Type     string `json:"type,omitempty"`
+	Function struct {
+		Name      string `json:"name,omitempty"`
+		Arguments string `json:"arguments,omitempty"`
+	} `json:"function,omitempty"`
 }
 
 func main() {
@@ -248,13 +278,30 @@ func (a *Agent) Run(ctx context.Context) error {
 			conversation = append(conversation, userMessage)
 		}
 
-		message, err := a.runInference(ctx, conversation)
+		streamedAnyText := false
+		assistantHeaderPrinted := false
+		message, err := a.runInferenceStream(ctx, conversation, func(delta string) {
+			if delta == "" {
+				return
+			}
+			if !assistantHeaderPrinted {
+				fmt.Print("\u001b[93mAssistant\u001b[0m: ")
+				assistantHeaderPrinted = true
+			}
+			streamedAnyText = true
+			fmt.Print(delta)
+		})
 		if err != nil {
+			if streamedAnyText {
+				fmt.Print("\n[stream interrupted]\n")
+			}
 			return err
 		}
 		conversation = append(conversation, message)
 
-		if text, ok := message.Content.(string); ok && text != "" {
+		if streamedAnyText {
+			fmt.Println()
+		} else if text, ok := message.Content.(string); ok && text != "" {
 			fmt.Printf("\u001b[93mAssistant\u001b[0m: %s\n", text)
 		}
 
@@ -275,6 +322,14 @@ func (a *Agent) Run(ctx context.Context) error {
 
 func (a *Agent) runInference(ctx context.Context, conversation []ChatMessage) (ChatMessage, error) {
 	return a.runInferenceWithModel(ctx, a.primaryModel, conversation, a.tools, primaryMaxTokens)
+}
+
+func (a *Agent) runInferenceStream(
+	ctx context.Context,
+	conversation []ChatMessage,
+	onTextDelta func(string),
+) (ChatMessage, error) {
+	return a.runInferenceStreamWithModel(ctx, a.primaryModel, conversation, a.tools, primaryMaxTokens, onTextDelta)
 }
 
 func (a *Agent) runInferenceWithModel(
@@ -347,6 +402,198 @@ func (a *Agent) runInferenceWithModel(
 	}
 
 	return completion.Choices[0].Message, nil
+}
+
+func (a *Agent) runInferenceStreamWithModel(
+	ctx context.Context,
+	model Model,
+	conversation []ChatMessage,
+	tools []ToolDefinition,
+	maxTokens int,
+	onTextDelta func(string),
+) (ChatMessage, error) {
+	chatTools := []ChatTool{}
+	for _, tool := range tools {
+		chatTools = append(chatTools, ChatTool{
+			Type: "function",
+			Function: ChatToolFunction{
+				Name:        tool.Name,
+				Description: tool.Description,
+				Parameters:  tool.InputSchema,
+			},
+		})
+	}
+
+	requestBody := ChatCompletionRequest{
+		Model:     string(model),
+		MaxTokens: maxTokens,
+		Messages:  conversation,
+		Stream:    true,
+		Tools:     chatTools,
+	}
+	if len(chatTools) > 0 {
+		requestBody.ToolChoice = "auto"
+	}
+
+	body, err := json.Marshal(requestBody)
+	if err != nil {
+		return ChatMessage{}, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return ChatMessage{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+a.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return ChatMessage{}, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return ChatMessage{}, fmt.Errorf("vultr api error (%d): failed to read body: %w", resp.StatusCode, readErr)
+		}
+		return ChatMessage{}, fmt.Errorf("vultr api error (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	reader := bufio.NewReader(resp.Body)
+	message := ChatMessage{Role: "assistant"}
+	var contentBuilder strings.Builder
+	var reasoningBuilder strings.Builder
+	toolCallsByIndex := map[int]*ChatToolCall{}
+	toolCallOrder := []int{}
+	var eventLines []string
+
+	for {
+		line, readErr := reader.ReadString('\n')
+		line = strings.TrimRight(line, "\r\n")
+		if strings.HasPrefix(line, "data:") {
+			eventLines = append(eventLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		}
+
+		if line == "" && len(eventLines) > 0 {
+			if err := a.processStreamEvent(strings.Join(eventLines, "\n"), &message, &contentBuilder, &reasoningBuilder, toolCallsByIndex, &toolCallOrder, onTextDelta); err != nil {
+				return ChatMessage{}, err
+			}
+			eventLines = eventLines[:0]
+		}
+
+		if readErr != nil {
+			if readErr == io.EOF {
+				if len(eventLines) > 0 {
+					if err := a.processStreamEvent(strings.Join(eventLines, "\n"), &message, &contentBuilder, &reasoningBuilder, toolCallsByIndex, &toolCallOrder, onTextDelta); err != nil {
+						return ChatMessage{}, err
+					}
+				}
+				break
+			}
+			return ChatMessage{}, readErr
+		}
+	}
+
+	if contentBuilder.Len() > 0 {
+		message.Content = contentBuilder.String()
+	}
+	if reasoningBuilder.Len() > 0 {
+		message.Reasoning = reasoningBuilder.String()
+	}
+	for _, idx := range toolCallOrder {
+		if call := toolCallsByIndex[idx]; call != nil {
+			message.ToolCalls = append(message.ToolCalls, *call)
+		}
+	}
+
+	return message, nil
+}
+
+func (a *Agent) processStreamEvent(
+	payload string,
+	message *ChatMessage,
+	contentBuilder *strings.Builder,
+	reasoningBuilder *strings.Builder,
+	toolCallsByIndex map[int]*ChatToolCall,
+	toolCallOrder *[]int,
+	onTextDelta func(string),
+) error {
+	if strings.TrimSpace(payload) == "" || payload == "[DONE]" {
+		return nil
+	}
+
+	var chunk ChatCompletionStreamResponse
+	if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+		return err
+	}
+	if chunk.Error != nil && chunk.Error.Message != "" {
+		return fmt.Errorf("vultr api error: %s", chunk.Error.Message)
+	}
+
+	for _, choice := range chunk.Choices {
+		if choice.Message.Role != "" {
+			*message = choice.Message
+			continue
+		}
+		if choice.Delta.Role != "" {
+			message.Role = choice.Delta.Role
+		}
+
+		text := streamContentToString(choice.Delta.Content)
+		if text != "" {
+			contentBuilder.WriteString(text)
+			if onTextDelta != nil {
+				onTextDelta(text)
+			}
+		}
+		if choice.Delta.Reasoning != "" {
+			reasoningBuilder.WriteString(choice.Delta.Reasoning)
+		}
+		for _, deltaCall := range choice.Delta.ToolCalls {
+			call, exists := toolCallsByIndex[deltaCall.Index]
+			if !exists {
+				call = &ChatToolCall{Type: "function"}
+				toolCallsByIndex[deltaCall.Index] = call
+				*toolCallOrder = append(*toolCallOrder, deltaCall.Index)
+			}
+			if deltaCall.ID != "" {
+				call.ID = deltaCall.ID
+			}
+			if deltaCall.Type != "" {
+				call.Type = deltaCall.Type
+			}
+			if deltaCall.Function.Name != "" {
+				call.Function.Name += deltaCall.Function.Name
+			}
+			if deltaCall.Function.Arguments != "" {
+				call.Function.Arguments += deltaCall.Function.Arguments
+			}
+		}
+	}
+
+	return nil
+}
+
+func streamContentToString(v interface{}) string {
+	switch content := v.(type) {
+	case string:
+		return content
+	case []interface{}:
+		var b strings.Builder
+		for _, part := range content {
+			obj, ok := part.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			text, _ := obj["text"].(string)
+			b.WriteString(text)
+		}
+		return b.String()
+	default:
+		return ""
+	}
 }
 
 func (a *Agent) executeTool(ctx context.Context, toolCall ChatToolCall) ChatMessage {
