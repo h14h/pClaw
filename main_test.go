@@ -386,6 +386,85 @@ func TestRunInferenceUsesPrimaryModel(t *testing.T) {
 	}
 }
 
+func TestRunInferenceStream_UsesStreamAndEmitsText(t *testing.T) {
+	var seenModel string
+	var seenStream bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		var req ChatCompletionRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		seenModel = req.Model
+		seenStream = req.Stream
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\" world\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	agent := NewAgent(server.URL, "key", server.Client(), nil, nil)
+	var streamed strings.Builder
+	msg, err := agent.runInferenceStream(context.Background(), []ChatMessage{{Role: "user", Content: "hi"}}, func(delta string) {
+		streamed.WriteString(delta)
+	})
+	if err != nil {
+		t.Fatalf("runInferenceStream: %v", err)
+	}
+	if !seenStream {
+		t.Fatal("expected stream=true in request")
+	}
+	if seenModel != string(Instruct) {
+		t.Fatalf("expected model %q, got %q", Instruct, seenModel)
+	}
+	if streamed.String() != "Hello world" {
+		t.Fatalf("expected streamed text %q, got %q", "Hello world", streamed.String())
+	}
+	text, ok := msg.Content.(string)
+	if !ok {
+		t.Fatalf("expected string content, got %T", msg.Content)
+	}
+	if text != "Hello world" {
+		t.Fatalf("expected final content %q, got %q", "Hello world", text)
+	}
+}
+
+func TestRunInferenceStream_ReconstructsToolCalls(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"\"}}]}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"note.txt\\\"}\"}}]}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	agent := NewAgent(server.URL, "key", server.Client(), nil, nil)
+	msg, err := agent.runInferenceStream(context.Background(), []ChatMessage{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("runInferenceStream: %v", err)
+	}
+
+	if len(msg.ToolCalls) != 1 {
+		t.Fatalf("expected one tool call, got %d", len(msg.ToolCalls))
+	}
+	call := msg.ToolCalls[0]
+	if call.ID != "call_1" {
+		t.Fatalf("expected call id %q, got %q", "call_1", call.ID)
+	}
+	if call.Function.Name != "read_file" {
+		t.Fatalf("expected function name %q, got %q", "read_file", call.Function.Name)
+	}
+	if call.Function.Arguments != "{\"path\":\"note.txt\"}" {
+		t.Fatalf("unexpected function arguments: %q", call.Function.Arguments)
+	}
+}
+
 func TestDelegateReasoningUsesReasoningModel(t *testing.T) {
 	var seenModel string
 	var seenTools int

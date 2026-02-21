@@ -2,7 +2,8 @@
 
 ## Overview
 
-Inference is handled by `Agent.runInference()` via Vultr's chat completions endpoint:
+Inference is handled by `Agent.runInferenceWithModel()` and `Agent.runInferenceStreamWithModel()`
+via Vultr's chat completions endpoint:
 
 - Method: `POST`
 - Path: `/chat/completions`
@@ -24,6 +25,7 @@ Two models are used:
 | `model` | string | Fixed by runtime path (`kimi-k2-instruct` primary, `gpt-oss-120b` reasoning) |
 | `messages` | `[]ChatMessage` | Full conversation history |
 | `max_tokens` | int | Fixed to `1024` |
+| `stream` | bool | Set to `true` for primary CLI inference calls |
 | `tools` | `[]ChatTool` | Populated from registered agent tools |
 | `tool_choice` | string | Set to `"auto"` when tools are present |
 
@@ -34,7 +36,7 @@ Authentication and content headers:
 
 ## Response Handling
 
-`runInference()` enforces:
+`runInferenceWithModel()` (non-streaming path) enforces:
 
 1. HTTP status must be 2xx
 2. JSON must decode into `ChatCompletionResponse`
@@ -42,6 +44,13 @@ Authentication and content headers:
 4. At least one `choice` must exist
 
 On success, it returns `choices[0].message`.
+
+`runInferenceStreamWithModel()` (streaming path used by `Agent.Run()` for primary model calls):
+
+1. Sends `stream=true` and consumes `text/event-stream` `data:` events
+2. Emits content deltas to CLI as they arrive
+3. Reconstructs final `ChatMessage` content and tool calls from streamed deltas
+4. Returns API-level `error.message` when present in stream chunks
 
 For `gpt-oss-120b` reasoning calls, output can be returned as either:
 
@@ -54,7 +63,7 @@ For `gpt-oss-120b` reasoning calls, output can be returned as either:
 conversation + tools
         │
         ▼
-runInference()
+runInferenceStreamWithModel() (primary)
         │
         ▼
 assistant ChatMessage
@@ -67,7 +76,7 @@ assistant ChatMessage
 
 ## Error Surface
 
-`runInference()` returns errors for:
+`runInferenceWithModel()` and `runInferenceStreamWithModel()` return errors for:
 
 1. Request creation or marshal failures
 2. HTTP transport errors
@@ -87,5 +96,5 @@ These bubble to `Agent.Run()` and terminate the session.
 ## Operational Notes
 
 1. No retry/backoff is implemented in the inference client
-2. No streaming support; completion is full-response only
+2. Primary model output is streamed to CLI; delegated reasoning remains non-streaming
 3. Conversation grows unbounded for the process lifetime
