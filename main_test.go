@@ -298,42 +298,80 @@ func TestExecuteToolEmitsFailedEventForMissingTool(t *testing.T) {
 	}
 }
 
-func TestCLIToolEventSinkSummary(t *testing.T) {
+func TestCLIToolEventSinkDebugOutput(t *testing.T) {
 	buf := &bytes.Buffer{}
 	sink := &CLIToolEventSink{out: buf}
 
 	sink.HandleToolEvent(context.Background(), ToolEvent{
-		Type:     ToolEventStarted,
-		ToolName: "read_file",
-		ArgsRaw:  `{"path":"note.txt"}`,
+		Type:       ToolEventStarted,
+		ToolCallID: "call_1",
+		ToolName:   "read_file",
+		ArgsRaw:    `{"path":"note.txt"}`,
 		ArgsParsed: map[string]interface{}{
 			"path": "note.txt",
 		},
 	})
 	sink.HandleToolEvent(context.Background(), ToolEvent{
-		Type:      ToolEventSucceeded,
-		ToolName:  "list_files",
-		ResultRaw: `["a.txt","sub/"]`,
+		Type:       ToolEventSucceeded,
+		ToolCallID: "call_1",
+		ToolName:   "list_files",
+		ResultRaw:  `["a.txt","sub/"]`,
 		ArgsParsed: map[string]interface{}{
 			"path": ".",
 		},
 		Duration: time.Millisecond,
 	})
 	sink.HandleToolEvent(context.Background(), ToolEvent{
-		Type:     ToolEventFailed,
-		ToolName: "delegate_reasoning",
-		Err:      "timeout",
+		Type:       ToolEventFailed,
+		ToolCallID: "call_2",
+		ToolName:   "delegate_reasoning",
+		Err:        "timeout",
+		Duration:   5 * time.Millisecond,
 	})
 
 	out := buf.String()
 	for _, expected := range []string{
-		`Reading file: "note.txt"`,
-		`Listed "." (2 entries: 1 files, 1 dirs) in 1ms`,
-		`Reasoning failed: timeout`,
+		`tool_event type=tool_call.started call_id="call_1" tool="read_file" args={"path":"note.txt"}`,
+		`tool_event type=tool_call.succeeded call_id="call_1" tool="list_files" duration_ms=1 result_bytes=16`,
+		`tool_event type=tool_call.failed call_id="call_2" tool="delegate_reasoning" duration_ms=5 error="timeout"`,
 	} {
 		if !strings.Contains(out, expected) {
 			t.Fatalf("expected output to contain %q, got %q", expected, out)
 		}
+	}
+}
+
+func TestParseToolEventLogMode(t *testing.T) {
+	cases := []struct {
+		name  string
+		in    string
+		want  ToolEventLogMode
+		valid bool
+	}{
+		{name: "empty", in: "", want: ToolEventLogOff, valid: true},
+		{name: "off", in: "off", want: ToolEventLogOff, valid: true},
+		{name: "debug", in: "debug", want: ToolEventLogDebug, valid: true},
+		{name: "mixed case", in: "DeBuG", want: ToolEventLogDebug, valid: true},
+		{name: "invalid", in: "verbose", want: ToolEventLogOff, valid: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := parseToolEventLogMode(tc.in)
+			if ok != tc.valid {
+				t.Fatalf("expected valid=%v, got %v", tc.valid, ok)
+			}
+			if got != tc.want {
+				t.Fatalf("expected mode %q, got %q", tc.want, got)
+			}
+		})
+	}
+}
+
+func TestNewAgentDefaultsToNoToolEventSink(t *testing.T) {
+	agent := NewAgent("http://example.com", "key", nil, nil, nil)
+	if agent.toolEventSink != nil {
+		t.Fatalf("expected nil default toolEventSink, got %T", agent.toolEventSink)
 	}
 }
 
@@ -510,5 +548,61 @@ func TestDelegateReasoningLimit(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "limit") {
 		t.Fatalf("expected limit error message, got %v", err)
+	}
+}
+
+func TestHandleUserMessage_ToolLoopAndFinalText(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		var req ChatCompletionRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		hasToolResult := false
+		for _, msg := range req.Messages {
+			if msg.Role == "tool" {
+				hasToolResult = true
+				break
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if !hasToolResult {
+			_, _ = w.Write([]byte(`{"id":"x","model":"kimi-k2-instruct","choices":[{"index":0,"message":{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"echo","arguments":"{\"value\":\"ok\"}"}}]}}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"x","model":"kimi-k2-instruct","choices":[{"index":0,"message":{"role":"assistant","content":"done"}}]}`))
+	}))
+	defer server.Close()
+
+	echoTool := ToolDefinition{
+		Name:        "echo",
+		Description: "Echo input.",
+		InputSchema: map[string]interface{}{"type": "object"},
+		Function: func(input json.RawMessage) (string, error) {
+			var payload struct {
+				Value string `json:"value"`
+			}
+			if err := json.Unmarshal(input, &payload); err != nil {
+				return "", err
+			}
+			return payload.Value, nil
+		},
+	}
+
+	agent := NewAgent(server.URL, "key", server.Client(), nil, []ToolDefinition{echoTool})
+	updatedConversation, response, err := agent.HandleUserMessage(context.Background(), nil, "test")
+	if err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if response != "done" {
+		t.Fatalf("expected final response %q, got %q", "done", response)
+	}
+	if len(updatedConversation) != 4 {
+		t.Fatalf("expected 4 messages in conversation, got %d", len(updatedConversation))
 	}
 }

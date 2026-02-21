@@ -16,6 +16,12 @@ Precedence is:
 |----------|----------|---------|---------|
 | `VULTR_API_KEY` | Yes | none | Bearer token for Vultr Inference |
 | `VULTR_BASE_URL` | No | `https://api.vultrinference.com/v1` | API base URL |
+| `TOOL_EVENT_LOG` | No | `off` | CLI tool event logging mode (`off` or `debug`) |
+| `DISCORD_BOT_TOKEN` | No | none | Enables Discord mode and authenticates bot session |
+| `DISCORD_APPLICATION_ID` | No | inferred from bot user when possible | Application ID for slash command registration |
+| `DISCORD_GUILD_ID` | No | empty (global registration) | Guild scope for slash command registration |
+| `DISCORD_ALLOWED_CHANNEL_IDS` | No | empty | Comma-separated channel allowlist |
+| `DISCORD_ALLOWED_USER_IDS` | No | empty | Comma-separated user allowlist |
 
 Model selection is not environment-configurable.
 
@@ -32,10 +38,20 @@ Model selection is not environment-configurable.
 
 Initialization sequence:
 
+1. If `DISCORD_BOT_TOKEN` is set, start Discord runtime path
+2. Read `VULTR_API_KEY`; exit with status 1 when missing
+3. Read `VULTR_BASE_URL`; fallback to `defaultVultrBaseURL`
+4. Trim trailing slash from base URL with `strings.TrimRight(baseURL, "/")`
+5. Build runtime (`Agent` for CLI, session-scoped `Agent`s for Discord)
+6. Configure tool event logging from `TOOL_EVENT_LOG` (CLI mode)
+
+CLI initialization sequence:
+
 1. Read `VULTR_API_KEY`; exit with status 1 when missing
 2. Read `VULTR_BASE_URL`; fallback to `defaultVultrBaseURL`
 3. Trim trailing slash from base URL with `strings.TrimRight(baseURL, "/")`
 4. Create `Agent` via `NewAgent(...)`
+5. Configure tool event logging from `TOOL_EVENT_LOG`
 
 ## Behavioral Notes
 
@@ -43,6 +59,9 @@ Initialization sequence:
 2. Base URL normalization avoids `//chat/completions` construction issues
 3. Tool registry includes built-ins and `delegate_reasoning`
 4. HTTP client defaults to `http.DefaultClient` unless explicitly injected
+5. `TOOL_EVENT_LOG=off` keeps tool-event output silent while preserving spinner-based wait feedback
+6. `TOOL_EVENT_LOG=debug` emits structured `tool_event` lines to stderr
+7. Discord mode disables spinner output and routes responses through `/agent` interactions
 
 ## Integration Test Configuration
 
