@@ -606,3 +606,63 @@ func TestHandleUserMessage_ToolLoopAndFinalText(t *testing.T) {
 		t.Fatalf("expected 4 messages in conversation, got %d", len(updatedConversation))
 	}
 }
+
+func TestHandleUserMessageProgressive_EmitsPartsInOrder(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		var req ChatCompletionRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		hasToolResult := false
+		for _, msg := range req.Messages {
+			if msg.Role == "tool" {
+				hasToolResult = true
+				break
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if !hasToolResult {
+			_, _ = w.Write([]byte(`{"id":"x","model":"kimi-k2-instruct","choices":[{"index":0,"message":{"role":"assistant","content":"let me think for a bit","tool_calls":[{"id":"call_1","type":"function","function":{"name":"echo","arguments":"{\"value\":\"ok\"}"}}]}}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"x","model":"kimi-k2-instruct","choices":[{"index":0,"message":{"role":"assistant","content":"final answer"}}]}`))
+	}))
+	defer server.Close()
+
+	echoTool := ToolDefinition{
+		Name:        "echo",
+		Description: "Echo input.",
+		InputSchema: map[string]interface{}{"type": "object"},
+		Function: func(input json.RawMessage) (string, error) {
+			return "ok", nil
+		},
+	}
+
+	var gotParts []string
+	agent := NewAgent(server.URL, "key", server.Client(), nil, []ToolDefinition{echoTool})
+	updatedConversation, response, err := agent.HandleUserMessageProgressive(context.Background(), nil, "test", func(part string) error {
+		gotParts = append(gotParts, part)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("HandleUserMessageProgressive: %v", err)
+	}
+	if len(gotParts) != 2 {
+		t.Fatalf("expected 2 parts, got %d", len(gotParts))
+	}
+	if gotParts[0] != "let me think for a bit" || gotParts[1] != "final answer" {
+		t.Fatalf("unexpected parts: %#v", gotParts)
+	}
+	if response != "let me think for a bit\n\nfinal answer" {
+		t.Fatalf("unexpected final response: %q", response)
+	}
+	if len(updatedConversation) != 4 {
+		t.Fatalf("expected 4 messages in conversation, got %d", len(updatedConversation))
+	}
+}

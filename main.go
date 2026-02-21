@@ -843,6 +843,15 @@ func (a *Agent) setOutputWriter(w io.Writer) {
 }
 
 func (a *Agent) HandleUserMessage(ctx context.Context, conversation []ChatMessage, userInput string) ([]ChatMessage, string, error) {
+	return a.HandleUserMessageProgressive(ctx, conversation, userInput, nil)
+}
+
+func (a *Agent) HandleUserMessageProgressive(
+	ctx context.Context,
+	conversation []ChatMessage,
+	userInput string,
+	onResponsePart func(part string) error,
+) ([]ChatMessage, string, error) {
 	a.reasoningCallCount = 0
 	conversation = append(conversation, ChatMessage{
 		Role:    "user",
@@ -859,6 +868,11 @@ func (a *Agent) HandleUserMessage(ctx context.Context, conversation []ChatMessag
 
 		if text, ok := message.Content.(string); ok && strings.TrimSpace(text) != "" {
 			responseParts = append(responseParts, text)
+			if onResponsePart != nil {
+				if err := onResponsePart(text); err != nil {
+					return nil, "", err
+				}
+			}
 		}
 
 		if len(message.ToolCalls) == 0 {

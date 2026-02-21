@@ -31,6 +31,10 @@ The test suite has three layers:
 | `TestDelegateReasoningUsesReasoningModel` | Verifies delegated call uses `gpt-oss-120b` with no tools |
 | `TestDelegateReasoningLimit` | Enforces per-turn delegation limit |
 | `TestHandleUserMessage_ToolLoopAndFinalText` | Verifies transport-agnostic model/tool loop aggregation |
+| `TestHandleUserMessageProgressive_EmitsPartsInOrder` | Verifies progressive callback emits assistant text parts in order across tool loop iterations |
+| `TestProgressiveDiscordSender_UsesFirstThenNext` | Verifies first progressive Discord part uses first-send path and later parts use follow-up path |
+| `TestProgressiveDiscordSender_SplitsLongPart` | Verifies progressive sender applies Discord-safe chunking per emitted part |
+| `TestStartTypingHeartbeat_EmitsUntilStopped` | Verifies typing heartbeat keeps emitting until explicitly stopped |
 
 ## Integration Tests (E2E)
 

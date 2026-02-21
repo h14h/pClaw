@@ -80,7 +80,7 @@ runInferenceStreamWithModel() (primary)
         ▼
 assistant ChatMessage
         │
-        ├─ has text      -> print assistant text
+        ├─ has text      -> print assistant text (CLI) or emit response part callback (Discord progressive mode)
         └─ has tool_calls -> execute each tool and append tool result messages
                                 │
                                 └─ call runInference() again with expanded conversation
