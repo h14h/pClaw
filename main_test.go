@@ -499,6 +499,7 @@ func TestNewAgentDefaults(t *testing.T) {
 
 func TestRunInferenceUsesPrimaryModel(t *testing.T) {
 	var seenModel string
+	var seenMessages []ChatMessage
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -509,6 +510,7 @@ func TestRunInferenceUsesPrimaryModel(t *testing.T) {
 			t.Fatalf("decode request: %v", err)
 		}
 		seenModel = req.Model
+		seenMessages = req.Messages
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"x","model":"` + req.Model + `","choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}]}`))
 	}))
@@ -522,11 +524,18 @@ func TestRunInferenceUsesPrimaryModel(t *testing.T) {
 	if seenModel != string(Instruct) {
 		t.Fatalf("expected model %q, got %q", Instruct, seenModel)
 	}
+	if len(seenMessages) < 2 || seenMessages[0].Role != "system" {
+		t.Fatalf("expected leading system message, got %#v", seenMessages)
+	}
+	if seenMessages[1].Role != "user" {
+		t.Fatalf("expected user message after system, got %#v", seenMessages[1])
+	}
 }
 
 func TestRunInferenceStream_UsesStreamAndEmitsText(t *testing.T) {
 	var seenModel string
 	var seenStream bool
+	var seenMessages []ChatMessage
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -538,6 +547,7 @@ func TestRunInferenceStream_UsesStreamAndEmitsText(t *testing.T) {
 		}
 		seenModel = req.Model
 		seenStream = req.Stream
+		seenMessages = req.Messages
 
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n"))
@@ -560,6 +570,9 @@ func TestRunInferenceStream_UsesStreamAndEmitsText(t *testing.T) {
 	}
 	if seenModel != string(Instruct) {
 		t.Fatalf("expected model %q, got %q", Instruct, seenModel)
+	}
+	if len(seenMessages) < 2 || seenMessages[0].Role != "system" {
+		t.Fatalf("expected leading system message in stream request, got %#v", seenMessages)
 	}
 	if streamed.String() != "Hello world" {
 		t.Fatalf("expected streamed text %q, got %q", "Hello world", streamed.String())
@@ -606,6 +619,7 @@ func TestRunInferenceStream_ReconstructsToolCalls(t *testing.T) {
 func TestDelegateReasoningUsesReasoningModel(t *testing.T) {
 	var seenModel string
 	var seenTools int
+	var seenMessages []ChatMessage
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -617,6 +631,7 @@ func TestDelegateReasoningUsesReasoningModel(t *testing.T) {
 		}
 		seenModel = req.Model
 		seenTools = len(req.Tools)
+		seenMessages = req.Messages
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"x","model":"` + req.Model + `","choices":[{"index":0,"message":{"role":"assistant","content":"reasoned"}}]}`))
 	}))
@@ -635,6 +650,16 @@ func TestDelegateReasoningUsesReasoningModel(t *testing.T) {
 	}
 	if seenTools != 0 {
 		t.Fatalf("expected no tools in reasoning call, got %d", seenTools)
+	}
+	if len(seenMessages) < 2 || seenMessages[0].Role != "system" {
+		t.Fatalf("expected leading system message in reasoning call, got %#v", seenMessages)
+	}
+	systemPrompt, _ := seenMessages[0].Content.(string)
+	if strings.Contains(systemPrompt, "[Identity]") {
+		t.Fatalf("did not expect Identity section in minimal mode prompt: %s", systemPrompt)
+	}
+	if !strings.Contains(systemPrompt, "[Behavior]") {
+		t.Fatalf("expected Behavior section in minimal mode prompt: %s", systemPrompt)
 	}
 }
 

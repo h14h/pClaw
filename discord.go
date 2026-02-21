@@ -80,6 +80,7 @@ func runDiscordBot(ctx context.Context) error {
 	manager := newDiscordSessionManager(func() *Agent {
 		agent := NewAgent(baseURL, apiKey, http.DefaultClient, nil, nil)
 		agent.setOutputWriter(io.Discard)
+		agent.setPromptTransport("discord")
 		agent.serverEventSink = serverEventSink
 		return agent
 	})
