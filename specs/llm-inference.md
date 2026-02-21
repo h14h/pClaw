@@ -52,10 +52,22 @@ On success, it returns `choices[0].message`.
 3. Reconstructs final `ChatMessage` content and tool calls from streamed deltas
 4. Returns API-level `error.message` when present in stream chunks
 
+CLI wait-state behavior for primary streaming inference:
+
+1. A delayed single-line status indicator (`waiting for model...`) is shown while waiting for first model output
+2. Indicator delay is `150ms` to avoid flicker on fast responses
+3. Indicator clears immediately when first content delta arrives, request completes, or request errors
+
 For `gpt-oss-120b` reasoning calls, output can be returned as either:
 
 1. `message.content` string
 2. `message.reasoning` string (fallback when content is empty)
+
+CLI wait-state behavior for delegated reasoning:
+
+1. `delegate_reasoning` shows a delayed status indicator (`delegating reasoning...`) during the reasoning-model call
+2. Indicator delay is `150ms`
+3. Indicator clears on success or error before tool completion/failure event output
 
 ## Message/Tool Loop
 
@@ -97,4 +109,5 @@ These bubble to `Agent.Run()` and terminate the session.
 
 1. No retry/backoff is implemented in the inference client
 2. Primary model output is streamed to CLI; delegated reasoning remains non-streaming
-3. Conversation grows unbounded for the process lifetime
+3. Delayed status indicators are used for model wait states to provide visible progress feedback
+4. Conversation grows unbounded for the process lifetime

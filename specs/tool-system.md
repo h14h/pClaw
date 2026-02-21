@@ -60,8 +60,20 @@ If the tool name is unknown, the returned tool message content is `tool not foun
 2. `tool_call.succeeded`
 3. `tool_call.failed`
 
-The default `CLIToolEventSink` renders these events into concise human-readable lines.
+Tool events are emitted regardless of presentation mode.
+CLI rendering is controlled by `TOOL_EVENT_LOG`:
+
+1. `off` (default): no tool-event lines are printed
+2. `debug`: `CLIToolEventSink` prints structured `tool_event ...` lines to stderr
+
 This event layer decouples execution from presentation and is intended to support future streaming outputs.
+
+CLI wait-state behavior during tool execution:
+
+1. Non-`delegate_reasoning` tool calls show a delayed single-line status indicator (`running <tool_name>...`) while execution is in progress
+2. Indicator delay is `200ms` to avoid flicker for short operations while improving responsiveness
+3. Indicator is ephemeral and cleared before final `tool_call.succeeded` / `tool_call.failed` output
+4. `delegate_reasoning` uses its dedicated reasoning indicator instead of the generic tool-running indicator
 
 ## Built-in Tools
 

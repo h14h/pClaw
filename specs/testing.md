@@ -2,10 +2,11 @@
 
 ## Overview
 
-The test suite has two layers:
+The test suite has three layers:
 
 1. Unit tests (`main_test.go`) for tool behavior and dispatch logic
 2. Live integration tests (`main_integration_test.go`) for real Vultr inference flow
+3. Opt-in delegation policy harness (`main_delegation_harness_integration_test.go`) for delegation-rate behavior
 
 ## Unit Tests
 
@@ -18,10 +19,18 @@ The test suite has two layers:
 | `TestEditFileInvalidInput` | Rejects empty path and identical old/new strings |
 | `TestExecuteToolNotFound` | Returns tool role with `tool not found` content |
 | `TestExecuteToolArgs` | Passes JSON tool args and returns tool output |
+| `TestExecuteToolEmitsStartedAndSucceededEvents` | Verifies lifecycle events are emitted for successful tool calls |
+| `TestExecuteToolEmitsFailedEventForMissingTool` | Verifies failure event emission for unknown tools |
+| `TestCLIToolEventSinkDebugOutput` | Verifies structured `tool_event` debug rendering |
+| `TestParseToolEventLogMode` | Verifies `TOOL_EVENT_LOG` parsing/validation |
+| `TestNewAgentDefaultsToNoToolEventSink` | Confirms default runtime has no tool event sink |
 | `TestNewAgentDefaults` | Confirms fixed default models and reasoning tool registration |
 | `TestRunInferenceUsesPrimaryModel` | Verifies primary inference uses provider-compatible `kimi-k2-instruct` |
+| `TestRunInferenceStream_UsesStreamAndEmitsText` | Verifies streaming request path and text delta emission |
+| `TestRunInferenceStream_ReconstructsToolCalls` | Verifies tool-call reconstruction from streaming deltas |
 | `TestDelegateReasoningUsesReasoningModel` | Verifies delegated call uses `gpt-oss-120b` with no tools |
 | `TestDelegateReasoningLimit` | Enforces per-turn delegation limit |
+| `TestHandleUserMessage_ToolLoopAndFinalText` | Verifies transport-agnostic model/tool loop aggregation |
 
 ## Integration Tests (E2E)
 
