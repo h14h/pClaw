@@ -386,6 +386,7 @@ func TestParseServerEventLogMode(t *testing.T) {
 		{name: "empty", in: "", want: ServerEventLogOff, valid: true},
 		{name: "off", in: "off", want: ServerEventLogOff, valid: true},
 		{name: "line", in: "line", want: ServerEventLogLine, valid: true},
+		{name: "verbose", in: "verbose", want: ServerEventLogVerbose, valid: true},
 		{name: "mixed case", in: "LiNe", want: ServerEventLogLine, valid: true},
 		{name: "invalid", in: "json", want: ServerEventLogOff, valid: false},
 	}
@@ -400,6 +401,18 @@ func TestParseServerEventLogMode(t *testing.T) {
 				t.Fatalf("expected mode %q, got %q", tc.want, got)
 			}
 		})
+	}
+}
+
+func TestServerEventSinkIncludesVerboseContent(t *testing.T) {
+	if serverEventSinkIncludesVerboseContent(nil) {
+		t.Fatal("nil sink should not be verbose")
+	}
+	if serverEventSinkIncludesVerboseContent(&LineServerEventSink{out: io.Discard}) {
+		t.Fatal("line sink should not be verbose")
+	}
+	if !serverEventSinkIncludesVerboseContent(&LineServerEventSink{out: io.Discard, verboseContent: true}) {
+		t.Fatal("verbose line sink should be verbose")
 	}
 }
 

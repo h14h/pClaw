@@ -47,7 +47,7 @@ Environment variables:
 - `VULTR_API_KEY` (required): API token for Vultr Inference
 - `VULTR_BASE_URL` (optional): API base URL (default: `https://api.vultrinference.com/v1`)
 - `TOOL_EVENT_LOG` (optional): CLI tool lifecycle logging (`off` or `debug`)
-- `SERVER_EVENT_LOG` (optional): line-based server lifecycle logging (`off` or `line`)
+- `SERVER_EVENT_LOG` (optional): server lifecycle logging (`off`, `line`, or `verbose`; `verbose` includes full response/chunk content fields)
 - `DISCORD_BOT_TOKEN` (optional): enables Discord mode when set
 - `DISCORD_APPLICATION_ID` (optional): Discord application ID for slash command registration
 - `DISCORD_GUILD_ID` (optional): registers slash command to one guild for faster propagation
@@ -124,6 +124,7 @@ go run .
 - Streams assistant turn text progressively to Discord as each assistant message is produced in the tool loop
 - Keeps Discord typing indicators alive while progressive responses are still being generated
 - Splits long responses into multiple Discord messages under platform size limits
+- Honors optional `<<MSG_SPLIT>>` markers for logical boundaries and uses balanced fallback splitting to avoid tiny trailing messages
 - Requires bot intents for message events; enable `Message Content Intent` in the Discord Developer Portal
 
 ## Testing

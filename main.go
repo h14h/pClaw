@@ -29,7 +29,7 @@ const (
 	defaultReasoningLimit = 2
 	reasoningCallTimeout  = 45 * time.Second
 	reasoningMaxTokens    = 1024
-	primaryMaxTokens      = 1024
+	primaryMaxTokens      = 4096
 	statusDelay           = 150 * time.Millisecond
 	statusFrameInterval   = 100 * time.Millisecond
 	toolStatusDelay       = 200 * time.Millisecond
@@ -75,8 +75,9 @@ type Agent struct {
 type ServerEventLogMode string
 
 const (
-	ServerEventLogOff  ServerEventLogMode = "off"
-	ServerEventLogLine ServerEventLogMode = "line"
+	ServerEventLogOff     ServerEventLogMode = "off"
+	ServerEventLogLine    ServerEventLogMode = "line"
+	ServerEventLogVerbose ServerEventLogMode = "verbose"
 )
 
 type ServerLogLevel string
@@ -108,8 +109,9 @@ type ServerEventSink interface {
 }
 
 type LineServerEventSink struct {
-	out io.Writer
-	mu  sync.Mutex
+	out            io.Writer
+	mu             sync.Mutex
+	verboseContent bool
 }
 
 func (s *LineServerEventSink) HandleServerEvent(_ context.Context, event ServerEvent) {
@@ -532,6 +534,8 @@ func newServerEventSinkFromEnv(out io.Writer) ServerEventSink {
 	switch mode {
 	case ServerEventLogLine:
 		return &LineServerEventSink{out: out}
+	case ServerEventLogVerbose:
+		return &LineServerEventSink{out: out, verboseContent: true}
 	default:
 		return nil
 	}
@@ -556,11 +560,16 @@ func parseServerEventLogMode(raw string) (ServerEventLogMode, bool) {
 		return ServerEventLogOff, true
 	}
 	switch ServerEventLogMode(value) {
-	case ServerEventLogOff, ServerEventLogLine:
+	case ServerEventLogOff, ServerEventLogLine, ServerEventLogVerbose:
 		return ServerEventLogMode(value), true
 	default:
 		return ServerEventLogOff, false
 	}
+}
+
+func serverEventSinkIncludesVerboseContent(sink ServerEventSink) bool {
+	lineSink, ok := sink.(*LineServerEventSink)
+	return ok && lineSink.verboseContent
 }
 
 func (a *Agent) buildTools(extraTools []ToolDefinition) []ToolDefinition {

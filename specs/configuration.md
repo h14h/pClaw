@@ -17,7 +17,7 @@ Precedence is:
 | `VULTR_API_KEY` | Yes | none | Bearer token for Vultr Inference |
 | `VULTR_BASE_URL` | No | `https://api.vultrinference.com/v1` | API base URL |
 | `TOOL_EVENT_LOG` | No | `off` | CLI tool event logging mode (`off` or `debug`) |
-| `SERVER_EVENT_LOG` | No | `off` | Server event logging mode (`off` or `line`) |
+| `SERVER_EVENT_LOG` | No | `off` | Server event logging mode (`off`, `line`, or `verbose`) |
 | `DISCORD_BOT_TOKEN` | No | none | Enables Discord mode and authenticates bot session |
 | `DISCORD_APPLICATION_ID` | No | inferred from bot user when possible | Application ID for slash command registration |
 | `DISCORD_GUILD_ID` | No | empty (global registration) | Guild scope for slash command registration |
@@ -70,6 +70,7 @@ CLI initialization sequence:
 5. `TOOL_EVENT_LOG=off` keeps tool-event output silent while preserving spinner-based wait feedback
 6. `TOOL_EVENT_LOG=debug` emits structured `tool_event` lines to stderr
 7. `SERVER_EVENT_LOG=line` emits single-line `key=value` server events to stdout for Discord request, session, turn, inference, tool, and response lifecycle tracking
+8. `SERVER_EVENT_LOG=verbose` includes full response content fields (per-part, per-chunk, and final response) for deep troubleshooting
 8. Discord mode disables spinner output, routes responses through slash commands (`/agent`) and mention-based chat, emits assistant text progressively as it is produced, and refreshes typing indicators while work is ongoing
 
 ## Integration Test Configuration
