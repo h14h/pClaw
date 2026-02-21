@@ -61,7 +61,7 @@ CLI initialization sequence:
 4. HTTP client defaults to `http.DefaultClient` unless explicitly injected
 5. `TOOL_EVENT_LOG=off` keeps tool-event output silent while preserving spinner-based wait feedback
 6. `TOOL_EVENT_LOG=debug` emits structured `tool_event` lines to stderr
-7. Discord mode disables spinner output and routes responses through `/agent` interactions
+7. Discord mode disables spinner output and routes responses through slash commands (`/agent`) and mention-based chat
 
 ## Integration Test Configuration
 

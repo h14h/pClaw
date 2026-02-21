@@ -20,4 +20,4 @@ Design documentation for this project, modeled after the Loom specs layout.
 
 | Spec | Code | Purpose |
 |------|------|---------|
-| [testing.md](./testing.md) | [main_test.go](../main_test.go), [main_integration_test.go](../main_integration_test.go) | Unit and integration testing strategy |
+| [testing.md](./testing.md) | [main_test.go](../main_test.go), [main_integration_test.go](../main_integration_test.go), [main_delegation_harness_integration_test.go](../main_delegation_harness_integration_test.go) | Unit and integration testing strategy |

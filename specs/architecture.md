@@ -8,7 +8,7 @@ It combines:
 1. Interactive chat loop for user input/output
 2. LLM inference requests to Vultr chat completions
 3. Tool-calling for local filesystem actions
-4. Optional Discord slash-command transport
+4. Optional Discord transport (slash commands and mention chat)
 
 The architecture is intentionally compact: orchestration, inference client, message types, and tool
 implementations are all in `main.go`.
@@ -18,8 +18,10 @@ implementations are all in `main.go`.
 ```text
 agent/
 ├── main.go                    # Agent runtime, inference client, tool definitions
+├── discord.go                 # Discord runtime, command/mention handlers, session manager
 ├── main_test.go               # Unit tests for tools + dispatch
 ├── main_integration_test.go   # Live Vultr integration tests
+├── main_delegation_harness_integration_test.go # Delegation policy harness (opt-in E2E)
 └── specs/
     ├── architecture.md
     ├── tool-system.md
@@ -105,7 +107,7 @@ Tool lifecycle events (`tool_call.started|succeeded|failed`) remain available in
 
 ## Design Constraints
 
-1. Single-process, single-threaded control loop
+1. Single-process runtime; CLI chat loop is single-threaded while auxiliary goroutines handle status rendering and Discord event handlers
 2. No conversation persistence outside process memory
 3. No workspace sandboxing; tools operate on provided paths
 4. Tool and inference schemas are static per process start
