@@ -46,6 +46,8 @@ Environment variables:
 
 - `VULTR_API_KEY` (required): API token for Vultr Inference
 - `VULTR_BASE_URL` (optional): API base URL (default: `https://api.vultrinference.com/v1`)
+- `TOOL_EVENT_LOG` (optional): CLI tool lifecycle logging (`off` or `debug`)
+- `SERVER_EVENT_LOG` (optional): line-based server lifecycle logging (`off` or `line`)
 - `DISCORD_BOT_TOKEN` (optional): enables Discord mode when set
 - `DISCORD_APPLICATION_ID` (optional): Discord application ID for slash command registration
 - `DISCORD_GUILD_ID` (optional): registers slash command to one guild for faster propagation

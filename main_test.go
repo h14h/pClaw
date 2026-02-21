@@ -23,6 +23,14 @@ func (s *capturedToolEventSink) HandleToolEvent(_ context.Context, event ToolEve
 	s.events = append(s.events, event)
 }
 
+type capturedServerEventSink struct {
+	events []ServerEvent
+}
+
+func (s *capturedServerEventSink) HandleServerEvent(_ context.Context, event ServerEvent) {
+	s.events = append(s.events, event)
+}
+
 func TestReadFile(t *testing.T) {
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "note.txt")
@@ -365,6 +373,98 @@ func TestParseToolEventLogMode(t *testing.T) {
 				t.Fatalf("expected mode %q, got %q", tc.want, got)
 			}
 		})
+	}
+}
+
+func TestParseServerEventLogMode(t *testing.T) {
+	cases := []struct {
+		name  string
+		in    string
+		want  ServerEventLogMode
+		valid bool
+	}{
+		{name: "empty", in: "", want: ServerEventLogOff, valid: true},
+		{name: "off", in: "off", want: ServerEventLogOff, valid: true},
+		{name: "line", in: "line", want: ServerEventLogLine, valid: true},
+		{name: "mixed case", in: "LiNe", want: ServerEventLogLine, valid: true},
+		{name: "invalid", in: "json", want: ServerEventLogOff, valid: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := parseServerEventLogMode(tc.in)
+			if ok != tc.valid {
+				t.Fatalf("expected valid=%v, got %v", tc.valid, ok)
+			}
+			if got != tc.want {
+				t.Fatalf("expected mode %q, got %q", tc.want, got)
+			}
+		})
+	}
+}
+
+func TestLineServerEventSinkFormatsReadableLine(t *testing.T) {
+	buf := &bytes.Buffer{}
+	sink := &LineServerEventSink{out: buf}
+	sink.HandleServerEvent(context.Background(), ServerEvent{
+		TS:         time.Date(2026, 2, 21, 20, 22, 10, 104000000, time.UTC),
+		Level:      ServerLogLevelInfo,
+		Event:      "tool_call.succeeded",
+		Message:    "tool execution succeeded",
+		TraceID:    "trc_1",
+		TurnID:     "turn_2",
+		SessionKey: "c:u",
+		Source:     "discord",
+		ChannelID:  "c",
+		UserIDHash: "sha256:abcd",
+		Fields: map[string]interface{}{
+			"duration_ms": 34,
+			"tool":        "read_file",
+		},
+	})
+
+	out := strings.TrimSpace(buf.String())
+	for _, expected := range []string{
+		"2026-02-21T20:22:10.104Z INFO",
+		"event=tool_call.succeeded",
+		"trace=trc_1",
+		"turn=turn_2",
+		"session=c:u",
+		"msg=\"tool execution succeeded\"",
+		"source=discord",
+		"channel=c",
+		"user=sha256:abcd",
+		"duration_ms=34",
+		"tool=read_file",
+	} {
+		if !strings.Contains(out, expected) {
+			t.Fatalf("expected %q in output, got %q", expected, out)
+		}
+	}
+}
+
+func TestEmitToolEventAlsoEmitsServerEvent(t *testing.T) {
+	agent := NewAgent("http://example.com", "key", nil, nil, nil)
+	serverSink := &capturedServerEventSink{}
+	agent.serverEventSink = serverSink
+
+	agent.emitToolEvent(context.Background(), ToolEvent{
+		Type:       ToolEventSucceeded,
+		ToolCallID: "call_1",
+		ToolName:   "read_file",
+		ResultRaw:  "abc",
+		Duration:   5 * time.Millisecond,
+	})
+
+	if len(serverSink.events) != 1 {
+		t.Fatalf("expected one server event, got %d", len(serverSink.events))
+	}
+	ev := serverSink.events[0]
+	if ev.Event != string(ToolEventSucceeded) {
+		t.Fatalf("expected event %q, got %q", ToolEventSucceeded, ev.Event)
+	}
+	if ev.Fields["tool"] != "read_file" {
+		t.Fatalf("expected tool field read_file, got %v", ev.Fields["tool"])
 	}
 }
 
