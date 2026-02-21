@@ -61,6 +61,8 @@ type Agent struct {
 	apiKey             string
 	primaryModel       Model
 	reasoningModel     Model
+	promptBuilder      PromptBuilder
+	promptTransport    string
 	httpClient         *http.Client
 	getUserMessage     func() (string, bool)
 	tools              []ToolDefinition
@@ -489,13 +491,15 @@ func NewAgent(
 	}
 
 	agent := &Agent{
-		baseURL:        baseURL,
-		apiKey:         apiKey,
-		primaryModel:   Instruct,
-		reasoningModel: Reasoning,
-		httpClient:     httpClient,
-		getUserMessage: getUserMessage,
-		outputWriter:   os.Stdout,
+		baseURL:         baseURL,
+		apiKey:          apiKey,
+		primaryModel:    Instruct,
+		reasoningModel:  Reasoning,
+		promptBuilder:   NewSectionedPromptBuilder(promptConfigFromEnv()),
+		promptTransport: "cli",
+		httpClient:      httpClient,
+		getUserMessage:  getUserMessage,
+		outputWriter:    os.Stdout,
 	}
 	agent.tools = agent.buildTools(tools)
 	return agent
@@ -660,7 +664,7 @@ func (a *Agent) Run(ctx context.Context) error {
 }
 
 func (a *Agent) runInference(ctx context.Context, conversation []ChatMessage) (ChatMessage, error) {
-	return a.runInferenceWithModel(ctx, a.primaryModel, conversation, a.tools, primaryMaxTokens)
+	return a.runInferenceWithModel(ctx, a.primaryModel, conversation, a.tools, primaryMaxTokens, PromptModeFull)
 }
 
 func (a *Agent) runInferenceStream(
@@ -668,7 +672,23 @@ func (a *Agent) runInferenceStream(
 	conversation []ChatMessage,
 	onTextDelta func(string),
 ) (ChatMessage, error) {
-	return a.runInferenceStreamWithModel(ctx, a.primaryModel, conversation, a.tools, primaryMaxTokens, onTextDelta)
+	return a.runInferenceStreamWithModel(ctx, a.primaryModel, conversation, a.tools, primaryMaxTokens, onTextDelta, PromptModeFull)
+}
+
+func (a *Agent) withSystemPrompt(conversation []ChatMessage, tools []ToolDefinition, mode PromptMode) []ChatMessage {
+	if a.promptBuilder == nil {
+		return conversation
+	}
+	toolNames := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		toolNames = append(toolNames, tool.Name)
+	}
+	prompt := a.promptBuilder.Build(PromptBuildContext{
+		Mode:      mode,
+		Transport: a.promptTransport,
+		ToolNames: toolNames,
+	})
+	return prependSystemPrompt(conversation, prompt)
 }
 
 func (a *Agent) runInferenceWithModel(
@@ -677,12 +697,14 @@ func (a *Agent) runInferenceWithModel(
 	conversation []ChatMessage,
 	tools []ToolDefinition,
 	maxTokens int,
+	mode PromptMode,
 ) (ChatMessage, error) {
+	promptedConversation := a.withSystemPrompt(conversation, tools, mode)
 	startedAt := time.Now()
 	a.emitServerEvent(ctx, ServerLogLevelInfo, "llm.request.started", "inference request started", map[string]interface{}{
 		"model":    string(model),
 		"stream":   false,
-		"messages": len(conversation),
+		"messages": len(promptedConversation),
 		"tools":    len(tools),
 	})
 
@@ -701,7 +723,7 @@ func (a *Agent) runInferenceWithModel(
 	requestBody := ChatCompletionRequest{
 		Model:     string(model),
 		MaxTokens: maxTokens,
-		Messages:  conversation,
+		Messages:  promptedConversation,
 		Tools:     chatTools,
 	}
 	if len(chatTools) > 0 {
@@ -818,12 +840,14 @@ func (a *Agent) runInferenceStreamWithModel(
 	tools []ToolDefinition,
 	maxTokens int,
 	onTextDelta func(string),
+	mode PromptMode,
 ) (ChatMessage, error) {
+	promptedConversation := a.withSystemPrompt(conversation, tools, mode)
 	startedAt := time.Now()
 	a.emitServerEvent(ctx, ServerLogLevelInfo, "llm.request.started", "inference request started", map[string]interface{}{
 		"model":    string(model),
 		"stream":   true,
-		"messages": len(conversation),
+		"messages": len(promptedConversation),
 		"tools":    len(tools),
 	})
 
@@ -842,7 +866,7 @@ func (a *Agent) runInferenceStreamWithModel(
 	requestBody := ChatCompletionRequest{
 		Model:     string(model),
 		MaxTokens: maxTokens,
-		Messages:  conversation,
+		Messages:  promptedConversation,
 		Stream:    true,
 		Tools:     chatTools,
 	}
@@ -1266,6 +1290,10 @@ func (a *Agent) setOutputWriter(w io.Writer) {
 	a.outputWriter = w
 }
 
+func (a *Agent) setPromptTransport(transport string) {
+	a.promptTransport = strings.TrimSpace(transport)
+}
+
 func (a *Agent) HandleUserMessage(ctx context.Context, conversation []ChatMessage, userInput string) ([]ChatMessage, string, error) {
 	return a.HandleUserMessageProgressive(ctx, conversation, userInput, nil)
 }
@@ -1513,9 +1541,7 @@ func (a *Agent) delegateReasoning(input json.RawMessage) (string, error) {
 	a.reasoningCallCount++
 
 	reasoningPrompt := strings.TrimSpace(strings.Join([]string{
-		"You are an auxiliary reasoning model.",
 		"Analyze the question and context and return a concise, actionable answer.",
-		"Do not emit tool calls.",
 		"Question:",
 		payload.Question,
 		"Context:",
@@ -1530,7 +1556,7 @@ func (a *Agent) delegateReasoning(input json.RawMessage) (string, error) {
 	msg, err := a.runInferenceWithModel(timeoutCtx, a.reasoningModel, []ChatMessage{{
 		Role:    "user",
 		Content: reasoningPrompt,
-	}}, nil, reasoningMaxTokens)
+	}}, nil, reasoningMaxTokens, PromptModeMinimal)
 	spinner.Stop()
 	if err != nil {
 		return "", err

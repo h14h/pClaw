@@ -23,6 +23,11 @@ Precedence is:
 | `DISCORD_GUILD_ID` | No | empty (global registration) | Guild scope for slash command registration |
 | `DISCORD_ALLOWED_CHANNEL_IDS` | No | empty | Comma-separated channel allowlist |
 | `DISCORD_ALLOWED_USER_IDS` | No | empty | Comma-separated user allowlist |
+| `AGENT_NAME` | No | `Codex` | Prompt identity name used in system prompt `Identity` section |
+| `AGENT_ROLE_SUMMARY` | No | built-in default | Prompt role summary used in system prompt `Identity` section |
+| `AGENT_PERSONA` | No | built-in default | Inline persona text for system prompt composition |
+| `AGENT_PERSONA_FILE` | No | empty | Path to persona text file; when readable and non-empty, overrides `AGENT_PERSONA` |
+| `AGENT_PROMPT_MAX_PERSONA_CHARS` | No | `600` | Character cap applied to persona text embedded in system prompt |
 
 Model selection is not environment-configurable.
 

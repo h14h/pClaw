@@ -10,6 +10,7 @@ via Vultr's chat completions endpoint:
 - Base URL: `VULTR_BASE_URL` (default `https://api.vultrinference.com/v1`)
 
 The request always includes conversation history and may include tool definitions.
+Before each request, runtime prepends one generated `role=system` message.
 
 Two models are used:
 
@@ -68,6 +69,14 @@ CLI wait-state behavior for delegated reasoning:
 1. `delegate_reasoning` shows a delayed status indicator (`delegating reasoning...`) during the reasoning-model call
 2. Indicator delay is `150ms`
 3. Indicator clears on success or error before tool completion/failure event output
+
+## System Prompt Injection
+
+System prompt assembly is handled by the prompt builder (`prompting.go`) and prepended before every request.
+
+1. Primary model calls use `full` prompt mode (identity, behavior, tooling, safety, runtime sections)
+2. Delegated reasoning calls use `minimal` prompt mode (behavior, safety, runtime sections)
+3. Injection ensures a single leading `system` message for each API request
 
 ## Message/Tool Loop
 

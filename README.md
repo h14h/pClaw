@@ -53,6 +53,11 @@ Environment variables:
 - `DISCORD_GUILD_ID` (optional): registers slash command to one guild for faster propagation
 - `DISCORD_ALLOWED_CHANNEL_IDS` (optional): comma-separated channel allowlist
 - `DISCORD_ALLOWED_USER_IDS` (optional): comma-separated user allowlist
+- `AGENT_NAME` (optional): overrides prompt identity name
+- `AGENT_ROLE_SUMMARY` (optional): overrides prompt role summary sentence
+- `AGENT_PERSONA` (optional): inline persona text for the system prompt
+- `AGENT_PERSONA_FILE` (optional): file path for persona text (takes precedence over `AGENT_PERSONA`)
+- `AGENT_PROMPT_MAX_PERSONA_CHARS` (optional): max persona characters included in prompt (default: `600`)
 
 Model behavior is fixed:
 
@@ -90,6 +95,16 @@ Optional base URL override:
 
 ```bash
 export VULTR_BASE_URL="https://api.vultrinference.com/v1"
+go run .
+```
+
+Prompt config override example:
+
+```bash
+export AGENT_NAME="OpenClaw-Inspired Operator"
+export AGENT_ROLE_SUMMARY="A decisive software engineering operator that prioritizes correctness and momentum."
+export AGENT_PERSONA_FILE="./persona.txt"
+export AGENT_PROMPT_MAX_PERSONA_CHARS="900"
 go run .
 ```
 
