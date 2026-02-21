@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -17,6 +18,7 @@ const (
 	discordPromptOptionName   = "prompt"
 	discordMessageLimit       = 2000
 	discordMessageChunkTarget = 1900
+	discordTypingInterval     = 8 * time.Second
 )
 
 type discordSessionState struct {
@@ -113,22 +115,35 @@ func runDiscordBot(ctx context.Context) error {
 		if err != nil {
 			return
 		}
+		stopTyping := startTypingHeartbeat(ctx, discordTypingInterval, func() {
+			_ = s.ChannelTyping(i.ChannelID)
+		})
+		defer stopTyping()
 
-		response, runErr := runDiscordPrompt(ctx, manager, i.ChannelID, userID, prompt)
+		sender := &progressiveDiscordSender{
+			sendFirst: func(content string) error {
+				_, err := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Content: &content})
+				return err
+			},
+			sendNext: func(content string) error {
+				_, err := s.FollowupMessageCreate(i.Interaction, false, &discordgo.WebhookParams{Content: content})
+				return err
+			},
+		}
+
+		response, runErr := runDiscordPromptProgressive(ctx, manager, i.ChannelID, userID, prompt, sender.SendPart)
 		if runErr != nil {
 			errText := "Agent error: " + runErr.Error()
 			_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Content: &errText})
 			return
 		}
 
-		chunks := splitForDiscord(response)
-		if len(chunks) == 0 {
-			chunks = []string{"(empty response)"}
-		}
-
-		_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Content: &chunks[0]})
-		for _, chunk := range chunks[1:] {
-			_, _ = s.FollowupMessageCreate(i.Interaction, false, &discordgo.WebhookParams{Content: chunk})
+		if !sender.sent {
+			fallback := response
+			if strings.TrimSpace(fallback) == "" {
+				fallback = "(empty response)"
+			}
+			_ = sender.SendPart(fallback)
 		}
 	})
 
@@ -153,22 +168,32 @@ func runDiscordBot(ctx context.Context) error {
 		}
 
 		_ = s.ChannelTyping(m.ChannelID)
-		response, err := runDiscordPrompt(ctx, manager, m.ChannelID, m.Author.ID, prompt)
+		stopTyping := startTypingHeartbeat(ctx, discordTypingInterval, func() {
+			_ = s.ChannelTyping(m.ChannelID)
+		})
+		defer stopTyping()
+		sender := &progressiveDiscordSender{
+			sendFirst: func(content string) error {
+				_, err := s.ChannelMessageSendReply(m.ChannelID, content, m.Reference())
+				return err
+			},
+			sendNext: func(content string) error {
+				_, err := s.ChannelMessageSend(m.ChannelID, content)
+				return err
+			},
+		}
+		response, err := runDiscordPromptProgressive(ctx, manager, m.ChannelID, m.Author.ID, prompt, sender.SendPart)
 		if err != nil {
 			_, _ = s.ChannelMessageSendReply(m.ChannelID, "Agent error: "+err.Error(), m.Reference())
 			return
 		}
 
-		chunks := splitForDiscord(response)
-		if len(chunks) == 0 {
-			chunks = []string{"(empty response)"}
-		}
-		for idx, chunk := range chunks {
-			if idx == 0 {
-				_, _ = s.ChannelMessageSendReply(m.ChannelID, chunk, m.Reference())
-				continue
+		if !sender.sent {
+			fallback := response
+			if strings.TrimSpace(fallback) == "" {
+				fallback = "(empty response)"
 			}
-			_, _ = s.ChannelMessageSend(m.ChannelID, chunk)
+			_ = sender.SendPart(fallback)
 		}
 	})
 
@@ -273,18 +298,49 @@ func promptFromMention(content, botUserID string) string {
 }
 
 func runDiscordPrompt(ctx context.Context, manager *discordSessionManager, channelID, userID, prompt string) (string, error) {
+	return runDiscordPromptProgressive(ctx, manager, channelID, userID, prompt, nil)
+}
+
+func runDiscordPromptProgressive(
+	ctx context.Context,
+	manager *discordSessionManager,
+	channelID, userID, prompt string,
+	onResponsePart func(part string) error,
+) (string, error) {
 	sessionKey := discordConversationKey(channelID, userID)
 	state := manager.get(sessionKey)
 
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
-	updatedConversation, response, err := state.agent.HandleUserMessage(ctx, state.conversation, prompt)
+	updatedConversation, response, err := state.agent.HandleUserMessageProgressive(ctx, state.conversation, prompt, onResponsePart)
 	if err != nil {
 		return "", err
 	}
 	state.conversation = updatedConversation
 	return response, nil
+}
+
+type progressiveDiscordSender struct {
+	sendFirst func(string) error
+	sendNext  func(string) error
+	sent      bool
+}
+
+func (s *progressiveDiscordSender) SendPart(part string) error {
+	for _, chunk := range splitForDiscord(part) {
+		if !s.sent {
+			if err := s.sendFirst(chunk); err != nil {
+				return err
+			}
+			s.sent = true
+			continue
+		}
+		if err := s.sendNext(chunk); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func splitForDiscord(text string) []string {
@@ -327,4 +383,34 @@ func respondInteractionError(s *discordgo.Session, interaction *discordgo.Intera
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{Content: message},
 	})
+}
+
+func startTypingHeartbeat(ctx context.Context, interval time.Duration, send func()) func() {
+	if send == nil {
+		return func() {}
+	}
+	if interval <= 0 {
+		interval = discordTypingInterval
+	}
+
+	heartbeatCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-heartbeatCtx.Done():
+				return
+			case <-ticker.C:
+				send()
+			}
+		}
+	}()
+
+	return func() {
+		cancel()
+		<-done
+	}
 }

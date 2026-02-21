@@ -41,6 +41,7 @@ agent/
 | `executeTool` | `main.go` | Dispatches model tool calls to registered Go functions |
 | `delegateReasoning` | `main.go` | Delegates hard reasoning sub-tasks to `gpt-oss-120b` |
 | `HandleUserMessage` | `main.go` | Transport-agnostic single-turn model/tool loop for external adapters |
+| `HandleUserMessageProgressive` | `main.go` | Transport-agnostic loop variant that emits assistant text parts incrementally via callback |
 | Discord runtime | `discord.go` | Registers `/agent`, handles interactions, and manages per-session conversations |
 | Tool functions | `main.go` | Perform filesystem operations (`read_file`, `list_files`, `edit_file`) |
 | Startup wiring (`main`) | `main.go` | Reads env config, builds `Agent`, starts interactive session |
@@ -114,6 +115,7 @@ Tool lifecycle events (`tool_call.started|succeeded|failed`) remain available in
 5. Primary model is fixed to `kimi-k2-instruct`; reasoning model is fixed to `gpt-oss-120b`
 
 In Discord mode, each `(channel_id, user_id)` conversation key is isolated with a dedicated in-memory agent/session state and mutex.
+Discord uses progressive part callbacks to emit multiple messages within one logical turn as assistant/tool iterations produce text.
 
 ## Extension Points
 

@@ -104,6 +104,8 @@ go run .
 - Registers `/agent` slash command with a required `prompt` argument
 - Supports mention-based chat in channels: `@your-bot <prompt>`
 - Maintains conversation context per `(channel_id, user_id)` session key
+- Streams assistant turn text progressively to Discord as each assistant message is produced in the tool loop
+- Keeps Discord typing indicators alive while progressive responses are still being generated
 - Splits long responses into multiple Discord messages under platform size limits
 - Requires bot intents for message events; enable `Message Content Intent` in the Discord Developer Portal
 
