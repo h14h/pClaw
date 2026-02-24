@@ -4,7 +4,7 @@
 
 The test suite has three layers:
 
-1. Unit tests (`main_test.go`) for tool behavior and dispatch logic
+1. Unit tests (`main_test.go`, `discord_test.go`, `memory_test.go`, `prompting_test.go`) for tool behavior, dispatch logic, Discord transport, memory subsystem, and prompt builder
 2. Live integration tests (`main_integration_test.go`) for real Vultr inference flow
 3. Opt-in delegation policy harness (`main_delegation_harness_integration_test.go`) for delegation-rate behavior
 

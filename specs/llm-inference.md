@@ -25,7 +25,7 @@ Two models are used:
 |-------|------|-------|
 | `model` | string | Fixed by runtime path (`kimi-k2-instruct` primary, `gpt-oss-120b` reasoning) |
 | `messages` | `[]ChatMessage` | Full conversation history |
-| `max_tokens` | int | Fixed to `1024` |
+| `max_tokens` | int | `4096` for primary model, `1024` for reasoning model |
 | `stream` | bool | Set to `true` for primary CLI inference calls |
 | `tools` | `[]ChatTool` | Populated from registered agent tools |
 | `tool_choice` | string | Set to `"auto"` when tools are present |
