@@ -614,7 +614,7 @@ func (a *Agent) reasoningToolDefinition() ToolDefinition {
 }
 
 func (a *Agent) Run(ctx context.Context) error {
-	conversation := []ChatMessage{}
+	cs := NewConversationState()
 
 	fmt.Println("Chat with Vultr Inference (use 'ctrl-c' to quit)")
 
@@ -627,19 +627,19 @@ func (a *Agent) Run(ctx context.Context) error {
 			if !ok {
 				break
 			}
-			userMessage := ChatMessage{
+			cs.Append(ChatMessage{
 				Role:    "user",
 				Content: userInput,
-			}
-			conversation = append(conversation, userMessage)
+			})
 		}
 
 		spinner := NewStatusIndicator(a.cliOutputWriter(), "waiting for model...")
 		spinner.Start()
 
+		inferCtx := withConversationSummary(ctx, cs.Summary)
 		streamedAnyText := false
 		assistantHeaderPrinted := false
-		message, err := a.runInferenceStream(ctx, conversation, func(delta string) {
+		message, err := a.runInferenceStream(inferCtx, cs.Messages, func(delta string) {
 			if delta == "" {
 				return
 			}
@@ -658,7 +658,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			}
 			return err
 		}
-		conversation = append(conversation, message)
+		cs.Append(message)
 
 		if streamedAnyText {
 			fmt.Println()
@@ -668,12 +668,13 @@ func (a *Agent) Run(ctx context.Context) error {
 
 		if len(message.ToolCalls) == 0 {
 			readUserInput = true
+			a.compactConversation(ctx, cs)
 			continue
 		}
 
 		for _, toolCall := range message.ToolCalls {
 			toolResult := a.executeTool(ctx, toolCall)
-			conversation = append(conversation, toolResult)
+			cs.Append(toolResult)
 		}
 		readUserInput = false
 	}
@@ -719,6 +720,10 @@ func (a *Agent) withSystemPrompt(ctx context.Context, conversation []ChatMessage
 	}
 	if recalled := a.recallMemories(ctx, query); recalled != "" {
 		prompt = prompt + "\n\n" + recalled
+	}
+
+	if summary := conversationSummaryFromContext(ctx); summary != "" {
+		prompt += "\n\n" + formatSection("Conversation Summary", summary)
 	}
 
 	return prependSystemPrompt(conversation, prompt)
@@ -1327,23 +1332,26 @@ func (a *Agent) setPromptTransport(transport string) {
 	a.promptTransport = strings.TrimSpace(transport)
 }
 
-func (a *Agent) HandleUserMessage(ctx context.Context, conversation []ChatMessage, userInput string) ([]ChatMessage, string, error) {
-	return a.HandleUserMessageProgressive(ctx, conversation, userInput, nil)
+func (a *Agent) HandleUserMessage(ctx context.Context, cs *ConversationState, userInput string) (*ConversationState, string, error) {
+	return a.HandleUserMessageProgressive(ctx, cs, userInput, nil)
 }
 
 func (a *Agent) HandleUserMessageProgressive(
 	ctx context.Context,
-	conversation []ChatMessage,
+	cs *ConversationState,
 	userInput string,
 	onResponsePart func(part string) error,
-) ([]ChatMessage, string, error) {
+) (*ConversationState, string, error) {
+	if cs == nil {
+		cs = NewConversationState()
+	}
 	turnStartedAt := time.Now()
 	a.emitServerEvent(ctx, ServerLogLevelInfo, "agent.turn.started", "turn started", map[string]interface{}{
-		"conversation_len_before": len(conversation),
+		"conversation_len_before": len(cs.Messages),
 	})
 
 	a.reasoningCallCount = 0
-	conversation = append(conversation, ChatMessage{
+	cs.Append(ChatMessage{
 		Role:    "user",
 		Content: userInput,
 	})
@@ -1351,7 +1359,8 @@ func (a *Agent) HandleUserMessageProgressive(
 	var responseParts []string
 	toolCallsTotal := 0
 	for {
-		message, err := a.runInference(ctx, conversation)
+		inferCtx := withConversationSummary(ctx, cs.Summary)
+		message, err := a.runInference(inferCtx, cs.Messages)
 		if err != nil {
 			a.emitServerEvent(ctx, ServerLogLevelError, "agent.turn.failed", "turn failed", map[string]interface{}{
 				"duration_ms": time.Since(turnStartedAt).Milliseconds(),
@@ -1359,7 +1368,7 @@ func (a *Agent) HandleUserMessageProgressive(
 			})
 			return nil, "", err
 		}
-		conversation = append(conversation, message)
+		cs.Append(message)
 
 		if text, ok := message.Content.(string); ok && strings.TrimSpace(text) != "" {
 			responseParts = append(responseParts, text)
@@ -1381,9 +1390,11 @@ func (a *Agent) HandleUserMessageProgressive(
 		for _, toolCall := range message.ToolCalls {
 			toolCallsTotal++
 			toolResult := a.executeTool(ctx, toolCall)
-			conversation = append(conversation, toolResult)
+			cs.Append(toolResult)
 		}
 	}
+
+	a.compactConversation(ctx, cs)
 
 	finalResponse := strings.TrimSpace(strings.Join(responseParts, "\n\n"))
 	if finalResponse == "" {
@@ -1393,10 +1404,10 @@ func (a *Agent) HandleUserMessageProgressive(
 		"duration_ms":      time.Since(turnStartedAt).Milliseconds(),
 		"tool_calls_total": toolCallsTotal,
 		"response_chars":   len(finalResponse),
-		"conversation_len": len(conversation),
+		"conversation_len": len(cs.Messages),
 	})
 
-	return conversation, finalResponse, nil
+	return cs, finalResponse, nil
 }
 
 func waitForShutdownSignal(ctx context.Context) {

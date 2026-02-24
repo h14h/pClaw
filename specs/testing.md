@@ -4,7 +4,7 @@
 
 The test suite has three layers:
 
-1. Unit tests (`main_test.go`, `discord_test.go`, `memory_test.go`, `prompting_test.go`) for tool behavior, dispatch logic, Discord transport, memory subsystem, and prompt builder
+1. Unit tests (`main_test.go`, `discord_test.go`, `memory_test.go`, `prompting_test.go`, `compaction_test.go`) for tool behavior, dispatch logic, Discord transport, memory subsystem, prompt builder, and conversation compaction
 2. Live integration tests (`main_integration_test.go`) for real Vultr inference flow
 3. Opt-in delegation policy harness (`main_delegation_harness_integration_test.go`) for delegation-rate behavior
 
@@ -37,6 +37,19 @@ The test suite has three layers:
 | `TestSplitForDiscord_HonorsSplitMarker` | Verifies explicit `<<MSG_SPLIT>>` marker boundaries are preferred when splitting |
 | `TestSplitForDiscord_BalancedAvoidsTinyTrailingChunk` | Verifies fallback chunking produces roughly even Discord message sizes |
 | `TestStartTypingHeartbeat_EmitsUntilStopped` | Verifies typing heartbeat keeps emitting until explicitly stopped |
+| `TestMessageContentSize` | Verifies byte-size calculation for string, `[]interface{}`, and nil content |
+| `TestConversationStateAppend` | Verifies cumulative `SizeBytes` tracking as messages are appended |
+| `TestNeedsCompaction` | Verifies threshold check (strictly greater than) |
+| `TestFindCompactionSplitIndex` | Verifies safe split location: keepCount boundary, user-role walk-back, no-safe-split cases |
+| `TestSerializeMessagesForSummary` | Verifies text serialization: user/assistant, tool-call annotations, tool result placeholder, empty skipping |
+| `TestSummarizeConversation_Success` | Mocks HTTP, verifies request body structure and returned summary |
+| `TestSummarizeConversation_WithPriorSummary` | Verifies `PRIOR SUMMARY:` / `NEW CONVERSATION CONTENT:` merged user message |
+| `TestSummarizeConversation_Error` | HTTP 500 returns error |
+| `TestCompactConversation_Performs` | Above threshold: summary set, messages truncated, size recalculated |
+| `TestCompactConversation_BelowThreshold` | No HTTP requests, state unchanged |
+| `TestCompactConversation_FailureNonFatal` | HTTP error → returns nil, conversation unchanged |
+| `TestCompactConversation_TurnBoundary` | Walk-back ensures kept messages start at a user boundary (no orphaned tool pairs) |
+| `TestConversationSummaryContext` | Round-trip context value; `withSystemPrompt` includes `[Conversation Summary]` when set; omits when not set |
 
 ## Integration Tests (E2E)
 

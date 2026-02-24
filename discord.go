@@ -22,9 +22,9 @@ const (
 )
 
 type discordSessionState struct {
-	mu           sync.Mutex
-	agent        *Agent
-	conversation []ChatMessage
+	mu    sync.Mutex
+	agent *Agent
+	cs    *ConversationState
 }
 
 type discordSessionManager struct {
@@ -49,7 +49,7 @@ func (m *discordSessionManager) get(sessionKey string) (*discordSessionState, bo
 		return state, false
 	}
 
-	state = &discordSessionState{agent: m.newAgent()}
+	state = &discordSessionState{agent: m.newAgent(), cs: NewConversationState()}
 	m.sessions[sessionKey] = state
 	return state, true
 }
@@ -423,7 +423,7 @@ func runDiscordPromptProgressive(
 	defer state.mu.Unlock()
 	emitServerEventWithSink(ctx, serverEventSink, ServerLogLevelInfo, "discord.session.resolved", "session resolved", map[string]interface{}{
 		"is_new":           isNew,
-		"conversation_len": len(state.conversation),
+		"conversation_len": len(state.cs.Messages),
 	})
 
 	partIndex := 0
@@ -473,7 +473,7 @@ func runDiscordPromptProgressive(
 		return nil
 	}
 
-	updatedConversation, response, err := state.agent.HandleUserMessageProgressive(ctx, state.conversation, prompt, wrappedOnResponsePart)
+	updatedCS, response, err := state.agent.HandleUserMessageProgressive(ctx, state.cs, prompt, wrappedOnResponsePart)
 	if err != nil {
 		emitServerEventWithSink(ctx, serverEventSink, ServerLogLevelError, "discord.response.failed", "response failed", map[string]interface{}{
 			"duration_ms": time.Since(requestStartedAt).Milliseconds(),
@@ -481,7 +481,7 @@ func runDiscordPromptProgressive(
 		})
 		return "", err
 	}
-	state.conversation = updatedConversation
+	state.cs = updatedCS
 	completedFields := map[string]interface{}{
 		"duration_ms":  time.Since(requestStartedAt).Milliseconds(),
 		"total_parts":  totalParts,

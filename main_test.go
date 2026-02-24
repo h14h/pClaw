@@ -733,15 +733,15 @@ func TestHandleUserMessage_ToolLoopAndFinalText(t *testing.T) {
 	}
 
 	agent := NewAgent(server.URL, "key", server.Client(), nil, []ToolDefinition{echoTool})
-	updatedConversation, response, err := agent.HandleUserMessage(context.Background(), nil, "test")
+	updatedCS, response, err := agent.HandleUserMessage(context.Background(), NewConversationState(), "test")
 	if err != nil {
 		t.Fatalf("HandleUserMessage: %v", err)
 	}
 	if response != "done" {
 		t.Fatalf("expected final response %q, got %q", "done", response)
 	}
-	if len(updatedConversation) != 4 {
-		t.Fatalf("expected 4 messages in conversation, got %d", len(updatedConversation))
+	if len(updatedCS.Messages) != 4 {
+		t.Fatalf("expected 4 messages in conversation, got %d", len(updatedCS.Messages))
 	}
 }
 
@@ -784,7 +784,7 @@ func TestHandleUserMessageProgressive_EmitsPartsInOrder(t *testing.T) {
 
 	var gotParts []string
 	agent := NewAgent(server.URL, "key", server.Client(), nil, []ToolDefinition{echoTool})
-	updatedConversation, response, err := agent.HandleUserMessageProgressive(context.Background(), nil, "test", func(part string) error {
+	updatedCS, response, err := agent.HandleUserMessageProgressive(context.Background(), NewConversationState(), "test", func(part string) error {
 		gotParts = append(gotParts, part)
 		return nil
 	})
@@ -800,7 +800,7 @@ func TestHandleUserMessageProgressive_EmitsPartsInOrder(t *testing.T) {
 	if response != "let me think for a bit\n\nfinal answer" {
 		t.Fatalf("unexpected final response: %q", response)
 	}
-	if len(updatedConversation) != 4 {
-		t.Fatalf("expected 4 messages in conversation, got %d", len(updatedConversation))
+	if len(updatedCS.Messages) != 4 {
+		t.Fatalf("expected 4 messages in conversation, got %d", len(updatedCS.Messages))
 	}
 }
