@@ -19,10 +19,10 @@ implementations are all in `main.go`.
 agent/
 ├── main.go                    # Agent runtime, inference client, tool definitions
 ├── discord.go                 # Discord runtime, command/mention handlers, session manager
-├── memory.go                  # MemoryClient, remember tool, auto-recall, configureMemory
+├── memory.go                  # MemoryClient, record tool, auto-recall, configureMemory
 ├── prompting.go               # System prompt builder (SectionedPromptBuilder)
 ├── main_test.go               # Unit tests for tools + dispatch
-├── memory_test.go             # Unit tests for MemoryClient, remember tool, and auto-recall
+├── memory_test.go             # Unit tests for MemoryClient, record tool, and auto-recall
 ├── main_integration_test.go   # Live Vultr integration tests
 ├── main_delegation_harness_integration_test.go # Delegation policy harness (opt-in E2E)
 └── specs/
@@ -52,7 +52,7 @@ agent/
 | `configureMemory` | `memory.go` | Reads `MEMORY_ENABLED`/`MEMORY_COLLECTION_NAME`, creates `MemoryClient`, bootstraps collection, sets `agent.memoryClient` |
 | `recallMemories` | `memory.go` | Performs semantic search, summarizes results via `summarizeMemories`, and formats as `[Memory]` system-prompt section |
 | `summarizeMemories` | `memory.go` | Direct HTTP POST to chat completions (bypasses `runInferenceWithModel`) to produce compact summary of memory items |
-| `rememberFunction` | `memory.go` | Tool handler for `remember`; stores user-provided content via `MemoryClient.AddItem` |
+| `recordFunction` | `memory.go` | Tool handler for `record`; stores user-provided content via `MemoryClient.AddItem` |
 | `recallFunction` | `memory.go` | Tool handler for `recall`; searches memory and returns full verbatim results |
 
 ## End-to-End Flow
@@ -131,7 +131,7 @@ configureMemory(ctx, agent)
   │     GET /vector_store → find by name
   │     POST /vector_store if missing → cache returned ID
   ├─ agent.memoryClient = client
-  └─ agent.tools = agent.buildTools(nil)  // adds "remember" and "recall" tools
+  └─ agent.tools = agent.buildTools(nil)  // adds "record" and "recall" tools
 ```
 
 Failures at any step are logged to stderr and the agent starts without memory.
@@ -167,7 +167,7 @@ Set `MEMORY_ENABLED=false` (or `0` / `no`) to disable the subsystem entirely:
 
 1. `configureMemory` returns immediately without creating a client
 2. `agent.memoryClient` remains nil
-3. `remember` and `recall` tools are not registered
+3. `record` and `recall` tools are not registered
 4. Auto-recall injects no `[Memory]` section
 
 ## Design Constraints

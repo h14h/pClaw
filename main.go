@@ -585,7 +585,7 @@ func (a *Agent) buildTools(extraTools []ToolDefinition) []ToolDefinition {
 	}
 	tools = append(tools, a.reasoningToolDefinition())
 	if a.memoryClient != nil {
-		tools = append(tools, a.rememberToolDefinition())
+		tools = append(tools, a.recordToolDefinition())
 		tools = append(tools, a.recallToolDefinition())
 	}
 	for _, extra := range extraTools {
@@ -1435,8 +1435,8 @@ func summarizeToolStart(event ToolEvent) string {
 		return fmt.Sprintf("Editing file: %s", quotedPath(event.ArgsParsed["path"], ""))
 	case "delegate_reasoning":
 		return "Thinking..."
-	case "remember":
-		return "Storing memory..."
+	case "record":
+		return "Recording memory..."
 	case "recall":
 		return "Recalling memories..."
 	default:
@@ -1461,8 +1461,8 @@ func summarizeToolSuccess(event ToolEvent) string {
 		return fmt.Sprintf("Edited %s (%d replacements) in %s", pathText, intStat(event.Stats, "replacement_count"), formatDuration(event.Duration))
 	case "delegate_reasoning":
 		return fmt.Sprintf("Finished thinking (%d chars) in %s", len(event.ResultRaw), formatDuration(event.Duration))
-	case "remember":
-		return fmt.Sprintf("Stored memory in %s", formatDuration(event.Duration))
+	case "record":
+		return fmt.Sprintf("Recorded memory in %s", formatDuration(event.Duration))
 	case "recall":
 		return fmt.Sprintf("Recalled memories (%d bytes) in %s", len(event.ResultRaw), formatDuration(event.Duration))
 	default:
@@ -1480,8 +1480,8 @@ func summarizeToolFailure(event ToolEvent) string {
 		return fmt.Sprintf("Failed to edit %s: %s in %s", quotedPath(event.ArgsParsed["path"], ""), event.Err, formatDuration(event.Duration))
 	case "delegate_reasoning":
 		return fmt.Sprintf("Reasoning failed: %s in %s", event.Err, formatDuration(event.Duration))
-	case "remember":
-		return fmt.Sprintf("Failed to store memory: %s in %s", event.Err, formatDuration(event.Duration))
+	case "record":
+		return fmt.Sprintf("Failed to record memory: %s in %s", event.Err, formatDuration(event.Duration))
 	case "recall":
 		return fmt.Sprintf("Failed to recall memories: %s in %s", event.Err, formatDuration(event.Duration))
 	default:

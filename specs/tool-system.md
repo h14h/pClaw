@@ -31,7 +31,7 @@ At startup, `Agent` registers up to six built-ins:
 2. `list_files`
 3. `edit_file`
 4. `delegate_reasoning`
-5. `remember` (only when `Agent.memoryClient != nil`)
+5. `record` (only when `Agent.memoryClient != nil`)
 6. `recall` (only when `Agent.memoryClient != nil`)
 
 These are stored in `Agent.tools`.
@@ -171,7 +171,7 @@ Error conditions:
 2. Read/write filesystem errors
 3. Directory creation errors during file creation path
 
-## `remember`
+## `record`
 
 Stores an entity-associated fact in the long-term semantic memory collection via the Vultr vector store API.
 Only registered when `Agent.memoryClient` is non-nil (i.e., when memory is enabled and the collection has been bootstrapped).
@@ -240,6 +240,7 @@ If reflection or conversion fails, it falls back to a minimal `{ "type": "object
 ## Auto-Recall
 
 When `Agent.memoryClient` is non-nil, every call to `withSystemPrompt` automatically performs a semantic search against the memory store and injects an LLM-generated summary of matching memories into the system prompt.
+
 
 ### Behavior
 
