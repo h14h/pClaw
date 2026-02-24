@@ -1,5 +1,13 @@
 # Agent Project Conventions
 
+## Project Context
+
+Information about project structure and architecture is available in the "specs/" directory.
+
+Treat "specs/README.md" as an index or "table of contents" for the rest of the specs.
+
+Ensure you always have "specs/README.md" in your context to help you know when it's appropriate to consult additional spec files.
+
 ## Plan Tracking
 
 Implementation plans follow this lifecycle:
