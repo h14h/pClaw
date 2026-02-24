@@ -523,9 +523,9 @@ func TestNewMemoryClient_StoresFields(t *testing.T) {
 	}
 }
 
-// --- Remember tool tests ---
+// --- Record tool tests ---
 
-func TestRememberTool_StoresContent(t *testing.T) {
+func TestRecordTool_StoresContent(t *testing.T) {
 	srv, h := newMockServer([]mockResponse{
 		{status: 201, body: `{"item":{"id":"item-1","content":"discord user @henry is a Cubs fan"}}`},
 	})
@@ -538,13 +538,13 @@ func TestRememberTool_StoresContent(t *testing.T) {
 
 	agent := &Agent{memoryClient: client}
 
-	input, err := json.Marshal(RememberInput{Subject: "@henry", SubjectType: "discord user", Descriptor: "is a Cubs fan"})
+	input, err := json.Marshal(RecordInput{Subject: "@henry", SubjectType: "discord user", Descriptor: "is a Cubs fan"})
 	if err != nil {
 		t.Fatalf("marshal input: %v", err)
 	}
-	result, err := agent.rememberFunction(json.RawMessage(input))
+	result, err := agent.recordFunction(json.RawMessage(input))
 	if err != nil {
-		t.Fatalf("rememberFunction returned error: %v", err)
+		t.Fatalf("recordFunction returned error: %v", err)
 	}
 	if result != "Memory stored." {
 		t.Errorf("result = %q, want %q", result, "Memory stored.")
@@ -568,7 +568,7 @@ func TestRememberTool_StoresContent(t *testing.T) {
 	}
 }
 
-func TestRememberTool_EmptySubjectReturnsError(t *testing.T) {
+func TestRecordTool_EmptySubjectReturnsError(t *testing.T) {
 	srv, _ := newMockServer(nil)
 	defer srv.Close()
 
@@ -579,14 +579,14 @@ func TestRememberTool_EmptySubjectReturnsError(t *testing.T) {
 
 	agent := &Agent{memoryClient: client}
 
-	input, _ := json.Marshal(RememberInput{Subject: "", SubjectType: "person", Descriptor: "likes Go"})
-	_, err := agent.rememberFunction(json.RawMessage(input))
+	input, _ := json.Marshal(RecordInput{Subject: "", SubjectType: "person", Descriptor: "likes Go"})
+	_, err := agent.recordFunction(json.RawMessage(input))
 	if err == nil {
 		t.Fatal("expected error for empty subject, got nil")
 	}
 }
 
-func TestRememberTool_EmptySubjectTypeReturnsError(t *testing.T) {
+func TestRecordTool_EmptySubjectTypeReturnsError(t *testing.T) {
 	srv, _ := newMockServer(nil)
 	defer srv.Close()
 
@@ -597,14 +597,14 @@ func TestRememberTool_EmptySubjectTypeReturnsError(t *testing.T) {
 
 	agent := &Agent{memoryClient: client}
 
-	input, _ := json.Marshal(RememberInput{Subject: "@henry", SubjectType: "   ", Descriptor: "likes Go"})
-	_, err := agent.rememberFunction(json.RawMessage(input))
+	input, _ := json.Marshal(RecordInput{Subject: "@henry", SubjectType: "   ", Descriptor: "likes Go"})
+	_, err := agent.recordFunction(json.RawMessage(input))
 	if err == nil {
 		t.Fatal("expected error for whitespace-only subject_type, got nil")
 	}
 }
 
-func TestRememberTool_PropagatesAddItemError(t *testing.T) {
+func TestRecordTool_PropagatesAddItemError(t *testing.T) {
 	srv, _ := newMockServer([]mockResponse{
 		{status: 500, body: `{"error":"internal"}`},
 	})
@@ -617,14 +617,14 @@ func TestRememberTool_PropagatesAddItemError(t *testing.T) {
 
 	agent := &Agent{memoryClient: client}
 
-	input, _ := json.Marshal(RememberInput{Subject: "@henry", SubjectType: "discord user", Descriptor: "likes Go"})
-	_, err := agent.rememberFunction(json.RawMessage(input))
+	input, _ := json.Marshal(RecordInput{Subject: "@henry", SubjectType: "discord user", Descriptor: "likes Go"})
+	_, err := agent.recordFunction(json.RawMessage(input))
 	if err == nil {
 		t.Fatal("expected error when AddItem fails, got nil")
 	}
 }
 
-func TestRememberTool_EmptyDescriptorReturnsError(t *testing.T) {
+func TestRecordTool_EmptyDescriptorReturnsError(t *testing.T) {
 	srv, _ := newMockServer(nil)
 	defer srv.Close()
 
@@ -635,8 +635,8 @@ func TestRememberTool_EmptyDescriptorReturnsError(t *testing.T) {
 
 	agent := &Agent{memoryClient: client}
 
-	input, _ := json.Marshal(RememberInput{Subject: "@henry", SubjectType: "discord user", Descriptor: ""})
-	_, err := agent.rememberFunction(json.RawMessage(input))
+	input, _ := json.Marshal(RecordInput{Subject: "@henry", SubjectType: "discord user", Descriptor: ""})
+	_, err := agent.recordFunction(json.RawMessage(input))
 	if err == nil {
 		t.Fatal("expected error for empty descriptor, got nil")
 	}
@@ -759,7 +759,7 @@ func TestAutoRecall_GracefulOnError(t *testing.T) {
 
 // --- buildTools tests ---
 
-func TestBuildTools_IncludesRememberWhenMemoryEnabled(t *testing.T) {
+func TestBuildTools_IncludesRecordWhenMemoryEnabled(t *testing.T) {
 	srv, _ := newMockServer(nil)
 	defer srv.Close()
 
@@ -771,31 +771,31 @@ func TestBuildTools_IncludesRememberWhenMemoryEnabled(t *testing.T) {
 	agent := &Agent{memoryClient: client}
 	tools := agent.buildTools(nil)
 
-	foundRemember := false
+	foundRecord := false
 	foundRecall := false
 	for _, tool := range tools {
-		if tool.Name == "remember" {
-			foundRemember = true
+		if tool.Name == "record" {
+			foundRecord = true
 		}
 		if tool.Name == "recall" {
 			foundRecall = true
 		}
 	}
-	if !foundRemember {
-		t.Error("expected 'remember' tool in tool list when memoryClient is set")
+	if !foundRecord {
+		t.Error("expected 'record' tool in tool list when memoryClient is set")
 	}
 	if !foundRecall {
 		t.Error("expected 'recall' tool in tool list when memoryClient is set")
 	}
 }
 
-func TestBuildTools_ExcludesRememberWhenMemoryDisabled(t *testing.T) {
+func TestBuildTools_ExcludesRecordWhenMemoryDisabled(t *testing.T) {
 	agent := &Agent{}
 	tools := agent.buildTools(nil)
 
 	for _, tool := range tools {
-		if tool.Name == "remember" {
-			t.Error("expected 'remember' tool to be absent when memoryClient is nil")
+		if tool.Name == "record" {
+			t.Error("expected 'record' tool to be absent when memoryClient is nil")
 		}
 		if tool.Name == "recall" {
 			t.Error("expected 'recall' tool to be absent when memoryClient is nil")
@@ -902,16 +902,16 @@ func TestConfigureMemory_SetsMemoryClientOnSuccess(t *testing.T) {
 	if agent.memoryClient == nil {
 		t.Fatal("expected memoryClient to be set after successful configuration")
 	}
-	// Verify remember tool is included.
+	// Verify record tool is included.
 	found := false
 	for _, tool := range agent.tools {
-		if tool.Name == "remember" {
+		if tool.Name == "record" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Error("expected 'remember' in agent.tools after configureMemory")
+		t.Error("expected 'record' in agent.tools after configureMemory")
 	}
 }
 
@@ -938,7 +938,7 @@ func TestConfigureMemory_GracefulOnEnsureCollectionFailure(t *testing.T) {
 	}
 }
 
-func TestConfigureMemory_RebuildToolsIncludesRemember(t *testing.T) {
+func TestConfigureMemory_RebuildToolsIncludesRecord(t *testing.T) {
 	// Create an agent with a memoryClient and rebuild tools — simulating the
 	// final steps of configureMemory after EnsureCollection succeeds.
 	srv, _ := newMockServer(nil)
@@ -950,11 +950,11 @@ func TestConfigureMemory_RebuildToolsIncludesRemember(t *testing.T) {
 	client.mu.Unlock()
 
 	agent := &Agent{apiKey: "key", httpClient: srv.Client()}
-	// Precondition: remember is not in the initial tool list.
+	// Precondition: record is not in the initial tool list.
 	initialTools := agent.buildTools(nil)
 	for _, tool := range initialTools {
-		if tool.Name == "remember" {
-			t.Error("remember should be absent before memoryClient is set")
+		if tool.Name == "record" {
+			t.Error("record should be absent before memoryClient is set")
 		}
 	}
 
@@ -964,13 +964,13 @@ func TestConfigureMemory_RebuildToolsIncludesRemember(t *testing.T) {
 
 	found := false
 	for _, tool := range agent.tools {
-		if tool.Name == "remember" {
+		if tool.Name == "record" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Error("expected 'remember' in agent.tools after injecting memoryClient and rebuilding tools")
+		t.Error("expected 'record' in agent.tools after injecting memoryClient and rebuilding tools")
 	}
 }
 

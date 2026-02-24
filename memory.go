@@ -418,16 +418,16 @@ func (a *Agent) recallMemories(ctx context.Context, query string) string {
 	return formatSection("Memory", body)
 }
 
-// --- Remember tool ---
+// --- Record tool ---
 
-// RememberInput is the input schema for the `remember` tool.
-type RememberInput struct {
+// RecordInput is the input schema for the `record` tool.
+type RecordInput struct {
 	Subject     string `json:"subject" jsonschema_description:"The entity this fact is about. Use a short, recognizable name: @-handle for users ('@henry'), project name ('agent project'), tool name ('Postgres'), or descriptive label ('team standup'). Keep it stable across calls so related facts cluster together."`
 	SubjectType string `json:"subject_type" jsonschema_description:"Category of the subject. Use a short lowercase label: 'discord user', 'person', 'codebase', 'project', 'tool', 'service', 'team', 'recurring meeting', etc. Pick the most specific label that fits."`
 	Descriptor  string `json:"descriptor" jsonschema_description:"A verb-phrase predicate stating the fact. Must start with a verb: 'is a Cubs fan', 'prefers dark mode', 'uses Go and Rust', 'happens every Tuesday at 9am'. Write it so that '<subject_type> <subject> <descriptor>' reads as a complete sentence."`
 }
 
-var RememberInputSchema = GenerateSchema[RememberInput]()
+var RecordInputSchema = GenerateSchema[RecordInput]()
 
 // formatMemoryContent concatenates the structured triple into a natural-language
 // sentence for storage: "<subject_type> <subject> <descriptor>".
@@ -435,13 +435,13 @@ func formatMemoryContent(subjectType, subject, descriptor string) string {
 	return strings.TrimSpace(subjectType) + " " + strings.TrimSpace(subject) + " " + strings.TrimSpace(descriptor)
 }
 
-// rememberToolDefinition returns the ToolDefinition for the `remember` tool.
-func (a *Agent) rememberToolDefinition() ToolDefinition {
+// recordToolDefinition returns the ToolDefinition for the `record` tool.
+func (a *Agent) recordToolDefinition() ToolDefinition {
 	return ToolDefinition{
-		Name:        "remember",
+		Name:        "record",
 		Description: "Store an entity-associated fact in long-term semantic memory so it can be recalled in future conversations. Decompose the information into a subject (who or what), its type (what kind of entity), and a descriptor (a verb-phrase stating the fact). Use this when the user shares facts, preferences, or context about a person, project, tool, or concept that should persist across sessions. Each call stores one atomic fact; call multiple times for multiple facts about the same or different entities.",
-		InputSchema: RememberInputSchema,
-		Function:    a.rememberFunction,
+		InputSchema: RecordInputSchema,
+		Function:    a.recordFunction,
 	}
 }
 
@@ -490,7 +490,7 @@ const defaultMemoryCollectionName = "agent-memory"
 
 // configureMemory reads MEMORY_ENABLED and MEMORY_COLLECTION_NAME from the
 // environment, creates a MemoryClient, calls EnsureCollection, sets
-// agent.memoryClient, and rebuilds agent.tools so the remember and recall tools
+// agent.memoryClient, and rebuilds agent.tools so the record and recall tools
 // are included. On any failure it logs a warning to stderr and leaves
 // agent.memoryClient nil (graceful degradation). No error is returned; the agent
 // continues without memory.
@@ -524,11 +524,11 @@ func memoryCollectionName() string {
 	return defaultMemoryCollectionName
 }
 
-// rememberFunction is the execution handler for the `remember` tool.
+// recordFunction is the execution handler for the `record` tool.
 // It validates the structured triple and stores the concatenated sentence
 // in the memory collection via AddItem.
-func (a *Agent) rememberFunction(input json.RawMessage) (string, error) {
-	var payload RememberInput
+func (a *Agent) recordFunction(input json.RawMessage) (string, error) {
+	var payload RecordInput
 	if err := json.Unmarshal(input, &payload); err != nil {
 		return "", err
 	}

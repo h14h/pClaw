@@ -25,11 +25,11 @@ It is designed around three practical goals:
 agent/
 ├── main.go                    # Agent runtime, inference client, tool definitions
 ├── discord.go                 # Discord runtime, command/mention handlers, session manager
-├── memory.go                  # MemoryClient, remember tool, auto-recall, configureMemory
+├── memory.go                  # MemoryClient, record tool, auto-recall, configureMemory
 ├── prompting.go               # System prompt builder (SectionedPromptBuilder)
 ├── main_test.go               # Unit tests for tools + dispatch
 ├── discord_test.go            # Unit tests for Discord splitting, sessions, progressive send
-├── memory_test.go             # Unit tests for MemoryClient, remember tool, and auto-recall
+├── memory_test.go             # Unit tests for MemoryClient, record tool, and auto-recall
 ├── prompting_test.go          # Unit tests for prompt builder modes and injection
 ├── main_integration_test.go   # Live Vultr integration tests
 ├── main_delegation_harness_integration_test.go # Delegation policy harness (opt-in E2E)
@@ -48,7 +48,7 @@ agent/
 | Tool system | Defines tool metadata + JSON schema and executes tool calls from model responses |
 | File tools | `read_file`, `list_files`, `edit_file` for workspace interaction |
 | Reasoning delegation | `delegate_reasoning` dispatches sub-problems to, e.g., `gpt-oss-120b` |
-| Memory tools | `remember` and `recall` for durable semantic memory via Vultr vector store (when enabled) |
+| Memory tools | `record` and `recall` for durable semantic memory via Vultr vector store (when enabled) |
 
 ## Requirements
 
