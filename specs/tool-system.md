@@ -25,12 +25,14 @@ Each tool is registered as a `ToolDefinition` with:
 
 ### Registration
 
-At startup, `Agent` registers four built-ins:
+At startup, `Agent` registers up to six built-ins:
 
 1. `read_file`
 2. `list_files`
 3. `edit_file`
 4. `delegate_reasoning`
+5. `remember` (only when `Agent.memoryClient != nil`)
+6. `recall` (only when `Agent.memoryClient != nil`)
 
 These are stored in `Agent.tools`.
 
@@ -169,6 +171,63 @@ Error conditions:
 2. Read/write filesystem errors
 3. Directory creation errors during file creation path
 
+## `remember`
+
+Stores an entity-associated fact in the long-term semantic memory collection via the Vultr vector store API.
+Only registered when `Agent.memoryClient` is non-nil (i.e., when memory is enabled and the collection has been bootstrapped).
+
+Input:
+
+```json
+{
+  "subject": "@henry",
+  "subject_type": "discord user",
+  "descriptor": "is a Cubs fan"
+}
+```
+
+Behavior:
+
+1. Unmarshals the `subject`, `subject_type`, and `descriptor` fields
+2. Rejects empty or whitespace-only values for any of the three fields with an error
+3. Concatenates via `formatMemoryContent`: `"<subject_type> <subject> <descriptor>"` (e.g., `"discord user @henry is a Cubs fan"`)
+4. Calls `MemoryClient.AddItem(ctx, content)` using `context.Background()`
+5. Returns `"Memory stored."` on success
+
+Error conditions:
+
+1. Missing or whitespace-only `subject`, `subject_type`, or `descriptor`
+2. Collection not initialized (EnsureCollection not called)
+3. HTTP errors from the vector store API
+
+## `recall`
+
+Searches long-term semantic memory and returns full verbatim results.
+Memories are stored as entity-associated facts in the form `<type> <name> <verb-phrase>` (e.g., `discord user @henry is a Cubs fan`). For best results, include the entity type and/or name in the query.
+Only registered when `Agent.memoryClient` is non-nil (i.e., when memory is enabled and the collection has been bootstrapped).
+
+Input:
+
+```json
+{
+  "query": "targeted search query to find specific memories"
+}
+```
+
+Behavior:
+
+1. Unmarshals the `query` field
+2. Rejects empty or whitespace-only query with an error
+3. Calls `MemoryClient.Search(ctx, query)` using `context.Background()`
+4. Returns full verbatim results separated by `\n\n---\n\n`
+5. Returns `"No matching memories found."` when no results match
+
+Error conditions:
+
+1. Missing or whitespace-only `query`
+2. Collection not initialized (EnsureCollection not called)
+3. HTTP errors from the vector store API
+
 ## Schema Generation
 
 `GenerateSchema[T]` uses `github.com/invopop/jsonschema` with:
@@ -177,6 +236,31 @@ Error conditions:
 2. `DoNotReference: true`
 
 If reflection or conversion fails, it falls back to a minimal `{ "type": "object" }` schema.
+
+## Auto-Recall
+
+When `Agent.memoryClient` is non-nil, every call to `withSystemPrompt` automatically performs a semantic search against the memory store and injects an LLM-generated summary of matching memories into the system prompt.
+
+### Behavior
+
+1. The last user message in the conversation is extracted as the recall query.
+2. `Agent.recallMemories(ctx, query)` calls `MemoryClient.Search(ctx, query)`.
+3. Search results are capped to 10 items and fed to `Agent.summarizeMemories(ctx, items)`.
+4. `summarizeMemories` makes a direct HTTP POST to `/chat/completions` using the `Summarization` model (`gpt-oss-120b`), bypassing `runInferenceWithModel`/`withSystemPrompt` to avoid infinite recursion. Timeout is 15 seconds, max tokens is 256.
+5. The summary is formatted as a `[Memory]` section appended to the base system prompt, with a hint to use the `recall` tool for full details.
+6. On summarization failure, the system falls back to programmatic truncation (each item truncated to 80 characters).
+7. On search error or empty results the section is omitted; no crash or propagated error occurs.
+
+### Format
+
+```
+[Memory]
+- summarized fact one
+- summarized fact two
+Use the recall tool with a targeted query to retrieve full details.
+```
+
+This section appears after the standard prompt sections (`[Identity]`, `[Behavior]`, `[Tooling]`, `[Safety]`, `[Runtime]`) so that recalled context is available to the model on every turn.
 
 ## Current Gaps
 

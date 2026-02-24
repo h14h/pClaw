@@ -19,7 +19,10 @@ implementations are all in `main.go`.
 agent/
 ├── main.go                    # Agent runtime, inference client, tool definitions
 ├── discord.go                 # Discord runtime, command/mention handlers, session manager
+├── memory.go                  # MemoryClient, remember tool, auto-recall, configureMemory
+├── prompting.go               # System prompt builder (SectionedPromptBuilder)
 ├── main_test.go               # Unit tests for tools + dispatch
+├── memory_test.go             # Unit tests for MemoryClient, remember tool, and auto-recall
 ├── main_integration_test.go   # Live Vultr integration tests
 ├── main_delegation_harness_integration_test.go # Delegation policy harness (opt-in E2E)
 └── specs/
@@ -45,6 +48,12 @@ agent/
 | Discord runtime | `discord.go` | Registers `/agent`, handles interactions, and manages per-session conversations |
 | Tool functions | `main.go` | Perform filesystem operations (`read_file`, `list_files`, `edit_file`) |
 | Startup wiring (`main`) | `main.go` | Reads env config, builds `Agent`, starts interactive session |
+| `MemoryClient` | `memory.go` | HTTP client for Vultr vector store; handles collection bootstrap, item add, search, list, delete item, delete collection |
+| `configureMemory` | `memory.go` | Reads `MEMORY_ENABLED`/`MEMORY_COLLECTION_NAME`, creates `MemoryClient`, bootstraps collection, sets `agent.memoryClient` |
+| `recallMemories` | `memory.go` | Performs semantic search, summarizes results via `summarizeMemories`, and formats as `[Memory]` system-prompt section |
+| `summarizeMemories` | `memory.go` | Direct HTTP POST to chat completions (bypasses `runInferenceWithModel`) to produce compact summary of memory items |
+| `rememberFunction` | `memory.go` | Tool handler for `remember`; stores user-provided content via `MemoryClient.AddItem` |
+| `recallFunction` | `memory.go` | Tool handler for `recall`; searches memory and returns full verbatim results |
 
 ## End-to-End Flow
 
@@ -106,13 +115,68 @@ Current indicator delay configuration:
 
 Tool lifecycle events (`tool_call.started|succeeded|failed`) remain available internally and can be surfaced in CLI debug mode with `TOOL_EVENT_LOG=debug`.
 
+## Memory Subsystem
+
+The durable memory subsystem adds cross-session persistence backed by Vultr's managed vector store API (`https://api.vultrinference.com/v1`).
+
+### Client Lifecycle
+
+```text
+configureMemory(ctx, agent)
+  │
+  ├─ isMemoryDisabled() → return if MEMORY_ENABLED is falsy
+  ├─ memoryCollectionName() → MEMORY_COLLECTION_NAME or "agent-memory"
+  ├─ NewMemoryClient(agent.baseURL, apiKey, httpClient)
+  ├─ client.EnsureCollection(ctx, name)
+  │     GET /vector_store → find by name
+  │     POST /vector_store if missing → cache returned ID
+  ├─ agent.memoryClient = client
+  └─ agent.tools = agent.buildTools(nil)  // adds "remember" and "recall" tools
+```
+
+Failures at any step are logged to stderr and the agent starts without memory.
+
+### Auto-Recall Flow
+
+On every call to `withSystemPrompt` (which wraps every inference request):
+
+```text
+withSystemPrompt(ctx, conversation, tools, mode)
+  │
+  ├─ Build base prompt from PromptBuilder
+  ├─ Extract last user message from conversation
+  ├─ recallMemories(ctx, query)
+  │     → MemoryClient.Search(ctx, query)
+  │     → POST /vector_store/{id}/search {"input": query}
+  │     → cap results to 10
+  │     → summarizeMemories(ctx, items)
+  │     │     → direct POST /chat/completions (Summarization model)
+  │     │     → bypasses runInferenceWithModel to avoid recursion
+  │     │     → on failure: fall back to truncation (80 chars per item)
+  │     → format summary as [Memory] section with recall tool hint
+  └─ Append [Memory] section to prompt (omitted on error or empty results)
+```
+
+### Discord Sharing
+
+In Discord mode, a single `MemoryClient` is created once before the session manager factory. Each new session agent receives a reference to the same client, avoiding repeated `EnsureCollection` round-trips within the process lifetime.
+
+### Kill Switch
+
+Set `MEMORY_ENABLED=false` (or `0` / `no`) to disable the subsystem entirely:
+
+1. `configureMemory` returns immediately without creating a client
+2. `agent.memoryClient` remains nil
+3. `remember` and `recall` tools are not registered
+4. Auto-recall injects no `[Memory]` section
+
 ## Design Constraints
 
 1. Single-process runtime; CLI chat loop is single-threaded while auxiliary goroutines handle status rendering and Discord event handlers
 2. No conversation persistence outside process memory
 3. No workspace sandboxing; tools operate on provided paths
 4. Tool and inference schemas are static per process start
-5. Primary model is fixed to `kimi-k2-instruct`; reasoning model is fixed to `gpt-oss-120b`
+5. Primary model is fixed to `kimi-k2-instruct`; reasoning model is fixed to `gpt-oss-120b`; summarization model is fixed to `gpt-oss-120b`
 
 In Discord mode, each `(channel_id, user_id)` conversation key is isolated with a dedicated in-memory agent/session state and mutex.
 Discord uses progressive part callbacks to emit multiple messages within one logical turn as assistant/tool iterations produce text.

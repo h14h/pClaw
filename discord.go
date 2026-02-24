@@ -77,11 +77,29 @@ func runDiscordBot(ctx context.Context) error {
 	allowedUserIDs := csvToSet(os.Getenv("DISCORD_ALLOWED_USER_IDS"))
 	serverEventSink := newServerEventSinkFromEnv(os.Stdout)
 
+	// Create a single shared MemoryClient for all Discord session agents.
+	// Sharing avoids redundant EnsureCollection round-trips and keeps the
+	// same collection ID across agents in this process.
+	var sharedMemClient *MemoryClient
+	if !isMemoryDisabled() {
+		colName := memoryCollectionName()
+		client := NewMemoryClient(baseURL, apiKey, http.DefaultClient)
+		if err := client.EnsureCollection(ctx, colName); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: memory initialization failed, running without memory: %v\n", err)
+		} else {
+			sharedMemClient = client
+		}
+	}
+
 	manager := newDiscordSessionManager(func() *Agent {
 		agent := NewAgent(baseURL, apiKey, http.DefaultClient, nil, nil)
 		agent.setOutputWriter(io.Discard)
 		agent.setPromptTransport("discord")
 		agent.serverEventSink = serverEventSink
+		if sharedMemClient != nil {
+			agent.memoryClient = sharedMemClient
+			agent.tools = agent.buildTools(nil)
+		}
 		return agent
 	})
 

@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	defaultVultrBaseURL   = "https://api.vultrinference.com/v1"
+	defaultVultrBaseURL = "https://api.vultrinference.com/v1"
 	defaultReasoningLimit = 2
 	reasoningCallTimeout  = 45 * time.Second
 	reasoningMaxTokens    = 1024
@@ -38,8 +38,9 @@ const (
 type Model string
 
 const (
-	Instruct  Model = "kimi-k2-instruct"
-	Reasoning Model = "gpt-oss-120b"
+	Instruct      Model = "kimi-k2-instruct"
+	Reasoning     Model = "gpt-oss-120b"
+	Summarization Model = "gpt-oss-120b" // memory recall summarization
 )
 
 type ToolEventLogMode string
@@ -57,19 +58,21 @@ type ToolDefinition struct {
 }
 
 type Agent struct {
-	baseURL            string
-	apiKey             string
-	primaryModel       Model
-	reasoningModel     Model
-	promptBuilder      PromptBuilder
-	promptTransport    string
-	httpClient         *http.Client
-	getUserMessage     func() (string, bool)
-	tools              []ToolDefinition
-	toolEventSink      ToolEventSink
-	serverEventSink    ServerEventSink
-	outputWriter       io.Writer
-	reasoningCallCount int
+	baseURL             string
+	apiKey              string
+	primaryModel        Model
+	reasoningModel      Model
+	summarizationModel  Model
+	promptBuilder       PromptBuilder
+	promptTransport     string
+	httpClient          *http.Client
+	getUserMessage      func() (string, bool)
+	tools               []ToolDefinition
+	toolEventSink       ToolEventSink
+	serverEventSink     ServerEventSink
+	outputWriter        io.Writer
+	reasoningCallCount  int
+	memoryClient        *MemoryClient
 }
 
 type ServerEventLogMode string
@@ -477,6 +480,7 @@ func main() {
 	agent := NewAgent(baseURL, apiKey, http.DefaultClient, getUserMessage, nil)
 	configureToolEventLogging(agent)
 	configureServerEventLogging(agent, os.Stdout)
+	configureMemory(context.Background(), agent)
 	if err := agent.Run(context.Background()); err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
 	}
@@ -493,15 +497,16 @@ func NewAgent(
 	}
 
 	agent := &Agent{
-		baseURL:         baseURL,
-		apiKey:          apiKey,
-		primaryModel:    Instruct,
-		reasoningModel:  Reasoning,
-		promptBuilder:   NewSectionedPromptBuilder(promptConfigFromEnv()),
-		promptTransport: "cli",
-		httpClient:      httpClient,
-		getUserMessage:  getUserMessage,
-		outputWriter:    os.Stdout,
+		baseURL:            baseURL,
+		apiKey:             apiKey,
+		primaryModel:       Instruct,
+		reasoningModel:     Reasoning,
+		summarizationModel: Summarization,
+		promptBuilder:      NewSectionedPromptBuilder(promptConfigFromEnv()),
+		promptTransport:    "cli",
+		httpClient:         httpClient,
+		getUserMessage:     getUserMessage,
+		outputWriter:       os.Stdout,
 	}
 	agent.tools = agent.buildTools(tools)
 	return agent
@@ -579,6 +584,10 @@ func (a *Agent) buildTools(extraTools []ToolDefinition) []ToolDefinition {
 		EditFileDefinition,
 	}
 	tools = append(tools, a.reasoningToolDefinition())
+	if a.memoryClient != nil {
+		tools = append(tools, a.rememberToolDefinition())
+		tools = append(tools, a.recallToolDefinition())
+	}
 	for _, extra := range extraTools {
 		replaced := false
 		for i := range tools {
@@ -684,7 +693,7 @@ func (a *Agent) runInferenceStream(
 	return a.runInferenceStreamWithModel(ctx, a.primaryModel, conversation, a.tools, primaryMaxTokens, onTextDelta, PromptModeFull)
 }
 
-func (a *Agent) withSystemPrompt(conversation []ChatMessage, tools []ToolDefinition, mode PromptMode) []ChatMessage {
+func (a *Agent) withSystemPrompt(ctx context.Context, conversation []ChatMessage, tools []ToolDefinition, mode PromptMode) []ChatMessage {
 	if a.promptBuilder == nil {
 		return conversation
 	}
@@ -697,6 +706,21 @@ func (a *Agent) withSystemPrompt(conversation []ChatMessage, tools []ToolDefinit
 		Transport: a.promptTransport,
 		ToolNames: toolNames,
 	})
+
+	// Extract the last user message as the recall query and inject memories.
+	query := ""
+	for i := len(conversation) - 1; i >= 0; i-- {
+		if conversation[i].Role == "user" {
+			if text, ok := conversation[i].Content.(string); ok {
+				query = strings.TrimSpace(text)
+			}
+			break
+		}
+	}
+	if recalled := a.recallMemories(ctx, query); recalled != "" {
+		prompt = prompt + "\n\n" + recalled
+	}
+
 	return prependSystemPrompt(conversation, prompt)
 }
 
@@ -708,7 +732,7 @@ func (a *Agent) runInferenceWithModel(
 	maxTokens int,
 	mode PromptMode,
 ) (ChatMessage, error) {
-	promptedConversation := a.withSystemPrompt(conversation, tools, mode)
+	promptedConversation := a.withSystemPrompt(ctx, conversation, tools, mode)
 	startedAt := time.Now()
 	a.emitServerEvent(ctx, ServerLogLevelInfo, "llm.request.started", "inference request started", map[string]interface{}{
 		"model":    string(model),
@@ -851,7 +875,7 @@ func (a *Agent) runInferenceStreamWithModel(
 	onTextDelta func(string),
 	mode PromptMode,
 ) (ChatMessage, error) {
-	promptedConversation := a.withSystemPrompt(conversation, tools, mode)
+	promptedConversation := a.withSystemPrompt(ctx, conversation, tools, mode)
 	startedAt := time.Now()
 	a.emitServerEvent(ctx, ServerLogLevelInfo, "llm.request.started", "inference request started", map[string]interface{}{
 		"model":    string(model),
@@ -1411,6 +1435,10 @@ func summarizeToolStart(event ToolEvent) string {
 		return fmt.Sprintf("Editing file: %s", quotedPath(event.ArgsParsed["path"], ""))
 	case "delegate_reasoning":
 		return "Thinking..."
+	case "remember":
+		return "Storing memory..."
+	case "recall":
+		return "Recalling memories..."
 	default:
 		return fmt.Sprintf("Calling %s(%s)", event.ToolName, event.ArgsRaw)
 	}
@@ -1433,6 +1461,10 @@ func summarizeToolSuccess(event ToolEvent) string {
 		return fmt.Sprintf("Edited %s (%d replacements) in %s", pathText, intStat(event.Stats, "replacement_count"), formatDuration(event.Duration))
 	case "delegate_reasoning":
 		return fmt.Sprintf("Finished thinking (%d chars) in %s", len(event.ResultRaw), formatDuration(event.Duration))
+	case "remember":
+		return fmt.Sprintf("Stored memory in %s", formatDuration(event.Duration))
+	case "recall":
+		return fmt.Sprintf("Recalled memories (%d bytes) in %s", len(event.ResultRaw), formatDuration(event.Duration))
 	default:
 		return fmt.Sprintf("Completed %s in %s", event.ToolName, formatDuration(event.Duration))
 	}
@@ -1448,6 +1480,10 @@ func summarizeToolFailure(event ToolEvent) string {
 		return fmt.Sprintf("Failed to edit %s: %s in %s", quotedPath(event.ArgsParsed["path"], ""), event.Err, formatDuration(event.Duration))
 	case "delegate_reasoning":
 		return fmt.Sprintf("Reasoning failed: %s in %s", event.Err, formatDuration(event.Duration))
+	case "remember":
+		return fmt.Sprintf("Failed to store memory: %s in %s", event.Err, formatDuration(event.Duration))
+	case "recall":
+		return fmt.Sprintf("Failed to recall memories: %s in %s", event.Err, formatDuration(event.Duration))
 	default:
 		if event.Err == "tool not found" {
 			return fmt.Sprintf("Tool not found: %s in %s", event.ToolName, formatDuration(event.Duration))

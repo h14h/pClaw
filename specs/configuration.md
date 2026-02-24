@@ -28,17 +28,21 @@ Precedence is:
 | `AGENT_PERSONA` | No | built-in default | Inline persona text for system prompt composition |
 | `AGENT_PERSONA_FILE` | No | empty | Path to persona text file; when readable and non-empty, overrides `AGENT_PERSONA` |
 | `AGENT_PROMPT_MAX_PERSONA_CHARS` | No | `600` | Character cap applied to persona text embedded in system prompt |
+| `MEMORY_ENABLED` | No | `true` (enabled) | Set to `false`, `0`, or `no` to disable durable memory (no `remember`/`recall` tools, no auto-recall) |
+| `MEMORY_COLLECTION_NAME` | No | `agent-memory` | Vultr vector store collection name used for semantic memory |
 
 Model selection is not environment-configurable.
 
 1. Primary chat model is fixed to `kimi-k2-instruct`
 2. Reasoning delegation model is fixed to `gpt-oss-120b`
+3. Memory recall summarization model is fixed to `gpt-oss-120b`
 
 `main.go` defines these via a named type:
 
 1. `type Model string`
 2. `const Instruct Model = "kimi-k2-instruct"`
 3. `const Reasoning Model = "gpt-oss-120b"`
+4. `const Summarization Model = "gpt-oss-120b"`
 
 ## Startup Resolution
 
@@ -60,6 +64,7 @@ CLI initialization sequence:
 4. Create `Agent` via `NewAgent(...)`
 5. Configure tool event logging from `TOOL_EVENT_LOG`
 6. Configure server event logging from `SERVER_EVENT_LOG`
+7. Call `configureMemory(ctx, agent)` — reads `MEMORY_ENABLED` and `MEMORY_COLLECTION_NAME`, creates `MemoryClient`, bootstraps the vector store collection, and sets `agent.memoryClient`; on failure logs a warning and continues without memory
 
 ## Behavioral Notes
 
@@ -82,3 +87,12 @@ CLI initialization sequence:
 3. Base URL is normalized by trimming trailing slash
 
 This keeps test behavior aligned with production startup behavior.
+
+`memory_test.go` contains one live-API integration test (`TestMemoryRoundTrip_Integration`) that requires two opt-in env vars:
+
+| Variable | Required for memory integration test | Purpose |
+|----------|--------------------------------------|---------|
+| `MEMORY_INTEGRATION_TEST` | Yes (must be `true`) | Explicit opt-in to run the live memory round-trip test; without this the test is always skipped, even if `VULTR_API_KEY` is set |
+| `VULTR_API_KEY` | Yes | Bearer token for the Vultr vector store API |
+
+Run with: `VULTR_API_KEY=<key> MEMORY_INTEGRATION_TEST=true go test ./... -run Integration`
