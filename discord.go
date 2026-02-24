@@ -212,10 +212,15 @@ func runDiscordBot(ctx context.Context) error {
 			return
 		}
 		botUserID := dg.State.User.ID
-		if !messageMentionsUser(m.Message, botUserID) {
+		isDM := isDMChannel(s, m.ChannelID)
+		if !isDM && !messageMentionsUser(m.Message, botUserID) {
 			return
 		}
 		sessionKey := discordConversationKey(m.ChannelID, m.Author.ID)
+		source := "mention"
+		if isDM {
+			source = "dm"
+		}
 		eventCtx := withServerLogMeta(ctx, serverLogMeta{
 			TraceID:    nextServerEventID("trc"),
 			TurnID:     nextServerEventID("turn"),
@@ -225,27 +230,32 @@ func runDiscordBot(ctx context.Context) error {
 			UserIDHash: hashIdentifier(m.Author.ID),
 			MessageID:  m.ID,
 		})
-		emitServerEventWithSink(eventCtx, serverEventSink, ServerLogLevelInfo, "discord.request.received", "discord mention received", map[string]interface{}{
-			"source": "mention",
+		emitServerEventWithSink(eventCtx, serverEventSink, ServerLogLevelInfo, "discord.request.received", "discord message received", map[string]interface{}{
+			"source": source,
 		})
 		if !isAllowedDiscordRequest(m.ChannelID, m.Author.ID, allowedChannelIDs, allowedUserIDs) {
 			emitServerEventWithSink(eventCtx, serverEventSink, ServerLogLevelWarn, "discord.request.rejected", "discord request rejected", map[string]interface{}{
 				"reason": "not_allowed",
-				"source": "mention",
+				"source": source,
 			})
 			return
 		}
 
-		prompt := promptFromMention(m.Content, botUserID)
+		var prompt string
+		if isDM {
+			prompt = strings.TrimSpace(m.Content)
+		} else {
+			prompt = promptFromMention(m.Content, botUserID)
+		}
 		if prompt == "" {
 			emitServerEventWithSink(eventCtx, serverEventSink, ServerLogLevelWarn, "discord.request.rejected", "discord request rejected", map[string]interface{}{
 				"reason": "empty_prompt",
-				"source": "mention",
+				"source": source,
 			})
 			return
 		}
 		emitServerEventWithSink(eventCtx, serverEventSink, ServerLogLevelInfo, "discord.request.accepted", "discord request accepted", map[string]interface{}{
-			"source":       "mention",
+			"source":       source,
 			"prompt_chars": len(prompt),
 		})
 
@@ -267,7 +277,7 @@ func runDiscordBot(ctx context.Context) error {
 		response, err := runDiscordPromptProgressive(eventCtx, serverEventSink, manager, m.ChannelID, m.Author.ID, prompt, sender.SendPart)
 		if err != nil {
 			emitServerEventWithSink(eventCtx, serverEventSink, ServerLogLevelError, "discord.request.failed", "discord request failed", map[string]interface{}{
-				"source": "mention",
+				"source": source,
 				"error":  err.Error(),
 			})
 			_, _ = s.ChannelMessageSendReply(m.ChannelID, "Agent error: "+err.Error(), m.Reference())
@@ -360,6 +370,17 @@ func isAllowedDiscordRequest(channelID, userID string, allowedChannelIDs, allowe
 		}
 	}
 	return true
+}
+
+func isDMChannel(s *discordgo.Session, channelID string) bool {
+	ch, err := s.State.Channel(channelID)
+	if err != nil {
+		ch, err = s.Channel(channelID)
+		if err != nil {
+			return false
+		}
+	}
+	return ch.Type == discordgo.ChannelTypeDM || ch.Type == discordgo.ChannelTypeGroupDM
 }
 
 func messageMentionsUser(message *discordgo.Message, userID string) bool {

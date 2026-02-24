@@ -76,6 +76,37 @@ func TestPromptFromMention(t *testing.T) {
 	}
 }
 
+func TestIsDMChannel(t *testing.T) {
+	s, _ := discordgo.New("Bot fake")
+	s.StateEnabled = true
+	s.State = discordgo.NewState()
+
+	// Add a DM channel to the state cache.
+	dmCh := &discordgo.Channel{ID: "dm1", Type: discordgo.ChannelTypeDM}
+	if err := s.State.ChannelAdd(dmCh); err != nil {
+		t.Fatalf("ChannelAdd DM: %v", err)
+	}
+
+	// Add a guild and a guild text channel to the state cache.
+	if err := s.State.GuildAdd(&discordgo.Guild{ID: "g1"}); err != nil {
+		t.Fatalf("GuildAdd: %v", err)
+	}
+	guildCh := &discordgo.Channel{ID: "guild1", Type: discordgo.ChannelTypeGuildText, GuildID: "g1"}
+	if err := s.State.ChannelAdd(guildCh); err != nil {
+		t.Fatalf("ChannelAdd guild: %v", err)
+	}
+
+	if !isDMChannel(s, "dm1") {
+		t.Fatal("expected dm1 to be a DM channel")
+	}
+	if isDMChannel(s, "guild1") {
+		t.Fatal("expected guild1 to not be a DM channel")
+	}
+	if isDMChannel(s, "unknown") {
+		t.Fatal("expected unknown channel to not be a DM channel")
+	}
+}
+
 func TestMessageMentionsUser(t *testing.T) {
 	msg := &discordgo.Message{
 		Mentions: []*discordgo.User{{ID: "u1"}, {ID: "u2"}},
