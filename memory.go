@@ -56,6 +56,7 @@ type MemoryItem struct {
 	ID          string `json:"id"`
 	ItemContent string `json:"content,omitempty"`
 	Description string `json:"description,omitempty"`
+	Created     string `json:"created,omitempty"`
 }
 
 // Content returns the effective text of the memory item, preferring the content
@@ -74,10 +75,71 @@ type vsListItemsResponse struct {
 type vsSearchResult struct {
 	ID      string `json:"id"`
 	Content string `json:"content"`
+	Created string `json:"created,omitempty"`
 }
 
 type vsSearchResponse struct {
 	Results []vsSearchResult `json:"results"`
+}
+
+// SearchResult is a single memory item returned by Search, containing the
+// verbatim content and the timestamp at which it was stored.
+type SearchResult struct {
+	Content string
+	Created time.Time
+}
+
+// relativeAge returns a human-readable description of how long ago t was
+// relative to now. Returns "" if t is zero (graceful degradation when the
+// API omits the timestamp).
+func relativeAge(t, now time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := now.Sub(t)
+	if d < 0 {
+		return ""
+	}
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		m := int(d.Minutes())
+		if m == 1 {
+			return "1 minute ago"
+		}
+		return fmt.Sprintf("%d minutes ago", m)
+	case d < 24*time.Hour:
+		h := int(d.Hours())
+		if h == 1 {
+			return "1 hour ago"
+		}
+		return fmt.Sprintf("%d hours ago", h)
+	case d < 7*24*time.Hour:
+		days := int(d.Hours() / 24)
+		if days == 1 {
+			return "1 day ago"
+		}
+		return fmt.Sprintf("%d days ago", days)
+	case d < 30*24*time.Hour:
+		weeks := int(d.Hours() / (24 * 7))
+		if weeks == 1 {
+			return "1 week ago"
+		}
+		return fmt.Sprintf("%d weeks ago", weeks)
+	case d < 365*24*time.Hour:
+		months := int(d.Hours() / (24 * 30))
+		if months == 1 {
+			return "1 month ago"
+		}
+		return fmt.Sprintf("%d months ago", months)
+	default:
+		years := int(d.Hours() / (24 * 365))
+		if years == 1 {
+			return "1 year ago"
+		}
+		return fmt.Sprintf("%d years ago", years)
+	}
 }
 
 // --- HTTP helpers ---
@@ -203,9 +265,9 @@ func (m *MemoryClient) AddItem(ctx context.Context, content string) error {
 }
 
 // Search performs a semantic similarity search against the memory collection
-// and returns the content strings of matching items.
+// and returns the matching items with their content and creation timestamps.
 // EnsureCollection must be called before Search.
-func (m *MemoryClient) Search(ctx context.Context, query string) ([]string, error) {
+func (m *MemoryClient) Search(ctx context.Context, query string) ([]SearchResult, error) {
 	id, err := m.getCollectionID()
 	if err != nil {
 		return nil, err
@@ -225,13 +287,17 @@ func (m *MemoryClient) Search(ctx context.Context, query string) ([]string, erro
 		return nil, fmt.Errorf("memory client: parse search results: %w", err)
 	}
 
-	contents := make([]string, 0, len(result.Results))
+	items := make([]SearchResult, 0, len(result.Results))
 	for _, r := range result.Results {
 		if r.Content != "" {
-			contents = append(contents, r.Content)
+			sr := SearchResult{Content: r.Content}
+			if r.Created != "" {
+				sr.Created, _ = time.Parse(time.RFC3339, r.Created)
+			}
+			items = append(items, sr)
 		}
 	}
-	return contents, nil
+	return items, nil
 }
 
 // ListItems returns all items stored in the memory collection.
@@ -408,10 +474,16 @@ func (a *Agent) recallMemories(ctx context.Context, query string) string {
 		results = results[:recallMaxSearchResults]
 	}
 
-	summary, err := a.summarizeMemories(ctx, results)
+	// Extract plain content strings for summarization (no age annotations).
+	contents := make([]string, len(results))
+	for i, r := range results {
+		contents[i] = r.Content
+	}
+
+	summary, err := a.summarizeMemories(ctx, contents)
 	if err != nil {
 		// Fallback: programmatic truncation.
-		summary = truncateMemories(results)
+		summary = truncateMemories(contents)
 	}
 
 	body := summary + "\nUse the recall tool with a targeted query to retrieve full details."
@@ -439,7 +511,7 @@ func formatMemoryContent(subjectType, subject, descriptor string) string {
 func (a *Agent) recordToolDefinition() ToolDefinition {
 	return ToolDefinition{
 		Name:        "record",
-		Description: "Store an entity-associated fact in long-term semantic memory so it can be recalled in future conversations. Decompose the information into a subject (who or what), its type (what kind of entity), and a descriptor (a verb-phrase stating the fact). Use this when the user shares facts, preferences, or context about a person, project, tool, or concept that should persist across sessions. Each call stores one atomic fact; call multiple times for multiple facts about the same or different entities.",
+		Description: "Store exactly one atomic fact for future recall. Provide:\n\nsubject: the single, most specific noun phrase (e.g. @henry, cookbook app, Postgres)\nsubject_type: a lowercase, singular label (e.g. discord user, project, tool)\ndescriptor: a present-tense verb phrase starting with a verb (e.g. is a Cubs fan, releases every Thursday)\n\nThe system will automatically assemble them into the sentence \"<subject_type> <subject> <descriptor>\". Don't duplicate the type or subject in the descriptor.",
 		InputSchema: RecordInputSchema,
 		Function:    a.recordFunction,
 	}
@@ -458,14 +530,15 @@ var RecallInputSchema = GenerateSchema[RecallInput]()
 func (a *Agent) recallToolDefinition() ToolDefinition {
 	return ToolDefinition{
 		Name:        "recall",
-		Description: "Search long-term semantic memory and retrieve full verbatim results. Memories are stored as entity-associated facts in the form '<type> <name> <verb-phrase>' (e.g., 'discord user @henry is a Cubs fan'). For best results, include the entity type and/or name in your query (e.g., 'discord user @henry' or '@henry preferences'). Use this when you need precise details from stored memories that the auto-recalled summary references.",
+		Description: "Search long-term memories using natural-language queries. Describe what you're looking for—concepts, relationships, or phrases—and the system will semantically match against stored facts. Results are returned in order of relevance, most-relevant first, with a human-readable age appended to each fact. Stored facts follow the sentence structure \"<subject_type> <subject> <descriptor>\" (e.g. \"discord user @henry is a Cubs fan\", \"project cookbook app releases every Thursday\").",
 		InputSchema: RecallInputSchema,
 		Function:    a.recallFunction,
 	}
 }
 
 // recallFunction is the execution handler for the `recall` tool.
-// It performs a semantic search and returns full verbatim results.
+// It performs a semantic search and returns full verbatim results, each
+// annotated with a human-readable storage age when a timestamp is available.
 func (a *Agent) recallFunction(input json.RawMessage) (string, error) {
 	var payload RecallInput
 	if err := json.Unmarshal(input, &payload); err != nil {
@@ -481,7 +554,17 @@ func (a *Agent) recallFunction(input json.RawMessage) (string, error) {
 	if len(results) == 0 {
 		return "No matching memories found.", nil
 	}
-	return strings.Join(results, "\n\n---\n\n"), nil
+	now := time.Now()
+	parts := make([]string, len(results))
+	for i, r := range results {
+		age := relativeAge(r.Created, now)
+		if age != "" {
+			parts[i] = r.Content + " (stored " + age + ")"
+		} else {
+			parts[i] = r.Content
+		}
+	}
+	return strings.Join(parts, "\n\n---\n\n"), nil
 }
 
 // --- Agent wiring ---

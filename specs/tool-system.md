@@ -219,7 +219,7 @@ Behavior:
 1. Unmarshals the `query` field
 2. Rejects empty or whitespace-only query with an error
 3. Calls `MemoryClient.Search(ctx, query)` using `context.Background()`
-4. Returns full verbatim results separated by `\n\n---\n\n`
+4. Returns full verbatim results separated by `\n\n---\n\n`, each annotated with a human-readable storage age suffix when a timestamp is available (e.g. `discord user @henry is a Cubs fan (stored 3 weeks ago)`)
 5. Returns `"No matching memories found."` when no results match
 
 Error conditions:
