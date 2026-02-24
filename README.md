@@ -14,10 +14,8 @@ This project is a lightweight AI coding agent in Go with a terminal REPL loop an
 It is designed around three practical goals:
 
 1. Lightweight operation: runs comfortably on cheap hardware (e.g. VPS with 1 vCPU & 1 GB RAM)
-2. Simple local workflow: run one binary, chat in terminal
-3. Tool-capable agent: model can call simple, composable tools (e.g. "record"/"recall" facts to/from a vector DB)
-4. Third-party messaging: agent can receive messages via, e.g., a Discord bot
-5. Provider-backed inference: chat completions are sent to, e.g.,  Vultr Inference
+2. Maximizing value: supports Vultr's inference product by default for $0.20/M tokens of Kimi K2 & GPT OSS 120B
+3. Sensible defaults: one env var (VULTR_API_KEY) nets a fully functional CLI agent w/ tool calling & vector-based long-term memory w/ semantic lookup
 
 ## Architecture
 
