@@ -6,7 +6,7 @@ Design documentation for this project, modeled after the Loom specs layout.
 
 | Spec | Code | Purpose |
 |------|------|---------|
-| [architecture.md](./architecture.md) | [main.go](../main.go) | Agent loop, message flow, tool execution pipeline |
+| [architecture.md](./architecture.md) | [main.go](../main.go), [compaction.go](../compaction.go) | Agent loop, message flow, tool execution pipeline, compaction subsystem |
 | [tool-system.md](./tool-system.md) | [main.go](../main.go) | Tool definitions, schemas, and execution behavior |
 | [llm-inference.md](./llm-inference.md) | [main.go](../main.go) | Vultr inference API request/response flow |
 | [prompting.md](./prompting.md) | [prompting.go](../prompting.go) | System prompt composition, modes, and injection strategy |

@@ -21,8 +21,10 @@ agent/
 ├── discord.go                 # Discord runtime, command/mention handlers, session manager
 ├── memory.go                  # MemoryClient, record tool, auto-recall, configureMemory
 ├── prompting.go               # System prompt builder (SectionedPromptBuilder)
+├── compaction.go              # ConversationState, rolling summarization, compaction logic
 ├── main_test.go               # Unit tests for tools + dispatch
 ├── memory_test.go             # Unit tests for MemoryClient, record tool, and auto-recall
+├── compaction_test.go         # Unit tests for compaction types, helpers, and HTTP logic
 ├── main_integration_test.go   # Live Vultr integration tests
 ├── main_delegation_harness_integration_test.go # Delegation policy harness (opt-in E2E)
 └── specs/
@@ -54,6 +56,9 @@ agent/
 | `summarizeMemories` | `memory.go` | Direct HTTP POST to chat completions (bypasses `runInferenceWithModel`) to produce compact summary of memory items |
 | `recordFunction` | `memory.go` | Tool handler for `record`; stores user-provided content via `MemoryClient.AddItem` |
 | `recallFunction` | `memory.go` | Tool handler for `recall`; searches memory and returns full verbatim results |
+| `ConversationState` | `compaction.go` | Tracks `[]ChatMessage`, rolling `Summary`, and cumulative `SizeBytes`; replaces raw slices throughout the agent loop |
+| `compactConversation` | `compaction.go` | Checks threshold, finds safe split, summarizes prefix, truncates history; non-fatal on error |
+| `summarizeConversation` | `compaction.go` | Direct HTTP POST to chat completions for conversation prefix summarization (bypasses `runInferenceWithModel`) |
 
 ## End-to-End Flow
 
@@ -169,6 +174,74 @@ Set `MEMORY_ENABLED=false` (or `0` / `no`) to disable the subsystem entirely:
 2. `agent.memoryClient` remains nil
 3. `record` and `recall` tools are not registered
 4. Auto-recall injects no `[Memory]` section
+
+## Compaction Subsystem
+
+The compaction subsystem prevents unbounded growth of the in-memory conversation history by rolling-summarizing older messages when the history exceeds a size threshold.
+
+### Types and Constants (`compaction.go`)
+
+| Symbol | Value | Purpose |
+|--------|-------|---------|
+| `compactionSizeThreshold` | 12000 bytes | Trigger compaction when `SizeBytes` exceeds this |
+| `compactionKeepMessages` | 10 | Number of recent messages to retain after compaction |
+| `compactionTimeout` | 20s | HTTP timeout for summarization calls |
+| `compactionMaxTokens` | 512 | Token budget for the summarization model |
+
+`ConversationState` replaces the raw `[]ChatMessage` slice throughout the codebase:
+
+```go
+type ConversationState struct {
+    Messages  []ChatMessage
+    Summary   string   // Rolling summary of compacted history
+    SizeBytes int      // Cumulative byte count of message text content
+}
+```
+
+### Turn-Boundary Safety
+
+`findCompactionSplitIndex` ensures tool call/tool result pairs are never orphaned by the split. Starting from `len(messages) - keepCount`, it walks backward until it finds a `user`-role message boundary. If no safe split exists (e.g., the whole conversation fits within `keepCount`), it returns 0 and compaction is skipped.
+
+### Compaction Flow
+
+```text
+compactConversation(ctx, cs)
+  │
+  ├─ NeedsCompaction? (SizeBytes > threshold) → no: return
+  ├─ findCompactionSplitIndex → 0: return (no safe split)
+  ├─ serializeMessagesForSummary(cs.Messages[:splitIdx])
+  ├─ summarizeConversation(ctx, cs.Summary, serialized)
+  │     → direct POST /chat/completions (bypasses runInference to avoid recursion)
+  │     → on HTTP error: emitServerEvent WARN + return nil (non-fatal)
+  ├─ cs.Messages = cs.Messages[splitIdx:]
+  ├─ cs.Summary = newSummary
+  ├─ cs.SizeBytes = recalculated from kept messages
+  └─ emitServerEvent compaction.completed with stats
+```
+
+### Summary Injection
+
+Before each inference call, callers set the summary in context:
+
+```go
+inferCtx := withConversationSummary(ctx, cs.Summary)
+runInference(inferCtx, cs.Messages)
+```
+
+`withSystemPrompt` reads the summary from context via `conversationSummaryFromContext(ctx)` and appends it as a `[Conversation Summary]` section after `[Memory]`.
+
+### Integration Points
+
+| Location | Change |
+|----------|--------|
+| `Agent.Run()` | Uses `ConversationState`; calls `compactConversation` after each user-turn completes |
+| `HandleUserMessageProgressive` | Accepts/returns `*ConversationState`; passes `inferCtx` with summary; calls `compactConversation` after tool loop |
+| `HandleUserMessage` | Wrapper — same signature change as `HandleUserMessageProgressive` |
+| `discordSessionState` | `cs *ConversationState` replaces `conversation []ChatMessage` |
+
+### Non-Fatal Failure
+
+Compaction failure (e.g., network error during summarization) emits a `compaction.failed` warning event and returns `nil`. The full conversation history is retained and the agent continues normally.
 
 ## Design Constraints
 
