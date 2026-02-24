@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -259,7 +258,7 @@ func TestAddItem_ErrorOnServerFailure(t *testing.T) {
 // --- Search tests ---
 
 func TestSearch_ReturnsResults(t *testing.T) {
-	searchResp := `{"results":[{"id":"1","content":"the cat sat on the mat"},{"id":"2","content":"cats are great"}]}`
+	searchResp := `{"results":[{"id":"1","content":"the cat sat on the mat","created":"2026-01-15T10:30:00Z"},{"id":"2","content":"cats are great","created":"2026-02-01T08:00:00Z"}]}`
 	srv, h := newMockServer([]mockResponse{
 		{status: 200, body: searchResp},
 	})
@@ -279,11 +278,11 @@ func TestSearch_ReturnsResults(t *testing.T) {
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
 	}
-	if results[0] != "the cat sat on the mat" {
-		t.Errorf("results[0] = %q, want %q", results[0], "the cat sat on the mat")
+	if results[0].Content != "the cat sat on the mat" {
+		t.Errorf("results[0].Content = %q, want %q", results[0].Content, "the cat sat on the mat")
 	}
-	if results[1] != "cats are great" {
-		t.Errorf("results[1] = %q, want %q", results[1], "cats are great")
+	if results[1].Content != "cats are great" {
+		t.Errorf("results[1].Content = %q, want %q", results[1].Content, "cats are great")
 	}
 
 	// Verify request
@@ -324,7 +323,7 @@ func TestSearch_EmptyResults(t *testing.T) {
 }
 
 func TestSearch_SkipsEmptyContent(t *testing.T) {
-	searchResp := `{"results":[{"id":"1","content":""},{"id":"2","content":"valid memory"}]}`
+	searchResp := `{"results":[{"id":"1","content":""},{"id":"2","content":"valid memory","created":"2026-02-10T12:00:00Z"}]}`
 	srv, _ := newMockServer([]mockResponse{
 		{status: 200, body: searchResp},
 	})
@@ -342,8 +341,8 @@ func TestSearch_SkipsEmptyContent(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result (empty content filtered), got %d", len(results))
 	}
-	if results[0] != "valid memory" {
-		t.Errorf("results[0] = %q, want %q", results[0], "valid memory")
+	if results[0].Content != "valid memory" {
+		t.Errorf("results[0].Content = %q, want %q", results[0].Content, "valid memory")
 	}
 }
 
@@ -678,7 +677,7 @@ func TestFormatMemoryContent(t *testing.T) {
 // --- Auto-recall tests ---
 
 func TestAutoRecall_InjectsMemories(t *testing.T) {
-	searchResp := `{"results":[{"id":"1","content":"user prefers Go"},{"id":"2","content":"user dislikes Java"}]}`
+	searchResp := `{"results":[{"id":"1","content":"user prefers Go","created":"2026-02-01T10:00:00Z"},{"id":"2","content":"user dislikes Java","created":"2026-02-01T10:00:00Z"}]}`
 	summarizeResp := `{"id":"test","choices":[{"index":0,"message":{"role":"assistant","content":"- User prefers Go\n- User dislikes Java"}}]}`
 
 	srv, _ := newPathRoutingServer(map[string][]mockResponse{
@@ -1072,7 +1071,7 @@ func TestMemoryRoundTrip_Integration(t *testing.T) {
 
 	// Step 3: search for the item. Vector indexing may not be instantaneous;
 	// retry a few times with a short back-off before failing.
-	var results []string
+	var results []SearchResult
 	const maxAttempts = 5
 	for i := range maxAttempts {
 		results, err = client.Search(ctx, "what color is the sky")
@@ -1088,7 +1087,14 @@ func TestMemoryRoundTrip_Integration(t *testing.T) {
 	}
 
 	// Step 4: verify the stored content appears in the results.
-	if !slices.Contains(results, content) {
+	found := false
+	for _, r := range results {
+		if r.Content == content {
+			found = true
+			break
+		}
+	}
+	if !found {
 		t.Errorf("expected %q in search results; got: %v", content, results)
 	}
 }
@@ -1195,7 +1201,7 @@ func TestSummarizeMemories_Success(t *testing.T) {
 
 func TestSummarizeMemories_FallbackOnError(t *testing.T) {
 	// Search returns results, but summarization returns 500 → fallback to truncation.
-	searchResp := `{"results":[{"id":"1","content":"user prefers Go programming language"},{"id":"2","content":"user dislikes Java"}]}`
+	searchResp := `{"results":[{"id":"1","content":"user prefers Go programming language","created":"2026-02-01T10:00:00Z"},{"id":"2","content":"user dislikes Java","created":"2026-02-01T10:00:00Z"}]}`
 
 	srv, _ := newPathRoutingServer(map[string][]mockResponse{
 		"/vector_store": {{status: 200, body: searchResp}},
@@ -1232,7 +1238,7 @@ func TestSummarizeMemories_FallbackOnError(t *testing.T) {
 // --- Recall tool tests ---
 
 func TestRecallTool_ReturnsFullContent(t *testing.T) {
-	searchResp := `{"results":[{"id":"1","content":"full memory one"},{"id":"2","content":"full memory two"}]}`
+	searchResp := `{"results":[{"id":"1","content":"full memory one","created":"2026-02-20T10:00:00Z"},{"id":"2","content":"full memory two","created":"2026-02-20T10:00:00Z"}]}`
 	srv, _ := newMockServer([]mockResponse{
 		{status: 200, body: searchResp},
 	})
@@ -1250,9 +1256,17 @@ func TestRecallTool_ReturnsFullContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recallFunction returned error: %v", err)
 	}
-	expected := "full memory one\n\n---\n\nfull memory two"
-	if result != expected {
-		t.Errorf("result = %q, want %q", result, expected)
+	if !strings.Contains(result, "full memory one") {
+		t.Errorf("result missing 'full memory one'; got: %q", result)
+	}
+	if !strings.Contains(result, "full memory two") {
+		t.Errorf("result missing 'full memory two'; got: %q", result)
+	}
+	if !strings.Contains(result, "\n\n---\n\n") {
+		t.Errorf("result missing separator; got: %q", result)
+	}
+	if !strings.Contains(result, "(stored ") {
+		t.Errorf("result missing age annotation; got: %q", result)
 	}
 }
 
@@ -1335,5 +1349,150 @@ func TestTruncateMemories_LongItems(t *testing.T) {
 	}
 	if !strings.HasSuffix(result, "...") {
 		t.Errorf("expected truncated item to end with '...'; got: %q", result)
+	}
+}
+
+// --- relativeAge tests ---
+
+func TestRelativeAge(t *testing.T) {
+	now := time.Date(2026, 2, 24, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name string
+		t    time.Time
+		want string
+	}{
+		{"zero value", time.Time{}, ""},
+		{"just now (30s ago)", now.Add(-30 * time.Second), "just now"},
+		{"1 minute ago", now.Add(-1 * time.Minute), "1 minute ago"},
+		{"5 minutes ago", now.Add(-5 * time.Minute), "5 minutes ago"},
+		{"59 minutes ago", now.Add(-59 * time.Minute), "59 minutes ago"},
+		{"1 hour ago", now.Add(-1 * time.Hour), "1 hour ago"},
+		{"3 hours ago", now.Add(-3 * time.Hour), "3 hours ago"},
+		{"23 hours ago", now.Add(-23 * time.Hour), "23 hours ago"},
+		{"1 day ago", now.Add(-24 * time.Hour), "1 day ago"},
+		{"5 days ago", now.Add(-5 * 24 * time.Hour), "5 days ago"},
+		{"1 week ago", now.Add(-7 * 24 * time.Hour), "1 week ago"},
+		{"3 weeks ago", now.Add(-21 * 24 * time.Hour), "3 weeks ago"},
+		{"1 month ago", now.Add(-35 * 24 * time.Hour), "1 month ago"},
+		{"6 months ago", now.Add(-180 * 24 * time.Hour), "6 months ago"},
+		{"1 year ago", now.Add(-400 * 24 * time.Hour), "1 year ago"},
+		{"2 years ago", now.Add(-750 * 24 * time.Hour), "2 years ago"},
+		{"future timestamp", now.Add(1 * time.Hour), ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := relativeAge(tt.t, now)
+			if got != tt.want {
+				t.Errorf("relativeAge() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// --- Recall age annotation tests ---
+
+func TestRecallTool_IncludesAgeAnnotation(t *testing.T) {
+	// Use a timestamp ~3 weeks old relative to now.
+	threeWeeksAgo := time.Now().Add(-21 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	searchResp := fmt.Sprintf(`{"results":[{"id":"1","content":"discord user @henry is a Cubs fan","created":"%s"}]}`, threeWeeksAgo)
+	srv, _ := newMockServer([]mockResponse{
+		{status: 200, body: searchResp},
+	})
+	defer srv.Close()
+
+	client := NewMemoryClient(srv.URL, "test-key", srv.Client())
+	client.mu.Lock()
+	client.collectionID = "col-abc"
+	client.mu.Unlock()
+
+	agent := &Agent{memoryClient: client}
+
+	input, _ := json.Marshal(RecallInput{Query: "@henry"})
+	result, err := agent.recallFunction(json.RawMessage(input))
+	if err != nil {
+		t.Fatalf("recallFunction returned error: %v", err)
+	}
+	if !strings.Contains(result, "(stored 3 weeks ago)") {
+		t.Errorf("expected '(stored 3 weeks ago)' in result; got: %q", result)
+	}
+	if !strings.Contains(result, "discord user @henry is a Cubs fan") {
+		t.Errorf("expected content in result; got: %q", result)
+	}
+}
+
+func TestRecallTool_MissingCreatedOmitsAge(t *testing.T) {
+	searchResp := `{"results":[{"id":"1","content":"some memory without timestamp"}]}`
+	srv, _ := newMockServer([]mockResponse{
+		{status: 200, body: searchResp},
+	})
+	defer srv.Close()
+
+	client := NewMemoryClient(srv.URL, "test-key", srv.Client())
+	client.mu.Lock()
+	client.collectionID = "col-abc"
+	client.mu.Unlock()
+
+	agent := &Agent{memoryClient: client}
+
+	input, _ := json.Marshal(RecallInput{Query: "test"})
+	result, err := agent.recallFunction(json.RawMessage(input))
+	if err != nil {
+		t.Fatalf("recallFunction returned error: %v", err)
+	}
+	if strings.Contains(result, "(stored") {
+		t.Errorf("expected no age annotation when created is missing; got: %q", result)
+	}
+	if result != "some memory without timestamp" {
+		t.Errorf("result = %q, want %q", result, "some memory without timestamp")
+	}
+}
+
+func TestSearch_ParsesCreatedTimestamp(t *testing.T) {
+	searchResp := `{"results":[{"id":"1","content":"test memory","created":"2026-01-15T10:30:00Z"}]}`
+	srv, _ := newMockServer([]mockResponse{
+		{status: 200, body: searchResp},
+	})
+	defer srv.Close()
+
+	client := NewMemoryClient(srv.URL, "test-key", srv.Client())
+	client.mu.Lock()
+	client.collectionID = "col-xyz"
+	client.mu.Unlock()
+
+	results, err := client.Search(context.Background(), "test")
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	expected := time.Date(2026, 1, 15, 10, 30, 0, 0, time.UTC)
+	if !results[0].Created.Equal(expected) {
+		t.Errorf("results[0].Created = %v, want %v", results[0].Created, expected)
+	}
+}
+
+func TestSearch_InvalidCreatedLeavesZeroTime(t *testing.T) {
+	searchResp := `{"results":[{"id":"1","content":"test memory","created":"not-a-date"}]}`
+	srv, _ := newMockServer([]mockResponse{
+		{status: 200, body: searchResp},
+	})
+	defer srv.Close()
+
+	client := NewMemoryClient(srv.URL, "test-key", srv.Client())
+	client.mu.Lock()
+	client.collectionID = "col-xyz"
+	client.mu.Unlock()
+
+	results, err := client.Search(context.Background(), "test")
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if !results[0].Created.IsZero() {
+		t.Errorf("expected zero time for invalid created; got %v", results[0].Created)
 	}
 }
