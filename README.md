@@ -1,9 +1,11 @@
 # Agent
 
 > [!CAUTION]
+> USE AT YOUR OWN RISK.
+>
 > This is an experimental coding agent. Behavior, tool contracts, and model defaults may change without notice.
 >
-> Use in a sandboxed workspace and review file edits before applying in production environments.
+> It is strongly recommended to only run in a sandboxed workspace, and extreme care should be exercised when managing access rules.
 
 ## Overview
 
@@ -11,17 +13,28 @@ This project is a lightweight AI coding agent in Go with a terminal REPL loop an
 
 It is designed around three practical goals:
 
-1. Simple local workflow: run one binary, chat in terminal.
-2. Tool-capable agent: model can call filesystem tools (`read_file`, `list_files`, `edit_file`).
-3. Provider-backed inference: chat completions are sent to Vultr Inference.
+1. Lightweight operation: runs comfortably on cheap hardware (e.g. VPS with 1 vCPU & 1 GB RAM)
+2. Simple local workflow: run one binary, chat in terminal
+3. Tool-capable agent: model can call simple, composable tools (e.g. "record"/"recall" facts to/from a vector DB)
+4. Third-party messaging: agent can receive messages via, e.g., a Discord bot
+5. Provider-backed inference: chat completions are sent to, e.g.,  Vultr Inference
 
 ## Architecture
 
 ```text
 agent/
-├── main.go                    # Agent loop, Vultr chat completion client, tool dispatch
-├── main_test.go               # Unit tests for tools and dispatch behavior
-├── main_integration_test.go   # Real API integration tests (requires credentials)
+├── main.go                    # Agent runtime, inference client, tool definitions
+├── discord.go                 # Discord runtime, command/mention handlers, session manager
+├── memory.go                  # MemoryClient, remember tool, auto-recall, configureMemory
+├── prompting.go               # System prompt builder (SectionedPromptBuilder)
+├── main_test.go               # Unit tests for tools + dispatch
+├── discord_test.go            # Unit tests for Discord splitting, sessions, progressive send
+├── memory_test.go             # Unit tests for MemoryClient, remember tool, and auto-recall
+├── prompting_test.go          # Unit tests for prompt builder modes and injection
+├── main_integration_test.go   # Live Vultr integration tests
+├── main_delegation_harness_integration_test.go # Delegation policy harness (opt-in E2E)
+├── scripts/
+│   └── run-delegation-harness.sh
 └── specs/
     └── README.md              # Specs index
 ```
@@ -31,9 +44,11 @@ agent/
 | Component | Description |
 |-----------|-------------|
 | Agent loop | Reads user input, sends conversation to model, executes requested tools, continues until completion |
-| Inference client | Calls `POST /chat/completions` on Vultr Inference using `kimi-k2-instruct` (+ delegated `gpt-oss-120b` reasoning tool) |
+| Inference client | Calls `POST /chat/completions` on Vultr Inference using, by default, `kimi-k2-instruct` (+ delegated `gpt-oss-120b` reasoning tool) |
 | Tool system | Defines tool metadata + JSON schema and executes tool calls from model responses |
 | File tools | `read_file`, `list_files`, `edit_file` for workspace interaction |
+| Reasoning delegation | `delegate_reasoning` dispatches sub-problems to, e.g., `gpt-oss-120b` |
+| Memory tools | `remember` and `recall` for durable semantic memory via Vultr vector store (when enabled) |
 
 ## Requirements
 
@@ -58,11 +73,14 @@ Environment variables:
 - `AGENT_PERSONA` (optional): inline persona text for the system prompt
 - `AGENT_PERSONA_FILE` (optional): file path for persona text (takes precedence over `AGENT_PERSONA`)
 - `AGENT_PROMPT_MAX_PERSONA_CHARS` (optional): max persona characters included in prompt (default: `600`)
+- `MEMORY_ENABLED` (optional): set to `false`, `0`, or `no` to disable durable memory (default: enabled)
+- `MEMORY_COLLECTION_NAME` (optional): Vultr vector store collection name (default: `agent-memory`)
 
-Model behavior is fixed:
+Model behavior is fixed (for now):
 
-- Primary model: `kimi-k2-instruct`
-- Delegated reasoning model: `gpt-oss-120b` via `delegate_reasoning` tool
+- Primary model: `kimi-k2-instruct` (max tokens: `4096`)
+- Delegated reasoning model: `gpt-oss-120b` via `delegate_reasoning` tool (max tokens: `1024`)
+- Memory summarization model: `gpt-oss-120b` (max tokens: `256`)
 
 ## Building
 
@@ -157,4 +175,17 @@ VULTR_API_KEY="your-token" ./scripts/run-delegation-harness.sh
 
 Design docs are indexed in `specs/README.md`.
 
-Current status: the index references additional spec files that are not yet present in `specs/`.
+## Clear TODOs
+
+ - [ ] Set up guides for supported inference providers & messaging platforms
+ - [ ] Internet connectivity of some kind (e.g. a web search tool call)
+ - [ ] Agent self-direction (e.g. a "Heartbeat" cron job that kicks of a scheduled agent loop)
+
+## Potential Future Features
+
+- [ ] Configuring inference providers beyond Vultr (e.g. OpenRouter)
+- [ ] Supporting messaging platforms besides Discord (e.g. Matrix)
+- [ ] A "Work Delegation" tool call that can kick off other agents (e.g. Claude Code) 
+- [ ] Export pipelines (e.g. creating notes/todos in a third-party app)
+- [ ] Import pipelines (e.g. receiving agent tasks through Raycast plugin or Siri or w/e)
+- [ ] Agent "enrichment" activities for creating self-directed memories (e.g. an RSS feed)
