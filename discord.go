@@ -19,6 +19,8 @@ const (
 	discordMessageLimit     = 2000
 	discordSplitMarker      = "<<MSG_SPLIT>>"
 	discordTypingInterval   = 8 * time.Second
+
+	discordBotInvitePermissions = 563465349975104
 )
 
 type discordSessionState struct {
@@ -216,6 +218,13 @@ func runDiscordBot(ctx context.Context) error {
 		if !isDM && !messageMentionsUser(m.Message, botUserID) {
 			return
 		}
+
+		if isDM && containsDiscordInvite(m.Content) {
+			url := botInviteURL(applicationID, discordBotInvitePermissions)
+			_, _ = s.ChannelMessageSendReply(m.ChannelID, "To add me to your server, use this link:\n"+url, m.Reference())
+			return
+		}
+
 		sessionKey := discordConversationKey(m.ChannelID, m.Author.ID)
 		source := "mention"
 		if isDM {
@@ -638,6 +647,17 @@ func csvToSet(raw string) map[string]struct{} {
 		out[value] = struct{}{}
 	}
 	return out
+}
+
+func containsDiscordInvite(text string) bool {
+	lower := strings.ToLower(text)
+	return strings.Contains(lower, "discord.gg/") ||
+		strings.Contains(lower, "discord.com/invite/") ||
+		strings.Contains(lower, "discordapp.com/invite/")
+}
+
+func botInviteURL(appID string, permissions int) string {
+	return fmt.Sprintf("https://discord.com/oauth2/authorize?client_id=%s&scope=bot+applications.commands&permissions=%d", appID, permissions)
 }
 
 func respondInteractionError(s *discordgo.Session, interaction *discordgo.Interaction, message string) {

@@ -119,6 +119,36 @@ func TestMessageMentionsUser(t *testing.T) {
 	}
 }
 
+func TestContainsDiscordInvite(t *testing.T) {
+	cases := []struct {
+		input string
+		want  bool
+	}{
+		{"https://discord.gg/abc123", true},
+		{"Check out discord.gg/myserver", true},
+		{"https://discord.com/invite/abc123", true},
+		{"https://discordapp.com/invite/abc123", true},
+		{"DISCORD.GG/UPPER", true},
+		{"hello world", false},
+		{"discord.gg", false}, // no trailing slash + code
+		{"", false},
+	}
+	for _, tc := range cases {
+		got := containsDiscordInvite(tc.input)
+		if got != tc.want {
+			t.Errorf("containsDiscordInvite(%q) = %v, want %v", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestBotInviteURL(t *testing.T) {
+	url := botInviteURL("123456", discordBotInvitePermissions)
+	want := "https://discord.com/oauth2/authorize?client_id=123456&scope=bot+applications.commands&permissions=563465349975104"
+	if url != want {
+		t.Fatalf("botInviteURL mismatch:\n got: %s\nwant: %s", url, want)
+	}
+}
+
 func TestCSVToSet(t *testing.T) {
 	set := csvToSet(" a, ,b,c ")
 	if len(set) != 3 {
