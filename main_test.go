@@ -804,3 +804,130 @@ func TestHandleUserMessageProgressive_EmitsPartsInOrder(t *testing.T) {
 		t.Fatalf("expected 4 messages in conversation, got %d", len(updatedCS.Messages))
 	}
 }
+
+func TestRunInference_UsesRAGEndpoint(t *testing.T) {
+	var seenPath string
+	var seenBody ChatCompletionRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &seenBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"x","model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	defer server.Close()
+
+	client := NewMemoryClient(server.URL, "key", server.Client())
+	client.mu.Lock()
+	client.collectionID = "col-123"
+	client.mu.Unlock()
+
+	agent := NewAgent(server.URL, "key", server.Client(), nil, nil)
+	agent.memoryClient = client
+
+	_, err := agent.runInference(context.Background(), []ChatMessage{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("runInference: %v", err)
+	}
+	if seenPath != "/chat/completions/RAG" {
+		t.Fatalf("expected path /chat/completions/RAG, got %q", seenPath)
+	}
+	if seenBody.Collection != "col-123" {
+		t.Fatalf("expected collection %q, got %q", "col-123", seenBody.Collection)
+	}
+}
+
+func TestRunInference_NoRAGWithoutMemory(t *testing.T) {
+	var seenPath string
+	var seenBody ChatCompletionRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &seenBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"x","model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	defer server.Close()
+
+	agent := NewAgent(server.URL, "key", server.Client(), nil, nil)
+
+	_, err := agent.runInference(context.Background(), []ChatMessage{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("runInference: %v", err)
+	}
+	if seenPath != "/chat/completions" {
+		t.Fatalf("expected path /chat/completions, got %q", seenPath)
+	}
+	if seenBody.Collection != "" {
+		t.Fatalf("expected no collection, got %q", seenBody.Collection)
+	}
+}
+
+func TestRunInferenceStream_UsesRAGEndpoint(t *testing.T) {
+	var seenPath string
+	var seenBody ChatCompletionRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &seenBody)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	client := NewMemoryClient(server.URL, "key", server.Client())
+	client.mu.Lock()
+	client.collectionID = "col-123"
+	client.mu.Unlock()
+
+	agent := NewAgent(server.URL, "key", server.Client(), nil, nil)
+	agent.memoryClient = client
+
+	_, err := agent.runInferenceStream(context.Background(), []ChatMessage{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("runInferenceStream: %v", err)
+	}
+	if seenPath != "/chat/completions/RAG" {
+		t.Fatalf("expected path /chat/completions/RAG, got %q", seenPath)
+	}
+	if seenBody.Collection != "col-123" {
+		t.Fatalf("expected collection %q, got %q", "col-123", seenBody.Collection)
+	}
+}
+
+func TestRunInference_DelegationUsesNonRAGPath(t *testing.T) {
+	var seenPath string
+	var seenBody ChatCompletionRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &seenBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"x","model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"reasoned"}}]}`))
+	}))
+	defer server.Close()
+
+	client := NewMemoryClient(server.URL, "key", server.Client())
+	client.mu.Lock()
+	client.collectionID = "col-123"
+	client.mu.Unlock()
+
+	agent := NewAgent(server.URL, "key", server.Client(), nil, nil)
+	agent.memoryClient = client
+
+	_, err := agent.runInferenceWithModel(context.Background(), Reasoning, []ChatMessage{
+		{Role: "system", Content: "think"},
+		{Role: "user", Content: "why?"},
+	}, nil, reasoningMaxTokens, PromptModeMinimal)
+	if err != nil {
+		t.Fatalf("runInferenceWithModel: %v", err)
+	}
+	if seenPath != "/chat/completions" {
+		t.Fatalf("expected path /chat/completions, got %q", seenPath)
+	}
+	if seenBody.Collection != "" {
+		t.Fatalf("expected no collection for minimal mode, got %q", seenBody.Collection)
+	}
+}

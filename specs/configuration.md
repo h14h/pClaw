@@ -28,7 +28,7 @@ Precedence is:
 | `AGENT_PERSONA` | No | built-in default | Inline persona text for system prompt composition |
 | `AGENT_PERSONA_FILE` | No | empty | Path to persona text file; when readable and non-empty, overrides `AGENT_PERSONA` |
 | `AGENT_PROMPT_MAX_PERSONA_CHARS` | No | `600` | Character cap applied to persona text embedded in system prompt |
-| `MEMORY_ENABLED` | No | `true` (enabled) | Set to `false`, `0`, or `no` to disable durable memory (no `record`/`recall` tools, no auto-recall) |
+| `MEMORY_ENABLED` | No | `true` (enabled) | Set to `false`, `0`, or `no` to disable durable memory (no `record`/`recall` tools, no RAG routing) |
 | `MEMORY_COLLECTION_NAME` | No | `agent-memory` | Vultr vector store collection name used for semantic memory |
 
 Model selection is not environment-configurable.

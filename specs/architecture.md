@@ -19,11 +19,11 @@ implementations are all in `main.go`.
 agent/
 ├── main.go                    # Agent runtime, inference client, tool definitions
 ├── discord.go                 # Discord runtime, command/mention handlers, session manager
-├── memory.go                  # MemoryClient, record tool, auto-recall, configureMemory
+├── memory.go                  # MemoryClient, record/recall tools, configureMemory
 ├── prompting.go               # System prompt builder (SectionedPromptBuilder)
 ├── compaction.go              # ConversationState, rolling summarization, compaction logic
 ├── main_test.go               # Unit tests for tools + dispatch
-├── memory_test.go             # Unit tests for MemoryClient, record tool, and auto-recall
+├── memory_test.go             # Unit tests for MemoryClient and record/recall tools
 ├── compaction_test.go         # Unit tests for compaction types, helpers, and HTTP logic
 ├── main_integration_test.go   # Live Vultr integration tests
 ├── main_delegation_harness_integration_test.go # Delegation policy harness (opt-in E2E)
@@ -52,8 +52,6 @@ agent/
 | Startup wiring (`main`) | `main.go` | Reads env config, builds `Agent`, starts interactive session |
 | `MemoryClient` | `memory.go` | HTTP client for Vultr vector store; handles collection bootstrap, item add, search, list, delete item, delete collection |
 | `configureMemory` | `memory.go` | Reads `MEMORY_ENABLED`/`MEMORY_COLLECTION_NAME`, creates `MemoryClient`, bootstraps collection, sets `agent.memoryClient` |
-| `recallMemories` | `memory.go` | Performs semantic search, summarizes results via `summarizeMemories`, and formats as `[Memory]` system-prompt section |
-| `summarizeMemories` | `memory.go` | Direct HTTP POST to chat completions (bypasses `runInferenceWithModel`) to produce compact summary of memory items |
 | `recordFunction` | `memory.go` | Tool handler for `record`; stores user-provided content via `MemoryClient.AddItem` |
 | `recallFunction` | `memory.go` | Tool handler for `recall`; searches memory and returns full verbatim results |
 | `ConversationState` | `compaction.go` | Tracks `[]ChatMessage`, rolling `Summary`, and cumulative `SizeBytes`; replaces raw slices throughout the agent loop |
@@ -141,26 +139,13 @@ configureMemory(ctx, agent)
 
 Failures at any step are logged to stderr and the agent starts without memory.
 
-### Auto-Recall Flow
+### Server-Side RAG
 
-On every call to `withSystemPrompt` (which wraps every inference request):
+User-facing inference calls (`PromptModeFull` + active memory client) are routed to `POST /chat/completions/RAG` with the `collection` field set to the memory client's cached collection ID. Vultr performs retrieval server-side — searching the vector store and weaving context into the model's response automatically.
 
-```text
-withSystemPrompt(ctx, conversation, tools, mode)
-  │
-  ├─ Build base prompt from PromptBuilder
-  ├─ Extract last user message from conversation
-  ├─ recallMemories(ctx, query)
-  │     → MemoryClient.Search(ctx, query)
-  │     → POST /vector_store/{id}/search {"input": query}
-  │     → cap results to 10
-  │     → summarizeMemories(ctx, items)
-  │     │     → direct POST /chat/completions (Summarization model)
-  │     │     → bypasses runInferenceWithModel to avoid recursion
-  │     │     → on failure: fall back to truncation (80 chars per item)
-  │     → format summary as [Memory] section with recall tool hint
-  └─ Append [Memory] section to prompt (omitted on error or empty results)
-```
+Internal calls (delegated reasoning, compaction summarization) use `PromptModeMinimal` and always hit the standard `/chat/completions` endpoint, bypassing RAG.
+
+The `record` and `recall` tools remain available for explicit memory operations. The `recall` tool performs a direct vector store search and returns full verbatim results.
 
 ### Discord Sharing
 
@@ -173,7 +158,7 @@ Set `MEMORY_ENABLED=false` (or `0` / `no`) to disable the subsystem entirely:
 1. `configureMemory` returns immediately without creating a client
 2. `agent.memoryClient` remains nil
 3. `record` and `recall` tools are not registered
-4. Auto-recall injects no `[Memory]` section
+4. Inference calls use the standard `/chat/completions` endpoint (no RAG routing)
 
 ## Compaction Subsystem
 
