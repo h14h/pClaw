@@ -224,6 +224,9 @@ func TestAddItem_Success(t *testing.T) {
 	if body["content"] != "remember this" {
 		t.Errorf("body content = %q, want %q", body["content"], "remember this")
 	}
+	if body["description"] != "memory" {
+		t.Errorf("body description = %q, want %q", body["description"], "memory")
+	}
 }
 
 func TestAddItem_RequiresCollectionID(t *testing.T) {
@@ -564,6 +567,9 @@ func TestRecordTool_StoresContent(t *testing.T) {
 	}
 	if body["content"] != "discord user @henry is a Cubs fan" {
 		t.Errorf("body content = %q, want %q", body["content"], "discord user @henry is a Cubs fan")
+	}
+	if body["description"] != "memory" {
+		t.Errorf("body description = %q, want %q", body["description"], "memory")
 	}
 }
 

@@ -253,7 +253,7 @@ func (m *MemoryClient) AddItem(ctx context.Context, content string) error {
 		return err
 	}
 
-	body := map[string]string{"content": content}
+	body := map[string]string{"content": content, "description": "memory"}
 	respBody, status, err := m.doRequest(ctx, http.MethodPost, "/vector_store/"+id+"/items", body)
 	if err != nil {
 		return err
