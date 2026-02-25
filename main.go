@@ -55,6 +55,7 @@ type ToolDefinition struct {
 	Description string                 `json:"description"`
 	InputSchema map[string]interface{} `json:"input_schema"`
 	Function    func(input json.RawMessage) (string, error)
+	Async       bool
 }
 
 type Agent struct {
@@ -73,6 +74,7 @@ type Agent struct {
 	outputWriter        io.Writer
 	reasoningCallCount  int
 	memoryClient        *MemoryClient
+	asyncWg             sync.WaitGroup
 }
 
 type ServerEventLogMode string
@@ -496,6 +498,7 @@ func main() {
 	if err := agent.Run(context.Background()); err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
 	}
+	agent.WaitForAsync()
 }
 
 func NewAgent(
@@ -685,8 +688,21 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 
 		for _, toolCall := range message.ToolCalls {
-			toolResult := a.executeTool(ctx, toolCall)
-			cs.Append(toolResult)
+			if tool := a.findTool(toolCall.Function.Name); tool != nil && tool.Async {
+				a.asyncWg.Add(1)
+				go func(tc ChatToolCall) {
+					defer a.asyncWg.Done()
+					a.executeTool(ctx, tc)
+				}(toolCall)
+				cs.Append(ChatMessage{
+					Role:       "tool",
+					ToolCallID: toolCall.ID,
+					Content:    "Accepted.",
+				})
+			} else {
+				toolResult := a.executeTool(ctx, toolCall)
+				cs.Append(toolResult)
+			}
 		}
 		readUserInput = false
 	}
@@ -1157,6 +1173,19 @@ func streamContentToString(v interface{}) string {
 	}
 }
 
+func (a *Agent) WaitForAsync() {
+	a.asyncWg.Wait()
+}
+
+func (a *Agent) findTool(name string) *ToolDefinition {
+	for i := range a.tools {
+		if a.tools[i].Name == name {
+			return &a.tools[i]
+		}
+	}
+	return nil
+}
+
 func (a *Agent) executeTool(ctx context.Context, toolCall ChatToolCall) ChatMessage {
 	startedAt := time.Now()
 	rawArgs := "{}"
@@ -1401,8 +1430,21 @@ func (a *Agent) HandleUserMessageProgressive(
 
 		for _, toolCall := range message.ToolCalls {
 			toolCallsTotal++
-			toolResult := a.executeTool(ctx, toolCall)
-			cs.Append(toolResult)
+			if tool := a.findTool(toolCall.Function.Name); tool != nil && tool.Async {
+				a.asyncWg.Add(1)
+				go func(tc ChatToolCall) {
+					defer a.asyncWg.Done()
+					a.executeTool(ctx, tc)
+				}(toolCall)
+				cs.Append(ChatMessage{
+					Role:       "tool",
+					ToolCallID: toolCall.ID,
+					Content:    "Accepted.",
+				})
+			} else {
+				toolResult := a.executeTool(ctx, toolCall)
+				cs.Append(toolResult)
+			}
 		}
 	}
 

@@ -44,6 +44,8 @@ agent/
 | `runInferenceWithModel` | `main.go` | Non-streaming inference path and delegated reasoning calls |
 | `StatusIndicator` | `main.go` | Delayed ephemeral CLI progress indicator for wait states |
 | `executeTool` | `main.go` | Dispatches model tool calls to registered Go functions |
+| `asyncWg` | `main.go` | `sync.WaitGroup` tracking in-flight async (fire-and-forget) tool calls |
+| `WaitForAsync` | `main.go` | Drains `asyncWg`; called after `Run()` returns to ensure background tools complete before exit |
 | `delegateReasoning` | `main.go` | Delegates hard reasoning sub-tasks to `gpt-oss-120b` |
 | `HandleUserMessage` | `main.go` | Transport-agnostic single-turn model/tool loop for external adapters |
 | `HandleUserMessageProgressive` | `main.go` | Transport-agnostic loop variant that emits assistant text parts incrementally via callback |
@@ -104,6 +106,8 @@ agent/
 2. `readUserInput = false`: continue model-tool-model loop without asking user again
 
 This lets the model call tools, receive tool outputs, and produce a final response inside one turn.
+
+Tools marked with `Async: true` are dispatched in a background goroutine via `asyncWg`. The tool loop appends a synthetic `"Accepted."` result immediately and continues inference without waiting. See `specs/tool-system.md` § Async Tools for details.
 
 Reasoning call count is reset for each new user turn to bound delegated reasoning usage.
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -858,5 +859,228 @@ func TestHandleUserMessageProgressive_EmitsPartsInOrder(t *testing.T) {
 	}
 	if len(updatedCS.Messages) != 4 {
 		t.Fatalf("expected 4 messages in conversation, got %d", len(updatedCS.Messages))
+	}
+}
+
+func TestExecuteToolAsync_ReturnsSyntheticResult(t *testing.T) {
+	executed := make(chan struct{}, 1)
+	slowTool := ToolDefinition{
+		Name:        "slow_async",
+		Description: "Async tool that sleeps briefly.",
+		InputSchema: map[string]interface{}{"type": "object"},
+		Async:       true,
+		Function: func(input json.RawMessage) (string, error) {
+			time.Sleep(50 * time.Millisecond)
+			executed <- struct{}{}
+			return "done", nil
+		},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		var req ChatCompletionRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		hasToolResult := false
+		for _, msg := range req.Messages {
+			if msg.Role == "tool" {
+				hasToolResult = true
+				break
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if !hasToolResult {
+			_, _ = w.Write([]byte(`{"id":"x","model":"kimi-k2-instruct","choices":[{"index":0,"message":{"role":"assistant","tool_calls":[{"id":"call_async_1","type":"function","function":{"name":"slow_async","arguments":"{}"}}]}}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"x","model":"kimi-k2-instruct","choices":[{"index":0,"message":{"role":"assistant","content":"all done"}}]}`))
+	}))
+	defer server.Close()
+
+	agent := NewAgent(server.URL, "key", server.Client(), nil, []ToolDefinition{slowTool})
+	updatedCS, response, err := agent.HandleUserMessage(context.Background(), NewConversationState(), "test")
+	if err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if response != "all done" {
+		t.Fatalf("expected response %q, got %q", "all done", response)
+	}
+
+	// The tool result in conversation state should be the synthetic "Accepted." message.
+	var toolResultContent string
+	for _, msg := range updatedCS.Messages {
+		if msg.Role == "tool" {
+			if s, ok := msg.Content.(string); ok {
+				toolResultContent = s
+			}
+			break
+		}
+	}
+	if toolResultContent != "Accepted." {
+		t.Fatalf("expected synthetic result %q, got %q", "Accepted.", toolResultContent)
+	}
+
+	// Wait for the async goroutine to complete and verify it did execute.
+	agent.WaitForAsync()
+	select {
+	case <-executed:
+		// success — function ran
+	default:
+		t.Fatal("async function did not execute")
+	}
+}
+
+func TestExecuteToolSync_UnchangedBehavior(t *testing.T) {
+	echoTool := ToolDefinition{
+		Name:        "echo",
+		Description: "Echo input.",
+		InputSchema: map[string]interface{}{"type": "object"},
+		Async:       false,
+		Function: func(input json.RawMessage) (string, error) {
+			var payload struct {
+				Value string `json:"value"`
+			}
+			if err := json.Unmarshal(input, &payload); err != nil {
+				return "", err
+			}
+			return payload.Value, nil
+		},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		var req ChatCompletionRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		hasToolResult := false
+		for _, msg := range req.Messages {
+			if msg.Role == "tool" {
+				hasToolResult = true
+				break
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if !hasToolResult {
+			_, _ = w.Write([]byte(`{"id":"x","model":"kimi-k2-instruct","choices":[{"index":0,"message":{"role":"assistant","tool_calls":[{"id":"call_sync_1","type":"function","function":{"name":"echo","arguments":"{\"value\":\"hello\"}"}}]}}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"x","model":"kimi-k2-instruct","choices":[{"index":0,"message":{"role":"assistant","content":"done"}}]}`))
+	}))
+	defer server.Close()
+
+	agent := NewAgent(server.URL, "key", server.Client(), nil, []ToolDefinition{echoTool})
+	updatedCS, response, err := agent.HandleUserMessage(context.Background(), NewConversationState(), "test")
+	if err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if response != "done" {
+		t.Fatalf("expected final response %q, got %q", "done", response)
+	}
+
+	// The tool result should contain the actual function output, not "Accepted."
+	var toolResultContent string
+	for _, msg := range updatedCS.Messages {
+		if msg.Role == "tool" {
+			if s, ok := msg.Content.(string); ok {
+				toolResultContent = s
+			}
+			break
+		}
+	}
+	if toolResultContent != "hello" {
+		t.Fatalf("expected tool result %q, got %q", "hello", toolResultContent)
+	}
+	if len(updatedCS.Messages) != 4 {
+		t.Fatalf("expected 4 messages in conversation, got %d", len(updatedCS.Messages))
+	}
+}
+
+func TestExecuteToolAsync_ErrorNonFatal(t *testing.T) {
+	errorTool := ToolDefinition{
+		Name:        "failing_async",
+		Description: "Async tool that always errors.",
+		InputSchema: map[string]interface{}{"type": "object"},
+		Async:       true,
+		Function: func(input json.RawMessage) (string, error) {
+			return "", fmt.Errorf("something went wrong")
+		},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		var req ChatCompletionRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		hasToolResult := false
+		for _, msg := range req.Messages {
+			if msg.Role == "tool" {
+				hasToolResult = true
+				break
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if !hasToolResult {
+			_, _ = w.Write([]byte(`{"id":"x","model":"kimi-k2-instruct","choices":[{"index":0,"message":{"role":"assistant","tool_calls":[{"id":"call_err_1","type":"function","function":{"name":"failing_async","arguments":"{}"}}]}}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"x","model":"kimi-k2-instruct","choices":[{"index":0,"message":{"role":"assistant","content":"carried on"}}]}`))
+	}))
+	defer server.Close()
+
+	agent := NewAgent(server.URL, "key", server.Client(), nil, []ToolDefinition{errorTool})
+	sink := &capturedToolEventSink{}
+	agent.toolEventSink = sink
+
+	updatedCS, response, err := agent.HandleUserMessage(context.Background(), NewConversationState(), "test")
+	if err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if response != "carried on" {
+		t.Fatalf("expected response %q, got %q", "carried on", response)
+	}
+
+	// The tool result in conversation should be the synthetic "Accepted." message.
+	var toolResultContent string
+	for _, msg := range updatedCS.Messages {
+		if msg.Role == "tool" {
+			if s, ok := msg.Content.(string); ok {
+				toolResultContent = s
+			}
+			break
+		}
+	}
+	if toolResultContent != "Accepted." {
+		t.Fatalf("expected synthetic result %q, got %q", "Accepted.", toolResultContent)
+	}
+
+	// Wait for the async goroutine to complete, then check that a ToolEventFailed was emitted.
+	agent.WaitForAsync()
+	hasFailed := false
+	for _, evt := range sink.events {
+		if evt.Type == ToolEventFailed && evt.ToolName == "failing_async" {
+			hasFailed = true
+			break
+		}
+	}
+	if !hasFailed {
+		t.Fatal("expected ToolEventFailed for async tool error")
 	}
 }
