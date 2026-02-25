@@ -40,7 +40,7 @@ type Model string
 const (
 	Instruct      Model = "kimi-k2-instruct"
 	Reasoning     Model = "gpt-oss-120b"
-	Summarization Model = "gpt-oss-120b" // conversation compaction summarization
+	Summarization Model = "gpt-oss-120b" // memory recall summarization
 )
 
 type ToolEventLogMode string
@@ -418,7 +418,6 @@ type ChatCompletionRequest struct {
 	Stream     bool          `json:"stream,omitempty"`
 	Tools      []ChatTool    `json:"tools,omitempty"`
 	ToolChoice string        `json:"tool_choice,omitempty"`
-	Collection string        `json:"collection,omitempty"`
 }
 
 type ChatCompletionResponse struct {
@@ -721,6 +720,20 @@ func (a *Agent) withSystemPrompt(ctx context.Context, conversation []ChatMessage
 		ToolNames: toolNames,
 	})
 
+	// Extract the last user message as the recall query and inject memories.
+	query := ""
+	for i := len(conversation) - 1; i >= 0; i-- {
+		if conversation[i].Role == "user" {
+			if text, ok := conversation[i].Content.(string); ok {
+				query = strings.TrimSpace(text)
+			}
+			break
+		}
+	}
+	if recalled := a.recallMemories(ctx, query); recalled != "" {
+		prompt = prompt + "\n\n" + recalled
+	}
+
 	if summary := conversationSummaryFromContext(ctx); summary != "" {
 		prompt += "\n\n" + formatSection("Conversation Summary", summary)
 	}
@@ -767,14 +780,6 @@ func (a *Agent) runInferenceWithModel(
 		requestBody.ToolChoice = "auto"
 	}
 
-	endpoint := a.baseURL + "/chat/completions"
-	if mode == PromptModeFull && a.memoryClient != nil {
-		if colID, err := a.memoryClient.CollectionID(); err == nil {
-			requestBody.Collection = colID
-			endpoint = a.baseURL + "/chat/completions/RAG"
-		}
-	}
-
 	body, err := json.Marshal(requestBody)
 	if err != nil {
 		a.emitServerEvent(ctx, ServerLogLevelError, "llm.request.failed", "inference request failed", map[string]interface{}{
@@ -786,7 +791,7 @@ func (a *Agent) runInferenceWithModel(
 		return ChatMessage{}, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		a.emitServerEvent(ctx, ServerLogLevelError, "llm.request.failed", "inference request failed", map[string]interface{}{
 			"model":       string(model),
@@ -919,14 +924,6 @@ func (a *Agent) runInferenceStreamWithModel(
 		requestBody.ToolChoice = "auto"
 	}
 
-	endpoint := a.baseURL + "/chat/completions"
-	if mode == PromptModeFull && a.memoryClient != nil {
-		if colID, err := a.memoryClient.CollectionID(); err == nil {
-			requestBody.Collection = colID
-			endpoint = a.baseURL + "/chat/completions/RAG"
-		}
-	}
-
 	body, err := json.Marshal(requestBody)
 	if err != nil {
 		a.emitServerEvent(ctx, ServerLogLevelError, "llm.request.failed", "inference request failed", map[string]interface{}{
@@ -938,7 +935,7 @@ func (a *Agent) runInferenceStreamWithModel(
 		return ChatMessage{}, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		a.emitServerEvent(ctx, ServerLogLevelError, "llm.request.failed", "inference request failed", map[string]interface{}{
 			"model":       string(model),

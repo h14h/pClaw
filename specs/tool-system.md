@@ -237,13 +237,31 @@ Error conditions:
 
 If reflection or conversion fails, it falls back to a minimal `{ "type": "object" }` schema.
 
-## Server-Side RAG
+## Auto-Recall
 
-When `Agent.memoryClient` is non-nil, user-facing inference calls (`PromptModeFull`) are routed to `POST /chat/completions/RAG` with the `collection` field set to the memory client's cached collection ID. Vultr performs retrieval server-side, searching the vector store and weaving context into the model's response automatically.
+When `Agent.memoryClient` is non-nil, every call to `withSystemPrompt` automatically performs a semantic search against the memory store and injects an LLM-generated summary of matching memories into the system prompt.
 
-Internal calls (delegated reasoning, compaction) use `PromptModeMinimal` and always use the standard `/chat/completions` endpoint.
 
-The `record` and `recall` tools remain available for explicit memory operations.
+### Behavior
+
+1. The last user message in the conversation is extracted as the recall query.
+2. `Agent.recallMemories(ctx, query)` calls `MemoryClient.Search(ctx, query)`.
+3. Search results are capped to 10 items and fed to `Agent.summarizeMemories(ctx, items)`.
+4. `summarizeMemories` makes a direct HTTP POST to `/chat/completions` using the `Summarization` model (`gpt-oss-120b`), bypassing `runInferenceWithModel`/`withSystemPrompt` to avoid infinite recursion. Timeout is 15 seconds, max tokens is 256.
+5. The summary is formatted as a `[Memory]` section appended to the base system prompt, with a hint to use the `recall` tool for full details.
+6. On summarization failure, the system falls back to programmatic truncation (each item truncated to 80 characters).
+7. On search error or empty results the section is omitted; no crash or propagated error occurs.
+
+### Format
+
+```
+[Memory]
+- summarized fact one
+- summarized fact two
+Use the recall tool with a targeted query to retrieve full details.
+```
+
+This section appears after the standard prompt sections (`[Identity]`, `[Behavior]`, `[Tooling]`, `[Safety]`, `[Runtime]`) so that recalled context is available to the model on every turn.
 
 ## Current Gaps
 

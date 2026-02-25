@@ -57,7 +57,6 @@ func DefaultPromptConfig() PromptConfig {
 			"Use available tools deliberately and only when useful.",
 			"When tools are provided, choose the smallest sufficient action.",
 			"When tools are unavailable, answer directly without tool-call syntax.",
-			"Never emit XML or pseudo-XML tool-call tags (e.g. <record>, <tool_call>, <function_call>) in your text output. Always use the structured function-calling interface provided by the API.",
 			"Before calling a tool, send one brief plain-language status sentence about what you are about to do.",
 			"For delegate_reasoning, explicitly tell the user you are thinking and will return with a complete answer.",
 			"If multiple tools are needed, send at most one status sentence before the first tool call.",
