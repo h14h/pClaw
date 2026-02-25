@@ -134,41 +134,53 @@ func (s *LineServerEventSink) HandleServerEvent(_ context.Context, event ServerE
 		string(event.Level),
 		"event=" + formatLogValue(event.Event),
 	}
-	if event.TraceID != "" {
-		parts = append(parts, "trace="+formatLogValue(event.TraceID))
-	}
-	if event.TurnID != "" {
-		parts = append(parts, "turn="+formatLogValue(event.TurnID))
-	}
-	if event.SessionKey != "" {
-		parts = append(parts, "session="+formatLogValue(event.SessionKey))
-	}
-	if event.Message != "" {
-		parts = append(parts, "msg="+formatLogValue(event.Message))
-	}
-	if event.Source != "" {
-		parts = append(parts, "source="+formatLogValue(event.Source))
-	}
-	if event.ChannelID != "" {
-		parts = append(parts, "channel="+formatLogValue(event.ChannelID))
-	}
-	if event.UserIDHash != "" {
-		parts = append(parts, "user="+formatLogValue(event.UserIDHash))
-	}
-	if event.MessageID != "" {
-		parts = append(parts, "message_id="+formatLogValue(event.MessageID))
-	}
-	if event.InteractionID != "" {
-		parts = append(parts, "interaction_id="+formatLogValue(event.InteractionID))
-	}
-	if len(event.Fields) > 0 {
-		keys := make([]string, 0, len(event.Fields))
-		for k := range event.Fields {
-			keys = append(keys, k)
+
+	// In line mode (non-verbose), only emit the tool name and error fields.
+	// All other metadata and fields are verbose-only.
+	if !s.verboseContent {
+		if tool, ok := event.Fields["tool"]; ok {
+			parts = append(parts, "tool="+formatLogValue(tool))
 		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			parts = append(parts, k+"="+formatLogValue(event.Fields[k]))
+		if errVal, ok := event.Fields["error"]; ok {
+			parts = append(parts, "error="+formatLogValue(errVal))
+		}
+	} else {
+		if event.TraceID != "" {
+			parts = append(parts, "trace="+formatLogValue(event.TraceID))
+		}
+		if event.TurnID != "" {
+			parts = append(parts, "turn="+formatLogValue(event.TurnID))
+		}
+		if event.SessionKey != "" {
+			parts = append(parts, "session="+formatLogValue(event.SessionKey))
+		}
+		if event.Message != "" {
+			parts = append(parts, "msg="+formatLogValue(event.Message))
+		}
+		if event.Source != "" {
+			parts = append(parts, "source="+formatLogValue(event.Source))
+		}
+		if event.ChannelID != "" {
+			parts = append(parts, "channel="+formatLogValue(event.ChannelID))
+		}
+		if event.UserIDHash != "" {
+			parts = append(parts, "user="+formatLogValue(event.UserIDHash))
+		}
+		if event.MessageID != "" {
+			parts = append(parts, "message_id="+formatLogValue(event.MessageID))
+		}
+		if event.InteractionID != "" {
+			parts = append(parts, "interaction_id="+formatLogValue(event.InteractionID))
+		}
+		if len(event.Fields) > 0 {
+			keys := make([]string, 0, len(event.Fields))
+			for k := range event.Fields {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				parts = append(parts, k+"="+formatLogValue(event.Fields[k]))
+			}
 		}
 	}
 

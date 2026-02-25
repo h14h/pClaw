@@ -417,9 +417,7 @@ func TestServerEventSinkIncludesVerboseContent(t *testing.T) {
 }
 
 func TestLineServerEventSinkFormatsReadableLine(t *testing.T) {
-	buf := &bytes.Buffer{}
-	sink := &LineServerEventSink{out: buf}
-	sink.HandleServerEvent(context.Background(), ServerEvent{
+	event := ServerEvent{
 		TS:         time.Date(2026, 2, 21, 20, 22, 10, 104000000, time.UTC),
 		Level:      ServerLogLevelInfo,
 		Event:      "tool_call.succeeded",
@@ -434,26 +432,84 @@ func TestLineServerEventSinkFormatsReadableLine(t *testing.T) {
 			"duration_ms": 34,
 			"tool":        "read_file",
 		},
+	}
+
+	t.Run("line mode emits only event and key fields", func(t *testing.T) {
+		buf := &bytes.Buffer{}
+		sink := &LineServerEventSink{out: buf}
+		sink.HandleServerEvent(context.Background(), event)
+
+		out := strings.TrimSpace(buf.String())
+		for _, expected := range []string{
+			"2026-02-21T20:22:10.104Z INFO",
+			"event=tool_call.succeeded",
+			"tool=read_file",
+		} {
+			if !strings.Contains(out, expected) {
+				t.Fatalf("expected %q in output, got %q", expected, out)
+			}
+		}
+		for _, absent := range []string{
+			"trace=",
+			"turn=",
+			"session=",
+			"msg=",
+			"source=",
+			"channel=",
+			"user=",
+			"duration_ms=",
+		} {
+			if strings.Contains(out, absent) {
+				t.Fatalf("line mode should not contain %q, got %q", absent, out)
+			}
+		}
 	})
 
-	out := strings.TrimSpace(buf.String())
-	for _, expected := range []string{
-		"2026-02-21T20:22:10.104Z INFO",
-		"event=tool_call.succeeded",
-		"trace=trc_1",
-		"turn=turn_2",
-		"session=c:u",
-		"msg=\"tool execution succeeded\"",
-		"source=discord",
-		"channel=c",
-		"user=sha256:abcd",
-		"duration_ms=34",
-		"tool=read_file",
-	} {
-		if !strings.Contains(out, expected) {
-			t.Fatalf("expected %q in output, got %q", expected, out)
+	t.Run("verbose mode emits all fields", func(t *testing.T) {
+		buf := &bytes.Buffer{}
+		sink := &LineServerEventSink{out: buf, verboseContent: true}
+		sink.HandleServerEvent(context.Background(), event)
+
+		out := strings.TrimSpace(buf.String())
+		for _, expected := range []string{
+			"2026-02-21T20:22:10.104Z INFO",
+			"event=tool_call.succeeded",
+			"trace=trc_1",
+			"turn=turn_2",
+			"session=c:u",
+			"msg=\"tool execution succeeded\"",
+			"source=discord",
+			"channel=c",
+			"user=sha256:abcd",
+			"duration_ms=34",
+			"tool=read_file",
+		} {
+			if !strings.Contains(out, expected) {
+				t.Fatalf("expected %q in output, got %q", expected, out)
+			}
 		}
-	}
+	})
+
+	t.Run("line mode includes error field on failures", func(t *testing.T) {
+		buf := &bytes.Buffer{}
+		sink := &LineServerEventSink{out: buf}
+		sink.HandleServerEvent(context.Background(), ServerEvent{
+			TS:    time.Date(2026, 2, 21, 20, 22, 10, 104000000, time.UTC),
+			Level: ServerLogLevelError,
+			Event: "llm.request.failed",
+			Fields: map[string]interface{}{
+				"error": "connection refused",
+			},
+		})
+
+		out := strings.TrimSpace(buf.String())
+		if !strings.Contains(out, "event=llm.request.failed") {
+			t.Fatalf("expected event name in output, got %q", out)
+		}
+		if !strings.Contains(out, "error=\"connection refused\"") {
+			t.Fatalf("expected error field in output, got %q", out)
+		}
+	})
 }
 
 func TestEmitToolEventAlsoEmitsServerEvent(t *testing.T) {
