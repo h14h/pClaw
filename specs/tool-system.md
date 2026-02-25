@@ -228,6 +228,30 @@ Error conditions:
 2. Collection not initialized (EnsureCollection not called)
 3. HTTP errors from the vector store API
 
+## Async Tools
+
+Some tools are write-only side effects whose results the model never meaningfully branches on. These tools can be marked as fire-and-forget to avoid blocking the inference loop.
+
+### `Async` Field
+
+`ToolDefinition` has an `Async bool` field (not serialized to JSON — internal only). When `Async` is true:
+
+1. The tool loop launches `executeTool` in a background goroutine
+2. A synthetic `role="tool"` message with content `"Accepted."` is immediately appended to conversation state
+3. The model continues without waiting for the actual tool execution to complete
+4. Tool events (`tool_call.started`, `tool_call.succeeded`, `tool_call.failed`) are still emitted from the background goroutine
+5. Errors in async tools are non-fatal — they are emitted via `ToolEventFailed` but do not affect the conversation
+
+### Drain on Shutdown
+
+`Agent.asyncWg` (a `sync.WaitGroup`) tracks in-flight async tool calls. `Agent.WaitForAsync()` blocks until all background work completes. This is called after `Agent.Run()` returns in `main()` to ensure async tools finish before process exit.
+
+### Async-Enabled Tools
+
+| Tool | Rationale |
+|------|-----------|
+| `record` | Write-only memory storage; model never branches on the result |
+
 ## Schema Generation
 
 `GenerateSchema[T]` uses `github.com/invopop/jsonschema` with:

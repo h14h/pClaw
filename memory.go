@@ -514,6 +514,7 @@ func (a *Agent) recordToolDefinition() ToolDefinition {
 		Description: "Store exactly one atomic fact for future recall. Provide:\n\nsubject: the single, most specific noun phrase (e.g. @henry, cookbook app, Postgres)\nsubject_type: a lowercase, singular label (e.g. discord user, project, tool)\ndescriptor: a present-tense verb phrase starting with a verb (e.g. is a Cubs fan, releases every Thursday)\n\nThe system will automatically assemble them into the sentence \"<subject_type> <subject> <descriptor>\". Don't duplicate the type or subject in the descriptor.",
 		InputSchema: RecordInputSchema,
 		Function:    a.recordFunction,
+		Async:       true,
 	}
 }
 
