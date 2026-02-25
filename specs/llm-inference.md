@@ -29,7 +29,6 @@ Two models are used:
 | `stream` | bool | Set to `true` for primary CLI inference calls |
 | `tools` | `[]ChatTool` | Populated from registered agent tools |
 | `tool_choice` | string | Set to `"auto"` when tools are present |
-| `collection` | string | Vector store collection ID; set when routing to RAG endpoint |
 
 Authentication and content headers:
 
@@ -101,18 +100,6 @@ Discord adapter post-processing for emitted text parts:
 1. Honor explicit split markers (`<<MSG_SPLIT>>`) when present
 2. Enforce Discord hard per-message limits
 3. Use balanced boundary-aware fallback splitting when no markers are available
-
-## RAG Endpoint
-
-User-facing inference calls (`PromptModeFull` + active memory client) are routed to the server-side RAG endpoint:
-
-- Method: `POST`
-- Path: `/chat/completions/RAG`
-- The `collection` field is set to the memory client's cached collection ID
-
-This lets Vultr perform retrieval server-side — searching the vector store and weaving context into the model's response automatically — instead of client-side auto-recall.
-
-Internal calls (delegated reasoning, compaction summarization) use `PromptModeMinimal` and always hit the standard `/chat/completions` endpoint. The response and streaming formats are identical to the non-RAG path.
 
 ## Error Surface
 

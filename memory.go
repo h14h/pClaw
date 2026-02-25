@@ -189,13 +189,6 @@ func (m *MemoryClient) getCollectionID() (string, error) {
 	return id, nil
 }
 
-// CollectionID returns the cached collection ID, or an error if
-// EnsureCollection has not been called yet. This is used to populate the
-// `collection` field when routing requests to the RAG endpoint.
-func (m *MemoryClient) CollectionID() (string, error) {
-	return m.getCollectionID()
-}
-
 // --- Collection management ---
 
 // EnsureCollection resolves or creates a vector store collection by name.
@@ -365,6 +358,136 @@ func (m *MemoryClient) DeleteItem(ctx context.Context, itemID string) error {
 		return fmt.Errorf("memory client: delete item: status %d: %s", status, string(respBody))
 	}
 	return nil
+}
+
+// --- Auto-recall ---
+
+const (
+	summarizationTimeout  = 15 * time.Second
+	summarizationMaxTokens = 256
+	recallMaxSearchResults = 10
+	recallTruncateLen      = 80
+)
+
+// summarizeMemories makes a direct HTTP POST to the chat completions endpoint,
+// completely bypassing runInferenceWithModel/withSystemPrompt to avoid infinite
+// recursion. It returns a compact summary of the provided memory items.
+func (a *Agent) summarizeMemories(ctx context.Context, items []string) (string, error) {
+	timeoutCtx, cancel := context.WithTimeout(ctx, summarizationTimeout)
+	defer cancel()
+
+	userContent := strings.Join(items, "\n---\n")
+	reqBody := ChatCompletionRequest{
+		Model:     string(a.summarizationModel),
+		MaxTokens: summarizationMaxTokens,
+		Messages: []ChatMessage{
+			{
+				Role:    "system",
+				Content: "Summarize the following memory items into a compact bullet list. Each bullet should capture the key fact. Be concise.",
+			},
+			{
+				Role:    "user",
+				Content: userContent,
+			},
+		},
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("summarize memories: marshal: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(timeoutCtx, http.MethodPost, a.baseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("summarize memories: create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+a.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("summarize memories: request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("summarize memories: read response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("summarize memories: status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var completion ChatCompletionResponse
+	if err := json.Unmarshal(respBody, &completion); err != nil {
+		return "", fmt.Errorf("summarize memories: parse response: %w", err)
+	}
+	if completion.Error != nil && completion.Error.Message != "" {
+		return "", fmt.Errorf("summarize memories: api error: %s", completion.Error.Message)
+	}
+	if len(completion.Choices) == 0 {
+		return "", fmt.Errorf("summarize memories: no choices returned")
+	}
+
+	content, ok := completion.Choices[0].Message.Content.(string)
+	if !ok || strings.TrimSpace(content) == "" {
+		return "", fmt.Errorf("summarize memories: empty content")
+	}
+	return strings.TrimSpace(content), nil
+}
+
+// truncateMemories returns a bullet list where each item is truncated to
+// recallTruncateLen characters. Used as a fallback when summarization fails.
+func truncateMemories(items []string) string {
+	var b strings.Builder
+	for i, item := range items {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		trimmed := strings.TrimSpace(item)
+		if len(trimmed) > recallTruncateLen {
+			trimmed = trimmed[:recallTruncateLen] + "..."
+		}
+		b.WriteString("- ")
+		b.WriteString(trimmed)
+	}
+	return b.String()
+}
+
+// recallMemories performs a semantic search against the memory store using
+// the given query and returns a formatted [Memory] section string suitable for
+// appending to a system prompt. The raw results are summarized by an LLM; on
+// summarization failure it falls back to programmatic truncation. Returns an
+// empty string on error, when no memories are found, or when memoryClient is nil.
+func (a *Agent) recallMemories(ctx context.Context, query string) string {
+	if a.memoryClient == nil || strings.TrimSpace(query) == "" {
+		return ""
+	}
+	results, err := a.memoryClient.Search(ctx, query)
+	if err != nil || len(results) == 0 {
+		return ""
+	}
+
+	// Cap search results to bound summarization input size.
+	if len(results) > recallMaxSearchResults {
+		results = results[:recallMaxSearchResults]
+	}
+
+	// Extract plain content strings for summarization (no age annotations).
+	contents := make([]string, len(results))
+	for i, r := range results {
+		contents[i] = r.Content
+	}
+
+	summary, err := a.summarizeMemories(ctx, contents)
+	if err != nil {
+		// Fallback: programmatic truncation.
+		summary = truncateMemories(contents)
+	}
+
+	body := summary + "\nUse the recall tool with a targeted query to retrieve full details."
+	return formatSection("Memory", body)
 }
 
 // --- Record tool ---

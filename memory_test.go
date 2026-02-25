@@ -77,31 +77,6 @@ func newPathRoutingServer(routes map[string][]mockResponse) (*httptest.Server, m
 	return srv, handlers
 }
 
-// --- CollectionID tests ---
-
-func TestMemoryClient_CollectionID(t *testing.T) {
-	client := NewMemoryClient("http://example.com", "key", nil)
-
-	// Unset collectionID should return error.
-	_, err := client.CollectionID()
-	if err == nil {
-		t.Fatal("expected error for uninitialized collection, got nil")
-	}
-
-	// Set collectionID and verify getter returns it.
-	client.mu.Lock()
-	client.collectionID = "col-abc"
-	client.mu.Unlock()
-
-	id, err := client.CollectionID()
-	if err != nil {
-		t.Fatalf("CollectionID returned error: %v", err)
-	}
-	if id != "col-abc" {
-		t.Fatalf("expected %q, got %q", "col-abc", id)
-	}
-}
-
 // --- EnsureCollection tests ---
 
 func TestEnsureCollection_CreatesWhenMissing(t *testing.T) {
@@ -699,6 +674,88 @@ func TestFormatMemoryContent(t *testing.T) {
 	}
 }
 
+// --- Auto-recall tests ---
+
+func TestAutoRecall_InjectsMemories(t *testing.T) {
+	searchResp := `{"results":[{"id":"1","content":"user prefers Go","created":"2026-02-01T10:00:00Z"},{"id":"2","content":"user dislikes Java","created":"2026-02-01T10:00:00Z"}]}`
+	summarizeResp := `{"id":"test","choices":[{"index":0,"message":{"role":"assistant","content":"- User prefers Go\n- User dislikes Java"}}]}`
+
+	srv, _ := newPathRoutingServer(map[string][]mockResponse{
+		"/vector_store": {{status: 200, body: searchResp}},
+		"/chat":         {{status: 200, body: summarizeResp}},
+	})
+	defer srv.Close()
+
+	client := NewMemoryClient(srv.URL, "test-key", srv.Client())
+	client.mu.Lock()
+	client.collectionID = "col-abc"
+	client.mu.Unlock()
+
+	agent := &Agent{
+		baseURL:            srv.URL,
+		apiKey:             "test-key",
+		httpClient:         srv.Client(),
+		summarizationModel: Summarization,
+		memoryClient:       client,
+		promptBuilder:      NewSectionedPromptBuilder(DefaultPromptConfig()),
+		promptTransport:    "cli",
+	}
+
+	conversation := []ChatMessage{
+		{Role: "user", Content: "what is my preferred language?"},
+	}
+	result := agent.withSystemPrompt(context.Background(), conversation, nil, PromptModeFull)
+
+	if len(result) == 0 || result[0].Role != "system" {
+		t.Fatal("expected system message prepended to conversation")
+	}
+	systemContent, ok := result[0].Content.(string)
+	if !ok {
+		t.Fatal("system content is not a string")
+	}
+	if !strings.Contains(systemContent, "[Memory]") {
+		t.Errorf("system prompt missing [Memory] section; got:\n%s", systemContent)
+	}
+	if !strings.Contains(systemContent, "User prefers Go") {
+		t.Errorf("system prompt missing summarized memory about Go; got:\n%s", systemContent)
+	}
+	if !strings.Contains(systemContent, "recall tool") {
+		t.Errorf("system prompt missing recall tool hint; got:\n%s", systemContent)
+	}
+}
+
+func TestAutoRecall_GracefulOnError(t *testing.T) {
+	srv, _ := newMockServer([]mockResponse{
+		{status: 500, body: `{"error":"internal server error"}`},
+	})
+	defer srv.Close()
+
+	client := NewMemoryClient(srv.URL, "test-key", srv.Client())
+	client.mu.Lock()
+	client.collectionID = "col-abc"
+	client.mu.Unlock()
+
+	agent := &Agent{
+		memoryClient:    client,
+		promptBuilder:   NewSectionedPromptBuilder(DefaultPromptConfig()),
+		promptTransport: "cli",
+	}
+
+	conversation := []ChatMessage{
+		{Role: "user", Content: "hello"},
+	}
+	// Must not panic on memory error.
+	result := agent.withSystemPrompt(context.Background(), conversation, nil, PromptModeFull)
+
+	if len(result) == 0 || result[0].Role != "system" {
+		t.Fatal("expected system message prepended to conversation")
+	}
+	systemContent, _ := result[0].Content.(string)
+	if strings.Contains(systemContent, "[Memory]") {
+		t.Errorf("system prompt should not contain [Memory] section when search fails; got:\n%s", systemContent)
+	}
+}
+
 // --- buildTools tests ---
 
 func TestBuildTools_IncludesRecordWhenMemoryEnabled(t *testing.T) {
@@ -1087,6 +1144,97 @@ func TestConfigureMemory_UsesCustomCollectionName(t *testing.T) {
 	}
 }
 
+// --- Summarize memories tests ---
+
+func TestSummarizeMemories_Success(t *testing.T) {
+	summarizeResp := `{"id":"test","choices":[{"index":0,"message":{"role":"assistant","content":"- Likes Go\n- Dislikes Java"}}]}`
+	srv, h := newMockServer([]mockResponse{
+		{status: 200, body: summarizeResp},
+	})
+	defer srv.Close()
+
+	agent := &Agent{
+		baseURL:            srv.URL,
+		apiKey:             "test-key",
+		httpClient:         srv.Client(),
+		summarizationModel: Summarization,
+	}
+
+	result, err := agent.summarizeMemories(context.Background(), []string{"user prefers Go", "user dislikes Java"})
+	if err != nil {
+		t.Fatalf("summarizeMemories returned error: %v", err)
+	}
+	if result != "- Likes Go\n- Dislikes Java" {
+		t.Errorf("result = %q, want %q", result, "- Likes Go\n- Dislikes Java")
+	}
+
+	// Verify request was sent to /chat/completions.
+	if len(h.requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(h.requests))
+	}
+	if h.requests[0].URL.Path != "/chat/completions" {
+		t.Errorf("path = %q, want /chat/completions", h.requests[0].URL.Path)
+	}
+	if h.requests[0].Method != http.MethodPost {
+		t.Errorf("method = %q, want POST", h.requests[0].Method)
+	}
+
+	// Verify the request body contains the memory items.
+	var reqBody ChatCompletionRequest
+	if err := json.Unmarshal([]byte(h.bodies[0]), &reqBody); err != nil {
+		t.Fatalf("parse request body: %v", err)
+	}
+	if reqBody.Model != string(Summarization) {
+		t.Errorf("model = %q, want %q", reqBody.Model, string(Summarization))
+	}
+	if len(reqBody.Messages) != 2 {
+		t.Fatalf("expected 2 messages (system + user), got %d", len(reqBody.Messages))
+	}
+	userContent, ok := reqBody.Messages[1].Content.(string)
+	if !ok {
+		t.Fatal("user message content is not a string")
+	}
+	if !strings.Contains(userContent, "user prefers Go") {
+		t.Errorf("user content missing memory item; got: %s", userContent)
+	}
+}
+
+func TestSummarizeMemories_FallbackOnError(t *testing.T) {
+	// Search returns results, but summarization returns 500 → fallback to truncation.
+	searchResp := `{"results":[{"id":"1","content":"user prefers Go programming language","created":"2026-02-01T10:00:00Z"},{"id":"2","content":"user dislikes Java","created":"2026-02-01T10:00:00Z"}]}`
+
+	srv, _ := newPathRoutingServer(map[string][]mockResponse{
+		"/vector_store": {{status: 200, body: searchResp}},
+		"/chat":         {{status: 500, body: `{"error":"internal"}`}},
+	})
+	defer srv.Close()
+
+	client := NewMemoryClient(srv.URL, "test-key", srv.Client())
+	client.mu.Lock()
+	client.collectionID = "col-abc"
+	client.mu.Unlock()
+
+	agent := &Agent{
+		baseURL:            srv.URL,
+		apiKey:             "test-key",
+		httpClient:         srv.Client(),
+		summarizationModel: Summarization,
+		memoryClient:       client,
+	}
+
+	result := agent.recallMemories(context.Background(), "programming preferences")
+	if !strings.Contains(result, "[Memory]") {
+		t.Errorf("expected [Memory] section in fallback result; got:\n%s", result)
+	}
+	// Should contain truncated content, not full verbatim.
+	if !strings.Contains(result, "user prefers Go") {
+		t.Errorf("expected truncated memory content; got:\n%s", result)
+	}
+	if !strings.Contains(result, "recall tool") {
+		t.Errorf("expected recall tool hint in fallback result; got:\n%s", result)
+	}
+}
+
 // --- Recall tool tests ---
 
 func TestRecallTool_ReturnsFullContent(t *testing.T) {
@@ -1180,6 +1328,27 @@ func TestRecallTool_PropagatesSearchError(t *testing.T) {
 	_, err := agent.recallFunction(json.RawMessage(input))
 	if err == nil {
 		t.Fatal("expected error when search fails, got nil")
+	}
+}
+
+// --- truncateMemories tests ---
+
+func TestTruncateMemories_ShortItems(t *testing.T) {
+	items := []string{"short one", "short two"}
+	result := truncateMemories(items)
+	if result != "- short one\n- short two" {
+		t.Errorf("result = %q, want %q", result, "- short one\n- short two")
+	}
+}
+
+func TestTruncateMemories_LongItems(t *testing.T) {
+	longItem := strings.Repeat("a", 100)
+	result := truncateMemories([]string{longItem})
+	if len(result) > 90 { // "- " + 80 chars + "..."
+		t.Errorf("truncated result too long: %d chars", len(result))
+	}
+	if !strings.HasSuffix(result, "...") {
+		t.Errorf("expected truncated item to end with '...'; got: %q", result)
 	}
 }
 
