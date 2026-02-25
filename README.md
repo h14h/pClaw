@@ -3,9 +3,18 @@
 > [!CAUTION]
 > USE AT YOUR OWN RISK.
 >
-> This is an experimental coding agent. Behavior, tool contracts, and model defaults may change without notice.
+> This is an experimental coding agent created primarily for research purposes. Behavior, tool contracts, and model defaults may change without notice.
 >
-> It is strongly recommended to only run in a sandboxed workspace, and extreme care should be exercised when managing access rules.
+> For any bold enough to ignore these warnings, it is strongly recommended you run this in a sandboxed workspace.
+>
+> _**Extreme** care should be exercised when managing access rules._
+
+This is yet another ["Claw"](https://xcancel.com/karpathy/status/2024987174077432126) implementation. It was created to fulfill two key purposes:
+
+1. Be a moderately complex project where its author can practice "agentic engineering"
+2. Allow the author to experiment with ideas on what makes for a useful "personal agent"
+
+Any _actual_ utility or broad appeal that arises out of this project can be treated as a happy little accident 🌲
 
 ## Overview
 
