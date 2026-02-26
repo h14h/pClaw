@@ -310,7 +310,7 @@ Compaction failure (e.g., network error during summarization) emits a `compactio
 2. No conversation persistence outside process memory
 3. No workspace sandboxing; tools operate on provided paths
 4. Tool and inference schemas are static per process start
-5. Primary model is fixed to `kimi-k2-instruct`; reasoning model is fixed to `gpt-oss-120b`; summarization model is fixed to `gpt-oss-120b`
+5. Primary model is fixed to `kimi-k2-instruct`; reasoning model is fixed to `gpt-oss-120b`; summarization model is fixed to `qwen2.5-coder-32b-instruct`
 
 In Discord mode, each `(channel_id, user_id)` conversation key is isolated with a dedicated in-memory agent/session state and mutex.
 Discord uses progressive part callbacks to emit multiple messages within one logical turn as assistant/tool iterations produce text.

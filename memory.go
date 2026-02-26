@@ -383,7 +383,7 @@ func (a *Agent) summarizeMemories(ctx context.Context, items []string) (string, 
 		Messages: []ChatMessage{
 			{
 				Role:    "system",
-				Content: "Summarize the following memory items into a compact bullet list. Each bullet should capture the key fact. Be concise.",
+				Content: "You are summarizing items from a memory database. Your summary will help another AI decide whether to look up more details using a recall tool. Write 2-3 plain-English sentences covering: which people, projects, or teams are mentioned, and what categories of facts are stored (e.g. preferences, background, schedules). Name the subjects but do not repeat specific facts.",
 			},
 			{
 				Role:    "user",
