@@ -152,24 +152,36 @@ Failures at any step are logged to stderr and the agent starts without memory.
 
 ### Auto-Recall Flow
 
-On every call to `withSystemPrompt` (which wraps every inference request):
+On `withSystemPrompt` calls in `full` mode (primary inference). Minimal mode (delegated reasoning) skips recall entirely since it operates on a standalone sub-prompt without memory context.
 
 ```text
 withSystemPrompt(ctx, conversation, tools, mode)
   │
   ├─ Build base prompt from PromptBuilder
-  ├─ Extract last user message from conversation
-  ├─ recallMemories(ctx, query)
-  │     → MemoryClient.Search(ctx, query)
-  │     → POST /vector_store/{id}/search {"input": query}
-  │     → cap results to 10
-  │     → summarizeMemories(ctx, items)
-  │     │     → direct POST /chat/completions (Summarization model)
-  │     │     → bypasses runInferenceWithModel to avoid recursion
-  │     │     → on failure: fall back to truncation (80 chars per item)
-  │     → format summary as [Memory] section with recall tool hint
-  └─ Append [Memory] section to prompt (omitted on error or empty results)
+  ├─ (mode == full only):
+  │   ├─ Extract last user message from conversation
+  │   ├─ Check recallTurnCache → hit: use cached [Memory] section
+  │   ├─ recallMemories(ctx, query)   (on cache miss)
+  │   │     → MemoryClient.Search(ctx, query)
+  │   │     → POST /vector_store/{id}/search {"input": query}
+  │   │     → cap results to 10
+  │   │     → summarizeMemories(ctx, items)
+  │   │     │     → direct POST /chat/completions (Summarization model)
+  │   │     │     → bypasses runInferenceWithModel to avoid recursion
+  │   │     │     → on failure: fall back to truncation (80 chars per item)
+  │   │     → format summary as [Memory] section with recall tool hint
+  │   │     → store result in recallTurnCache
+  │   └─ Append [Memory] section to prompt (omitted on error or empty results)
+  └─ (mode == minimal): no recall
 ```
+
+### Per-Turn Recall Cache
+
+`recallTurnCache` (type `recallCache`) avoids redundant vector-store searches and summarization LLM calls during multi-step tool loops within a single user turn. The cache is:
+
+1. **Invalidated** at the start of each user turn (`Agent.Run()` and `HandleUserMessageProgressive`)
+2. **Invalidated** after a successful `record` tool call (so the next inference re-fetches including the new memory)
+3. **Keyed by query** — a cache hit requires the same query string (the last user message)
 
 ### Discord Sharing
 

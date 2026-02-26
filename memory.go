@@ -455,15 +455,63 @@ func truncateMemories(items []string) string {
 	return b.String()
 }
 
+// recallCache holds the cached result of a per-turn auto-recall so that
+// repeated withSystemPrompt calls within the same user turn avoid redundant
+// vector-store searches and summarization LLM calls.
+type recallCache struct {
+	mu    sync.Mutex
+	query string // query that produced the cached result
+	value string // formatted [Memory] section or ""
+	valid bool   // true when the cache holds a usable value
+}
+
+// get returns the cached recall result if the cache is valid and the query
+// matches. The second return value indicates a cache hit.
+func (rc *recallCache) get(query string) (string, bool) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	if rc.valid && rc.query == query {
+		return rc.value, true
+	}
+	return "", false
+}
+
+// set stores a recall result in the cache.
+func (rc *recallCache) set(query, value string) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	rc.query = query
+	rc.value = value
+	rc.valid = true
+}
+
+// invalidate marks the cache as stale so the next recall re-fetches.
+func (rc *recallCache) invalidate() {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	rc.valid = false
+}
+
 // recallMemories performs a semantic search against the memory store using
 // the given query and returns a formatted [Memory] section string suitable for
 // appending to a system prompt. The raw results are summarized by an LLM; on
 // summarization failure it falls back to programmatic truncation. Returns an
 // empty string on error, when no memories are found, or when memoryClient is nil.
+//
+// Results are cached per user turn via Agent.recallTurnCache; the cache is
+// invalidated when the record tool successfully stores a new memory.
 func (a *Agent) recallMemories(ctx context.Context, query string) string {
 	if a.memoryClient == nil || strings.TrimSpace(query) == "" {
 		return ""
 	}
+
+	// Return cached result if available for this query within the same turn.
+	if a.recallTurnCache != nil {
+		if cached, hit := a.recallTurnCache.get(query); hit {
+			return cached
+		}
+	}
+
 	results, err := a.memoryClient.Search(ctx, query)
 	if err != nil || len(results) == 0 {
 		return ""
@@ -487,7 +535,13 @@ func (a *Agent) recallMemories(ctx context.Context, query string) string {
 	}
 
 	body := summary + "\nUse the recall tool with a targeted query to retrieve full details."
-	return formatSection("Memory", body)
+	result := formatSection("Memory", body)
+
+	if a.recallTurnCache != nil {
+		a.recallTurnCache.set(query, result)
+	}
+
+	return result
 }
 
 // --- Record tool ---
@@ -589,6 +643,7 @@ func configureMemory(ctx context.Context, agent *Agent) {
 		return
 	}
 	agent.memoryClient = client
+	agent.recallTurnCache = &recallCache{}
 	agent.tools = agent.buildTools(nil)
 }
 
@@ -628,6 +683,11 @@ func (a *Agent) recordFunction(input json.RawMessage) (string, error) {
 	content := formatMemoryContent(payload.SubjectType, payload.Subject, payload.Descriptor)
 	if err := a.memoryClient.AddItem(context.Background(), content); err != nil {
 		return "", fmt.Errorf("failed to store memory: %w", err)
+	}
+	// Invalidate the per-turn recall cache so the next inference call
+	// re-fetches memories including the newly stored item.
+	if a.recallTurnCache != nil {
+		a.recallTurnCache.invalidate()
 	}
 	return "Memory stored.", nil
 }
