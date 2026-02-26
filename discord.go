@@ -100,6 +100,12 @@ func runDiscordBot(ctx context.Context) error {
 		agent.serverEventSink = serverEventSink
 		if sharedMemClient != nil {
 			agent.memoryClient = sharedMemClient
+		}
+		configureWebSearch(agent)
+		// Rebuild tools after all clients are set. configureWebSearch
+		// rebuilds when TAVILY_API_KEY is present, but we need a rebuild
+		// when only memoryClient was set and web search is absent.
+		if agent.webSearchClient == nil && sharedMemClient != nil {
 			agent.tools = agent.buildTools(nil)
 		}
 		return agent

@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type PromptMode string
@@ -134,12 +135,16 @@ func (b *SectionedPromptBuilder) Build(ctx PromptBuildContext) string {
 		mode = PromptModeFull
 	}
 	toolNames := make([]string, 0, len(ctx.ToolNames))
+	hasWebSearch := false
 	for _, n := range ctx.ToolNames {
 		n = strings.TrimSpace(n)
 		if n == "" {
 			continue
 		}
 		toolNames = append(toolNames, n)
+		if n == "web_search" {
+			hasWebSearch = true
+		}
 	}
 
 	var sections []string
@@ -160,9 +165,17 @@ func (b *SectionedPromptBuilder) Build(ctx PromptBuildContext) string {
 		}
 		sections = append(sections, formatSection("Tooling", tooling))
 	}
-	sections = append(sections, formatSection("Safety", joinRules(b.Config.SafetyRules)))
+	safetyRules := append([]string{}, b.Config.SafetyRules...)
+	if hasWebSearch {
+		safetyRules = append(safetyRules,
+			"ALWAYS call web_search before answering questions about current events, recent facts, versions, dates, statistics, or anything that may have changed since your training data. Your training data is outdated — do not rely on it for time-sensitive information. Search first, then answer.",
+			"Never present unverified information as fact. If you cannot search or find confirmation, explicitly say so.",
+		)
+	}
+	sections = append(sections, formatSection("Safety", joinRules(safetyRules)))
 
 	runtimeRules := append([]string{}, b.Config.RuntimeRules...)
+	runtimeRules = append(runtimeRules, fmt.Sprintf("Current date: %s", time.Now().Format("2006-01-02")))
 	if strings.TrimSpace(ctx.Transport) != "" {
 		runtimeRules = append(runtimeRules, fmt.Sprintf("Transport: %s", strings.TrimSpace(ctx.Transport)))
 	}

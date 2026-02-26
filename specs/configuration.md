@@ -30,6 +30,8 @@ Precedence is:
 | `AGENT_PROMPT_MAX_PERSONA_CHARS` | No | `600` | Character cap applied to persona text embedded in system prompt |
 | `MEMORY_ENABLED` | No | `true` (enabled) | Set to `false`, `0`, or `no` to disable durable memory (no `record`/`recall` tools, no auto-recall) |
 | `MEMORY_COLLECTION_NAME` | No | `agent-memory` | Vultr vector store collection name used for semantic memory |
+| `TAVILY_API_KEY` | No | none | Enables web search grounding when set; Tavily API bearer token |
+| `WEB_SEARCH_MAX_RESULTS` | No | `5` | Number of search results per web_search call (1-20) |
 
 Model selection is not environment-configurable.
 
@@ -65,6 +67,7 @@ CLI initialization sequence:
 5. Configure tool event logging from `TOOL_EVENT_LOG`
 6. Configure server event logging from `SERVER_EVENT_LOG`
 7. Call `configureMemory(ctx, agent)` — reads `MEMORY_ENABLED` and `MEMORY_COLLECTION_NAME`, creates `MemoryClient`, bootstraps the vector store collection, and sets `agent.memoryClient`; on failure logs a warning and continues without memory
+8. Call `configureWebSearch(agent)` — reads `TAVILY_API_KEY` and `WEB_SEARCH_MAX_RESULTS`, creates `WebSearchClient`, and sets `agent.webSearchClient`; when `TAVILY_API_KEY` is unset, continues without web search
 
 ## Behavioral Notes
 

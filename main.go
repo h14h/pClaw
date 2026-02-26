@@ -74,6 +74,7 @@ type Agent struct {
 	outputWriter        io.Writer
 	reasoningCallCount  int
 	memoryClient        *MemoryClient
+	webSearchClient     *WebSearchClient
 	asyncWg             sync.WaitGroup
 }
 
@@ -495,6 +496,7 @@ func main() {
 	configureToolEventLogging(agent)
 	configureServerEventLogging(agent, os.Stdout)
 	configureMemory(context.Background(), agent)
+	configureWebSearch(agent)
 	if err := agent.Run(context.Background()); err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
 	}
@@ -602,6 +604,9 @@ func (a *Agent) buildTools(extraTools []ToolDefinition) []ToolDefinition {
 	if a.memoryClient != nil {
 		tools = append(tools, a.recordToolDefinition())
 		tools = append(tools, a.recallToolDefinition())
+	}
+	if a.webSearchClient != nil {
+		tools = append(tools, a.webSearchToolDefinition())
 	}
 	for _, extra := range extraTools {
 		replaced := false

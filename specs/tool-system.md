@@ -25,7 +25,7 @@ Each tool is registered as a `ToolDefinition` with:
 
 ### Registration
 
-At startup, `Agent` registers up to six built-ins:
+At startup, `Agent` registers up to seven built-ins:
 
 1. `read_file`
 2. `list_files`
@@ -33,6 +33,7 @@ At startup, `Agent` registers up to six built-ins:
 4. `delegate_reasoning`
 5. `record` (only when `Agent.memoryClient != nil`)
 6. `recall` (only when `Agent.memoryClient != nil`)
+7. `web_search` (only when `Agent.webSearchClient != nil`)
 
 These are stored in `Agent.tools`.
 
@@ -227,6 +228,41 @@ Error conditions:
 1. Missing or whitespace-only `query`
 2. Collection not initialized (EnsureCollection not called)
 3. HTTP errors from the vector store API
+
+## `web_search`
+
+Searches the web for current, factual information via the Tavily Search API.
+Only registered when `Agent.webSearchClient` is non-nil (i.e., when `TAVILY_API_KEY` is set).
+
+Input:
+
+```json
+{
+  "query": "search query for web grounding",
+  "topic": "general",
+  "search_depth": "basic"
+}
+```
+
+Behavior:
+
+1. Unmarshals `query`, optional `topic`, and optional `search_depth` fields
+2. Rejects empty or whitespace-only `query` with an error
+3. Calls `WebSearchClient.Search(ctx, query, topic, searchDepth)` using `context.Background()`
+4. Request is `POST /search` to Tavily API with `include_answer=true`
+5. Returns formatted result with answer summary and numbered sources (title, URL, content snippet)
+6. Returns `"No results found."` when no results or answer are available
+
+Optional parameters:
+
+- `topic`: `"general"` (default), `"news"`, or `"finance"`
+- `search_depth`: `"basic"` (default, 1 credit) or `"advanced"` (2 credits, higher quality)
+
+Error conditions:
+
+1. Missing or whitespace-only `query`
+2. HTTP errors from the Tavily API (401, 429, etc.)
+3. Response parse failures
 
 ## Async Tools
 
