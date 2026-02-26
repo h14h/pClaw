@@ -1,0 +1,16 @@
+{
+  "name": "website",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:host": "vite --host",
+    "build": "vite build",
+    "preview": "vite preview",
+    "preview:host": "vite --host preview"
+  },
+  "devDependencies": {
+    "vite": "^7.3.1"
+  }
+}

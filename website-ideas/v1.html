@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pClaw — An itty-bitty Claw for itty-bitty servers</title>
+<meta name="description" content="Lightweight AI coding agent in Go. Single binary, terminal REPL + Discord bot. Runs on 1 vCPU / 1 GB RAM. $0.20 per million tokens.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --green: #33ff33;
+  --green-dim: #88cc88;
+  --amber: #ffb000;
+  --black: #000000;
+  --panel-bg: #0a0a0a;
+  --border: #1a3a1a;
+  --glow: 0 0 10px rgba(51, 255, 51, 0.3);
+  --glow-strong: 0 0 20px rgba(51, 255, 51, 0.5), 0 0 40px rgba(51, 255, 51, 0.2);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--black);
+  color: var(--green-dim);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* CRT flicker */
+body::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 9999;
+  animation: flicker 0.15s infinite;
+}
+
+@keyframes flicker {
+  0% { opacity: 0.98; }
+  5% { opacity: 0.97; }
+  10% { opacity: 1; }
+  15% { opacity: 0.98; }
+  20% { opacity: 0.99; }
+  50% { opacity: 0.97; }
+  80% { opacity: 1; }
+  90% { opacity: 0.98; }
+  100% { opacity: 0.99; }
+}
+
+/* Scan lines */
+body::after {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 1px,
+    rgba(0, 0, 0, 0.08) 1px,
+    rgba(0, 0, 0, 0.08) 2px
+  );
+  pointer-events: none;
+  z-index: 9998;
+}
+
+/* Layout */
+.container {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 0 20px;
+}
+
+/* Hero */
+.hero {
+  padding: 60px 0 40px;
+}
+
+/* Terminal window */
+.terminal {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  overflow: hidden;
+  margin-bottom: 40px;
+}
+
+.terminal-titlebar {
+  background: #111;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.terminal-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 0;
+  display: inline-block;
+}
+
+.terminal-dot.red { background: #ff5f56; }
+.terminal-dot.yellow { background: #ffbd2e; }
+.terminal-dot.green { background: #27c93f; }
+
+.terminal-title {
+  color: #666;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+.terminal-body {
+  padding: 16px 20px;
+  min-height: 280px;
+  font-size: 13px;
+  line-height: 1.7;
+  position: relative;
+}
+
+.terminal-body .line {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.terminal-body .prompt { color: var(--green); }
+.terminal-body .command { color: #fff; }
+.terminal-body .output { color: var(--green-dim); }
+.terminal-body .accent { color: var(--amber); }
+.terminal-body .dim { color: #555; }
+.terminal-body .tool { color: var(--amber); }
+
+.cursor {
+  display: inline-block;
+  background: var(--green);
+  width: 8px;
+  height: 15px;
+  vertical-align: text-bottom;
+  animation: blink 1s step-end infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* Tagline */
+.tagline {
+  text-align: center;
+  padding: 20px 0 60px;
+}
+
+.tagline h1 {
+  font-size: clamp(22px, 4vw, 36px);
+  font-weight: 700;
+  color: var(--green);
+  text-shadow: var(--glow-strong);
+  animation: glow-pulse 3s ease-in-out infinite;
+  margin-bottom: 8px;
+}
+
+.tagline .subtitle {
+  font-size: clamp(14px, 2.5vw, 20px);
+  color: var(--amber);
+  font-weight: 400;
+}
+
+@keyframes glow-pulse {
+  0%, 100% { text-shadow: 0 0 20px rgba(51, 255, 51, 0.5), 0 0 40px rgba(51, 255, 51, 0.2); }
+  50% { text-shadow: 0 0 30px rgba(51, 255, 51, 0.7), 0 0 60px rgba(51, 255, 51, 0.3), 0 0 80px rgba(51, 255, 51, 0.1); }
+}
+
+/* Feature cards */
+.features {
+  padding: 40px 0;
+}
+
+.features-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 20px;
+}
+
+.feature-card {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--green);
+  padding: 24px;
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity 0.6s ease, transform 0.6s ease;
+}
+
+.feature-card.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.feature-card h3 {
+  color: var(--green);
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 12px;
+  text-shadow: var(--glow);
+}
+
+.feature-card p {
+  color: var(--green-dim);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* Tools section */
+.tools-section {
+  padding: 60px 0;
+}
+
+.tools-section h2 {
+  color: var(--green);
+  font-size: 18px;
+  font-weight: 700;
+  text-shadow: var(--glow);
+  margin-bottom: 20px;
+  text-align: center;
+}
+
+.manpage {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  padding: 24px;
+  overflow-x: auto;
+}
+
+.manpage pre {
+  color: var(--green-dim);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  line-height: 1.8;
+  white-space: pre;
+}
+
+.manpage .header {
+  color: var(--green);
+  font-weight: 700;
+}
+
+.manpage .section-name {
+  color: var(--amber);
+  font-weight: 500;
+}
+
+.manpage .tool-name {
+  color: #fff;
+}
+
+/* Quick start */
+.quickstart {
+  padding: 40px 0;
+  text-align: center;
+}
+
+.quickstart h2 {
+  color: var(--green);
+  font-size: 18px;
+  font-weight: 700;
+  text-shadow: var(--glow);
+  margin-bottom: 20px;
+}
+
+.quickstart-terminal {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--green);
+  padding: 20px 24px;
+  text-align: left;
+  display: inline-block;
+  max-width: 100%;
+}
+
+.quickstart-terminal pre {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.quickstart-terminal .prompt { color: var(--green); }
+.quickstart-terminal .command { color: #fff; }
+
+.quickstart-note {
+  color: var(--amber);
+  font-size: 14px;
+  margin-top: 16px;
+  font-style: italic;
+}
+
+/* Footer */
+footer {
+  padding: 40px 0;
+  text-align: center;
+  border-top: 1px solid var(--border);
+  margin-top: 40px;
+}
+
+footer p {
+  color: #555;
+  font-size: 12px;
+}
+
+footer a {
+  color: var(--green-dim);
+  text-decoration: none;
+}
+
+footer a:hover {
+  color: var(--green);
+  text-shadow: var(--glow);
+}
+
+footer .separator {
+  color: #333;
+  margin: 0 8px;
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+  .hero {
+    padding: 30px 0 20px;
+  }
+
+  .terminal-body {
+    padding: 12px 14px;
+    min-height: 240px;
+    font-size: 11px;
+  }
+
+  .features-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .manpage pre {
+    font-size: 10px;
+  }
+
+  .tagline {
+    padding: 10px 0 40px;
+  }
+}
+</style>
+</head>
+<body>
+
+<div class="container">
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="terminal">
+      <div class="terminal-titlebar">
+        <span class="terminal-dot red"></span>
+        <span class="terminal-dot yellow"></span>
+        <span class="terminal-dot green"></span>
+        <span class="terminal-title">pclaw &mdash; bash</span>
+      </div>
+      <div class="terminal-body" id="terminal"></div>
+    </div>
+
+    <div class="tagline">
+      <h1>"An itty-bitty Claw for itty-bitty servers"</h1>
+      <p class="subtitle">(& itty-bitty budgets) &#x1F99E;</p>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section class="features">
+    <div class="features-grid">
+      <div class="feature-card">
+        <h3>Tiny Footprint</h3>
+        <p>Runs on 1 vCPU / 1 GB RAM. The cheapest VPS you can rent. Single binary, zero dependencies.</p>
+      </div>
+      <div class="feature-card">
+        <h3>$0.20/M tokens</h3>
+        <p>Powered by Vultr Serverless Inference. Real AI coding at the cost of a rounding error.</p>
+      </div>
+      <div class="feature-card">
+        <h3>Durable Memory</h3>
+        <p>Semantic vector-store memory. Your agent remembers across sessions. Context that persists.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Tools -->
+  <section class="tools-section">
+    <h2>Available Tools</h2>
+    <div class="manpage">
+      <pre><span class="header">TOOLS(7)                    pClaw Manual                    TOOLS(7)</span>
+
+<span class="section-name">NAME</span>
+    <span class="tool-name">read_file</span>           &mdash; read file contents into context
+    <span class="tool-name">list_files</span>          &mdash; enumerate directory trees
+    <span class="tool-name">edit_file</span>           &mdash; surgical file modifications
+    <span class="tool-name">delegate_reasoning</span>  &mdash; fork a thinking sub-agent
+    <span class="tool-name">record</span>              &mdash; commit to long-term memory
+    <span class="tool-name">recall</span>              &mdash; semantic search over memories
+    <span class="tool-name">web_search</span>          &mdash; grounded web search via Tavily</pre>
+    </div>
+  </section>
+
+  <!-- Quick Start -->
+  <section class="quickstart">
+    <h2>Quick Start</h2>
+    <div class="quickstart-terminal">
+      <pre><span class="prompt">$</span> <span class="command">export VULTR_API_KEY="your-token"</span>
+<span class="prompt">$</span> <span class="command">go run .</span></pre>
+    </div>
+    <p class="quickstart-note">That's it. One env var. One command.</p>
+  </section>
+
+</div>
+
+<!-- Footer -->
+<footer>
+  <div class="container">
+    <p>
+      MIT License
+      <span class="separator">|</span>
+      <a href="https://github.com/h14h/pClaw" target="_blank" rel="noopener">GitHub</a>
+      <span class="separator">|</span>
+      Built with spite and Go
+    </p>
+  </div>
+</footer>
+
+<script>
+(function() {
+  'use strict';
+
+  // Terminal typing animation
+  var terminal = document.getElementById('terminal');
+
+  var lines = [
+    { type: 'input',  text: '$ export VULTR_API_KEY="vk-\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"', speed: 40 },
+    { type: 'blank',  delay: 300 },
+    { type: 'input',  text: '$ go run .', speed: 60 },
+    { type: 'blank',  delay: 600 },
+    { type: 'output', text: '', delay: 0 },
+    { type: 'output', text: '  \u{1D45D}Claw v1.0.0 \u2014 ready.', delay: 100, cls: 'accent' },
+    { type: 'output', text: '  Model: kimi-k2-instruct | Memory: enabled | Tools: 7', delay: 80, cls: 'dim' },
+    { type: 'blank',  delay: 400 },
+    { type: 'input',  text: 'You: Can you read main.go and explain the architecture?', speed: 30, cls: 'command' },
+    { type: 'blank',  delay: 500 },
+    { type: 'spinner', text: '  {s} waiting for model...', delay: 1200 },
+    { type: 'blank',  delay: 200 },
+    { type: 'output', text: "Assistant: I'll read the file and break it down for you.", delay: 100, cls: 'output' },
+    { type: 'blank',  delay: 300 },
+    { type: 'output', text: '  \uD83D\uDCC2 read_file("main.go")', delay: 100, cls: 'tool' },
+    { type: 'blank',  delay: 400 },
+    { type: 'output', text: 'The architecture follows a clean REPL loop pattern \u2014', delay: 100, cls: 'output' },
+    { type: 'output', text: 'user input \u2192 LLM inference \u2192 tool execution \u2192 response.', delay: 100, cls: 'output' },
+    { type: 'cursor', delay: 0 }
+  ];
+
+  var spinnerFrames = ['\u280B', '\u2819', '\u2838', '\u2830', '\u2826', '\u2807'];
+
+  function createLine(text, cls) {
+    var div = document.createElement('div');
+    div.className = 'line';
+    if (cls) {
+      var span = document.createElement('span');
+      span.className = cls;
+      span.textContent = text;
+      div.appendChild(span);
+    } else {
+      div.textContent = text;
+    }
+    return div;
+  }
+
+  function typeText(element, text, speed, callback) {
+    var i = 0;
+    var span = element.querySelector('span') || element;
+    span.textContent = '';
+
+    function tick() {
+      if (i < text.length) {
+        span.textContent += text[i];
+        i++;
+        // Variable speed: faster for spaces and punctuation
+        var delay = speed;
+        if (text[i - 1] === ' ') delay = speed * 0.5;
+        if (text[i - 1] === '.' || text[i - 1] === ',') delay = speed * 2;
+        requestAnimationFrame(function() {
+          setTimeout(tick, delay);
+        });
+      } else {
+        if (callback) callback();
+      }
+    }
+    tick();
+  }
+
+  function showSpinner(element, text, duration, callback) {
+    var span = element.querySelector('span') || element;
+    var frame = 0;
+    var start = Date.now();
+
+    function tick() {
+      if (Date.now() - start < duration) {
+        span.textContent = text.replace('{s}', spinnerFrames[frame % spinnerFrames.length]);
+        frame++;
+        setTimeout(tick, 80);
+      } else {
+        // Remove spinner line after completion
+        element.remove();
+        if (callback) callback();
+      }
+    }
+    tick();
+  }
+
+  function processLines(index) {
+    if (index >= lines.length) return;
+
+    var line = lines[index];
+
+    if (line.type === 'blank') {
+      var blankDiv = document.createElement('div');
+      blankDiv.className = 'line';
+      blankDiv.innerHTML = '&nbsp;';
+      terminal.appendChild(blankDiv);
+      setTimeout(function() { processLines(index + 1); }, line.delay || 200);
+      return;
+    }
+
+    if (line.type === 'cursor') {
+      var cursorSpan = document.createElement('span');
+      cursorSpan.className = 'cursor';
+      cursorSpan.innerHTML = '&nbsp;';
+      terminal.appendChild(cursorSpan);
+      return;
+    }
+
+    if (line.type === 'input') {
+      var cls = line.cls || 'prompt';
+      var div = createLine('', cls);
+      terminal.appendChild(div);
+      typeText(div, line.text, line.speed, function() {
+        setTimeout(function() { processLines(index + 1); }, 200);
+      });
+      return;
+    }
+
+    if (line.type === 'spinner') {
+      var div = createLine('', line.cls || 'dim');
+      terminal.appendChild(div);
+      showSpinner(div, line.text, line.delay, function() {
+        processLines(index + 1);
+      });
+      return;
+    }
+
+    if (line.type === 'output') {
+      var div = createLine(line.text, line.cls || 'output');
+      div.style.opacity = '0';
+      terminal.appendChild(div);
+      requestAnimationFrame(function() {
+        div.style.transition = 'opacity 0.15s ease';
+        div.style.opacity = '1';
+      });
+      setTimeout(function() { processLines(index + 1); }, line.delay || 100);
+      return;
+    }
+  }
+
+  // Start animation after a short delay
+  setTimeout(function() {
+    processLines(0);
+  }, 500);
+
+  // IntersectionObserver for feature cards
+  var cards = document.querySelectorAll('.feature-card');
+
+  if ('IntersectionObserver' in window) {
+    var observer = new IntersectionObserver(function(entries) {
+      entries.forEach(function(entry) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+          observer.unobserve(entry.target);
+        }
+      });
+    }, {
+      threshold: 0.15,
+      rootMargin: '0px 0px -40px 0px'
+    });
+
+    cards.forEach(function(card) {
+      observer.observe(card);
+    });
+  } else {
+    // Fallback: just show them
+    cards.forEach(function(card) {
+      card.classList.add('visible');
+    });
+  }
+})();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>pClaw — An itty-bitty Claw for itty-bitty servers</title>
+    <meta name="description" content="pClaw: a lightweight AI coding agent in Go. Single binary, $0.20/M tokens, 1 vCPU. Terminal REPL + Discord bot with durable semantic memory.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Anton&family=Space+Mono:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet">
+    <style>
+        /* ========================================
+           RESET & BASE
+           ======================================== */
+        *, *::before, *::after {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: auto;
+            font-size: 16px;
+        }
+
+        body {
+            font-family: 'Space Mono', monospace;
+            background: #FFFFFF;
+            color: #000000;
+            line-height: 1.5;
+            overflow-x: hidden;
+        }
+
+        a {
+            color: #000000;
+            text-decoration: underline;
+            text-decoration-thickness: 2px;
+            text-underline-offset: 3px;
+            transition: background 0.05s, color 0.05s;
+        }
+
+        a:hover {
+            background: #000000;
+            color: #FFFFFF;
+        }
+
+        ::selection {
+            background: #FF0000;
+            color: #FFFFFF;
+        }
+
+        /* ========================================
+           HERO SECTION
+           ======================================== */
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            padding: 2rem 3rem;
+            position: relative;
+            border-bottom: 3px solid #000000;
+        }
+
+        .hero-headline {
+            font-family: 'Anton', sans-serif;
+            font-size: 15vw;
+            line-height: 0.9;
+            text-transform: uppercase;
+            letter-spacing: -0.02em;
+            max-width: 95vw;
+        }
+
+        .hero-subline {
+            font-family: 'Space Mono', monospace;
+            font-size: clamp(1rem, 2vw, 1.5rem);
+            font-weight: 700;
+            margin-top: 2rem;
+            max-width: 800px;
+        }
+
+        .hero-subline .italic-p {
+            font-style: italic;
+        }
+
+        .hero-red-rule {
+            width: 100%;
+            height: 4px;
+            background: #FF0000;
+            margin: 2.5rem 0;
+            border: none;
+        }
+
+        .hero-stats {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0;
+            border: 3px solid #000000;
+            width: fit-content;
+            max-width: 100%;
+        }
+
+        .hero-stats span {
+            font-family: 'Space Mono', monospace;
+            font-size: clamp(0.7rem, 1.2vw, 0.95rem);
+            font-weight: 700;
+            padding: 0.75rem 1.5rem;
+            border-right: 3px solid #000000;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            white-space: nowrap;
+        }
+
+        .hero-stats span:last-child {
+            border-right: none;
+        }
+
+        .hero-lobster {
+            position: absolute;
+            top: 8%;
+            right: 5%;
+            font-size: clamp(4rem, 10vw, 10rem);
+            transform: rotate(12deg);
+            opacity: 0.9;
+            pointer-events: none;
+            user-select: none;
+        }
+
+        /* ========================================
+           MANIFESTO SECTION
+           ======================================== */
+        .manifesto {
+            border: 3px solid #000000;
+            margin: 0;
+            padding: 3rem;
+        }
+
+        .manifesto-title {
+            font-family: 'Anton', sans-serif;
+            font-size: clamp(2.5rem, 6vw, 5rem);
+            text-transform: uppercase;
+            margin-bottom: 2.5rem;
+            transform: rotate(-1deg);
+            line-height: 1;
+        }
+
+        .manifesto-columns {
+            column-count: 2;
+            column-gap: 3rem;
+            column-rule: 3px solid #000000;
+            font-size: clamp(0.85rem, 1.1vw, 1rem);
+            line-height: 1.7;
+        }
+
+        .manifesto-columns p {
+            margin-bottom: 1.5rem;
+            text-align: justify;
+            break-inside: avoid;
+        }
+
+        .manifesto-columns p:first-of-type::first-letter {
+            font-family: 'Anton', sans-serif;
+            font-size: 4.5rem;
+            float: left;
+            line-height: 0.8;
+            margin-right: 0.5rem;
+            margin-top: 0.15rem;
+            color: #FF0000;
+        }
+
+        .manifesto-columns .red {
+            color: #FF0000;
+            font-weight: 700;
+        }
+
+        .manifesto-columns em {
+            font-style: italic;
+        }
+
+        /* ========================================
+           FEATURES SECTION
+           ======================================== */
+        .features {
+            border-top: 3px solid #000000;
+        }
+
+        .features-header {
+            font-family: 'Anton', sans-serif;
+            font-size: clamp(2.5rem, 6vw, 5rem);
+            text-transform: uppercase;
+            padding: 2rem 3rem;
+            border-bottom: 3px solid #000000;
+            line-height: 1;
+        }
+
+        .feature-item {
+            display: flex;
+            align-items: flex-start;
+            border-bottom: 3px solid #000000;
+            padding: 2rem 3rem;
+            transition: background 0.05s, color 0.05s;
+        }
+
+        .feature-item:hover {
+            background: #000000;
+            color: #FFFFFF;
+        }
+
+        .feature-number {
+            font-family: 'Anton', sans-serif;
+            font-size: clamp(2.5rem, 4vw, 4rem);
+            color: #FF0000;
+            min-width: 120px;
+            line-height: 1;
+            flex-shrink: 0;
+            transition: color 0.05s;
+        }
+
+        .feature-item:hover .feature-number {
+            color: #FF0000;
+        }
+
+        .feature-divider {
+            width: 3rem;
+            height: 3px;
+            background: #000000;
+            margin-top: 1.2rem;
+            margin-right: 2rem;
+            flex-shrink: 0;
+            transition: background 0.05s;
+        }
+
+        .feature-item:hover .feature-divider {
+            background: #FFFFFF;
+        }
+
+        .feature-content {
+            flex: 1;
+        }
+
+        .feature-name {
+            font-family: 'Anton', sans-serif;
+            font-size: clamp(1.5rem, 2.5vw, 2.2rem);
+            text-transform: uppercase;
+            line-height: 1.1;
+            margin-bottom: 0.5rem;
+        }
+
+        .feature-desc {
+            font-family: 'Space Mono', monospace;
+            font-size: clamp(0.8rem, 1vw, 0.95rem);
+            line-height: 1.6;
+            max-width: 600px;
+        }
+
+        /* ========================================
+           QUICK START SECTION
+           ======================================== */
+        .quickstart {
+            padding: 3rem;
+            border-top: 3px solid #000000;
+        }
+
+        .quickstart-title {
+            font-family: 'Anton', sans-serif;
+            font-size: clamp(2.5rem, 6vw, 5rem);
+            text-transform: uppercase;
+            margin-bottom: 2rem;
+            line-height: 1;
+        }
+
+        .quickstart-code {
+            background: #000000;
+            color: #FFFFFF;
+            border: 3px solid #FF0000;
+            padding: 2.5rem 3rem;
+            font-family: 'Space Mono', monospace;
+            font-size: clamp(0.9rem, 1.3vw, 1.2rem);
+            line-height: 2;
+            overflow-x: auto;
+        }
+
+        .quickstart-code .prompt {
+            color: #FF0000;
+            user-select: none;
+        }
+
+        .quickstart-code .comment {
+            color: #666666;
+        }
+
+        .quickstart-note {
+            font-family: 'Space Mono', monospace;
+            font-size: clamp(1rem, 1.5vw, 1.3rem);
+            font-weight: 700;
+            margin-top: 1.5rem;
+            transform: rotate(1deg);
+            display: inline-block;
+        }
+
+        /* ========================================
+           ARCHITECTURE SECTION
+           ======================================== */
+        .architecture {
+            border-top: 3px solid #000000;
+        }
+
+        .architecture-header {
+            font-family: 'Anton', sans-serif;
+            font-size: clamp(2.5rem, 6vw, 5rem);
+            text-transform: uppercase;
+            padding: 2rem 3rem;
+            border-bottom: 3px solid #000000;
+            line-height: 1;
+        }
+
+        .arch-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .arch-table th,
+        .arch-table td {
+            border: 3px solid #000000;
+            padding: 1rem 1.5rem;
+            text-align: left;
+            font-family: 'Space Mono', monospace;
+            font-size: clamp(0.75rem, 1vw, 0.95rem);
+            vertical-align: top;
+        }
+
+        .arch-table th {
+            font-family: 'Anton', sans-serif;
+            font-size: clamp(1rem, 1.5vw, 1.3rem);
+            text-transform: uppercase;
+            background: #000000;
+            color: #FFFFFF;
+            letter-spacing: 0.05em;
+        }
+
+        .arch-table tr:hover td {
+            background: #000000;
+            color: #FFFFFF;
+        }
+
+        .arch-table td:first-child {
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
+        /* ========================================
+           FOOTER
+           ======================================== */
+        .footer {
+            background: #000000;
+            color: #FFFFFF;
+            padding: 3rem;
+            border-top: 3px solid #000000;
+        }
+
+        .footer-main {
+            font-family: 'Space Mono', monospace;
+            font-size: clamp(0.9rem, 1.2vw, 1.1rem);
+            margin-bottom: 1rem;
+        }
+
+        .footer-main a {
+            color: #FFFFFF;
+            text-decoration-color: #FF0000;
+        }
+
+        .footer-main a:hover {
+            background: #FFFFFF;
+            color: #000000;
+        }
+
+        .footer-tagline {
+            font-family: 'Space Mono', monospace;
+            font-size: clamp(0.75rem, 1vw, 0.9rem);
+            color: #999999;
+        }
+
+        .footer .italic-p {
+            font-style: italic;
+        }
+
+        /* ========================================
+           UTILITY
+           ======================================== */
+        .rotate-neg2 {
+            transform: rotate(-2deg);
+        }
+
+        .rotate-1 {
+            transform: rotate(1deg);
+        }
+
+        .rotate-2 {
+            transform: rotate(2deg);
+        }
+
+        .rotate-3 {
+            transform: rotate(3deg);
+        }
+
+        .red-text {
+            color: #FF0000;
+        }
+
+        /* ========================================
+           RESPONSIVE
+           ======================================== */
+        @media (max-width: 900px) {
+            .hero {
+                padding: 2rem 1.5rem;
+            }
+
+            .hero-headline {
+                font-size: 13vw;
+            }
+
+            .hero-stats {
+                flex-direction: column;
+                width: 100%;
+            }
+
+            .hero-stats span {
+                border-right: none;
+                border-bottom: 2px solid #000000;
+                padding: 0.6rem 1rem;
+            }
+
+            .hero-stats span:last-child {
+                border-bottom: none;
+            }
+
+            .hero-lobster {
+                font-size: 4rem;
+                top: 2%;
+                right: 3%;
+            }
+
+            .manifesto {
+                padding: 2rem 1.5rem;
+            }
+
+            .manifesto-columns {
+                column-count: 1;
+                column-rule: none;
+            }
+
+            .features-header,
+            .architecture-header {
+                padding: 1.5rem;
+            }
+
+            .feature-item {
+                flex-direction: column;
+                padding: 1.5rem;
+            }
+
+            .feature-number {
+                min-width: auto;
+                margin-bottom: 0.5rem;
+            }
+
+            .feature-divider {
+                display: none;
+            }
+
+            .quickstart {
+                padding: 2rem 1.5rem;
+            }
+
+            .quickstart-code {
+                padding: 1.5rem;
+                font-size: 0.85rem;
+            }
+
+            .arch-table th,
+            .arch-table td {
+                padding: 0.75rem 1rem;
+                font-size: 0.8rem;
+            }
+
+            .footer {
+                padding: 2rem 1.5rem;
+            }
+        }
+
+        @media (max-width: 550px) {
+            .hero-headline {
+                font-size: 14vw;
+            }
+
+            .hero-subline {
+                font-size: 0.95rem;
+            }
+
+            .manifesto-title {
+                font-size: 2rem;
+            }
+
+            .manifesto-columns p:first-of-type::first-letter {
+                font-size: 3.5rem;
+            }
+
+            .arch-table td:first-child {
+                white-space: normal;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- ============================================
+         HERO
+         ============================================ -->
+    <section class="hero">
+        <div class="hero-lobster" aria-hidden="true">&#x1F99E;</div>
+
+        <h1 class="hero-headline">YOUR AI AGENT SHOULDN'T COST MORE THAN YOUR COFFEE.</h1>
+
+        <p class="hero-subline">
+            <span class="italic-p">p</span>Claw. A single Go binary. $0.20/M tokens. 1 vCPU. No excuses.
+        </p>
+
+        <hr class="hero-red-rule">
+
+        <div class="hero-stats">
+            <span>7 Tools</span>
+            <span>1 Binary</span>
+            <span>1 Env Var</span>
+            <span>$0.20/M Tokens</span>
+            <span>MIT License</span>
+        </div>
+    </section>
+
+    <!-- ============================================
+         MANIFESTO
+         ============================================ -->
+    <section class="manifesto">
+        <h2 class="manifesto-title">The Problem With AI Agents</h2>
+
+        <div class="manifesto-columns">
+            <p>Most AI coding agents are built for companies with deep pockets. They assume you have GPU clusters, container orchestration, managed databases, and a team of platform engineers to babysit them. They require infrastructure that costs more per month than most freelancers earn. They are, in a word, <span class="red">bloated</span>.</p>
+
+            <p>And yet the actual task&mdash;reading files, editing code, remembering context&mdash;doesn't require any of that. It requires an LLM, a few file operations, and something to remember what happened last Tuesday. That's it. The rest is organizational overhead disguised as engineering.</p>
+
+            <p>Worse still, most agents are <span class="red">stateless</span>. Every conversation starts from zero. They don't know your codebase conventions, your preferences, your project history. You repeat yourself endlessly, spending tokens on context that should already be there. Each session is amnesia.</p>
+
+            <p><em><span class="italic-p">p</span>Claw</em> is the opposite. A single Go binary that runs on the cheapest VPS you can rent&mdash;1 vCPU, 1 GB of RAM, the $5/month tier. It talks to Vultr Inference at $0.20 per million tokens via Kimi K2 and GPT-OSS 120B. It has durable semantic memory backed by a vector store that <span class="red">builds over time</span>. It remembers you.</p>
+
+            <p>No Docker. No Kubernetes. No Redis. No PostgreSQL. One environment variable, <code>VULTR_API_KEY</code>, and you're running. The entire toolset&mdash;file reads, file edits, directory listing, delegated reasoning, memory storage, memory recall, web search&mdash;is compiled into one binary with zero runtime dependencies.</p>
+
+            <p>This is <span class="red">radical simplicity</span>. Not because simplicity is trendy, but because complexity is the enemy of accessibility. If your AI agent requires a DevOps team to deploy, it isn't a tool&mdash;it's a liability.</p>
+        </div>
+    </section>
+
+    <!-- ============================================
+         FEATURES
+         ============================================ -->
+    <section class="features">
+        <h2 class="features-header rotate-1">Capabilities</h2>
+
+        <div class="feature-item">
+            <div class="feature-number">01</div>
+            <div class="feature-divider"></div>
+            <div class="feature-content">
+                <h3 class="feature-name">Read, Write, Edit</h3>
+                <p class="feature-desc">Full workspace file operations. Read any file, list directories, apply precise string replacements or create new files. No sandbox. Direct access.</p>
+            </div>
+        </div>
+
+        <div class="feature-item">
+            <div class="feature-number">02</div>
+            <div class="feature-divider"></div>
+            <div class="feature-content">
+                <h3 class="feature-name">Remember</h3>
+                <p class="feature-desc">Vector-backed semantic memory via Vultr's managed store. Your agent learns your codebase, your preferences, your patterns. Cross-session persistence that builds over time.</p>
+            </div>
+        </div>
+
+        <div class="feature-item">
+            <div class="feature-number">03</div>
+            <div class="feature-divider"></div>
+            <div class="feature-content">
+                <h3 class="feature-name">Reason</h3>
+                <p class="feature-desc">Delegates hard sub-problems to GPT-OSS 120B. The primary model knows when to call for backup. Bounded at 2 delegation calls per turn&mdash;enough to be useful, constrained enough to stay cheap.</p>
+            </div>
+        </div>
+
+        <div class="feature-item">
+            <div class="feature-number">04</div>
+            <div class="feature-divider"></div>
+            <div class="feature-content">
+                <h3 class="feature-name">Search</h3>
+                <p class="feature-desc">Web grounding via Tavily. The agent verifies factual claims before stating them. Facts, not hallucinations. Grounding rules are injected automatically when enabled.</p>
+            </div>
+        </div>
+
+        <div class="feature-item">
+            <div class="feature-number">05</div>
+            <div class="feature-divider"></div>
+            <div class="feature-content">
+                <h3 class="feature-name">Persona</h3>
+                <p class="feature-desc">Customizable identity system. Name it. Shape its behavior. Define its tone. The sectioned prompt builder composes identity, behavior, tooling, safety, and runtime sections into a coherent personality.</p>
+            </div>
+        </div>
+
+        <div class="feature-item">
+            <div class="feature-number">06</div>
+            <div class="feature-divider"></div>
+            <div class="feature-content">
+                <h3 class="feature-name">Connect</h3>
+                <p class="feature-desc">Terminal REPL today. Discord bot today. The transport layer is decoupled&mdash;<code>HandleUserMessageProgressive</code> drives any adapter. Everywhere tomorrow.</p>
+            </div>
+        </div>
+
+        <div class="feature-item">
+            <div class="feature-number">07</div>
+            <div class="feature-divider"></div>
+            <div class="feature-content">
+                <h3 class="feature-name">Compact</h3>
+                <p class="feature-desc">Rolling conversation summarization. When history exceeds 12KB, older messages are summarized and pruned while preserving tool call/result pair integrity. Never loses context.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================
+         QUICK START
+         ============================================ -->
+    <section class="quickstart">
+        <h2 class="quickstart-title">Quick Start</h2>
+
+        <div class="quickstart-code">
+            <span class="prompt">$ </span>export VULTR_API_KEY=<span class="comment">"your-token"</span><br>
+            <span class="prompt">$ </span>go run .
+        </div>
+
+        <p class="quickstart-note">Two lines. That's the entire setup.</p>
+    </section>
+
+    <!-- ============================================
+         ARCHITECTURE
+         ============================================ -->
+    <section class="architecture">
+        <h2 class="architecture-header rotate-neg2">Architecture</h2>
+
+        <table class="arch-table">
+            <thead>
+                <tr>
+                    <th>Component</th>
+                    <th>Purpose</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Agent Loop</td>
+                    <td>Core chat/tool loop. Toggles between user input and model-tool-model continuation. Single-threaded with auxiliary goroutines for status rendering.</td>
+                </tr>
+                <tr>
+                    <td>Inference Client</td>
+                    <td>Streaming and non-streaming paths to Vultr chat completions. Primary model: Kimi K2. Reasoning model: GPT-OSS 120B. Summarization: Qwen 2.5 Coder 32B.</td>
+                </tr>
+                <tr>
+                    <td>Tool System</td>
+                    <td>Seven built-in tools registered at startup. JSON Schema input contracts. Async dispatch for fire-and-forget operations. Normalized event stream for lifecycle tracking.</td>
+                </tr>
+                <tr>
+                    <td>File Tools</td>
+                    <td>read_file, list_files, edit_file. Direct filesystem access with no sandboxing. edit_file supports both replacement and creation paths.</td>
+                </tr>
+                <tr>
+                    <td>Reasoning Delegation</td>
+                    <td>delegate_reasoning sends sub-problems to GPT-OSS 120B. Per-turn call limit of 2. No filesystem tools passed to the delegated model.</td>
+                </tr>
+                <tr>
+                    <td>Memory System</td>
+                    <td>record and recall tools backed by Vultr vector store. Auto-recall injects summarized memories into every system prompt. Per-turn cache avoids redundant searches.</td>
+                </tr>
+                <tr>
+                    <td>Web Search</td>
+                    <td>web_search tool via Tavily API. Supports general, news, and finance topics. Basic and advanced search depths. Grounding rules auto-injected into prompt.</td>
+                </tr>
+                <tr>
+                    <td>Compaction</td>
+                    <td>Rolling summarization when conversation exceeds 12KB. Preserves tool call/result pair integrity at split boundaries. Non-fatal on failure.</td>
+                </tr>
+                <tr>
+                    <td>Prompt Builder</td>
+                    <td>SectionedPromptBuilder composes Identity, Behavior, Tooling, Safety, Runtime, Memory, and Conversation Summary sections.</td>
+                </tr>
+                <tr>
+                    <td>Discord Transport</td>
+                    <td>Per-(channel, user) session isolation. Progressive part callbacks. Message splitting with model-inserted markers and balanced chunking fallback.</td>
+                </tr>
+            </tbody>
+        </table>
+    </section>
+
+    <!-- ============================================
+         FOOTER
+         ============================================ -->
+    <footer class="footer">
+        <p class="footer-main">
+            <span class="italic-p">p</span>Claw &mdash; MIT License &mdash; <a href="https://github.com/h14h/pClaw" target="_blank" rel="noopener">github.com/h14h/pClaw</a>
+        </p>
+        <p class="footer-tagline">Built with substance over style. (Though we have style too.)</p>
+    </footer>
+
+</body>
+</html>

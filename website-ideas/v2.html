@@ -1,0 +1,1546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>pClaw — Your Personal AI Coding Agent</title>
+  <meta name="description" content="An itty-bitty Claw for itty-bitty servers and itty-bitty budgets. Lightweight AI coding agent that remembers you, grows with you, and works the way you do.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Nunito:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    /* ===== Reset & Base ===== */
+    *, *::before, *::after {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      --bg: #FFF8F0;
+      --primary: #E05A47;
+      --primary-hover: #c94a39;
+      --secondary: #FFB5A7;
+      --accent: #D4A574;
+      --text: #2D2422;
+      --text-muted: #5a4a42;
+      --light: #FFE8E0;
+      --blush: #FFF0EB;
+      --white: #FFFFFF;
+      --shadow-sm: 0 2px 8px rgba(45, 36, 34, 0.06);
+      --shadow-md: 0 8px 30px rgba(45, 36, 34, 0.08);
+      --shadow-lg: 0 16px 50px rgba(45, 36, 34, 0.12);
+      --radius-sm: 12px;
+      --radius-md: 20px;
+      --radius-lg: 28px;
+      --radius-pill: 100px;
+    }
+
+    html {
+      scroll-behavior: smooth;
+      font-size: 16px;
+    }
+
+    body {
+      font-family: 'Nunito', -apple-system, BlinkMacSystemFont, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+      line-height: 1.7;
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    h1, h2, h3, h4, h5, h6 {
+      font-family: 'Fraunces', Georgia, serif;
+      line-height: 1.2;
+      font-weight: 600;
+    }
+
+    a {
+      color: var(--primary);
+      text-decoration: none;
+      transition: color 0.2s ease;
+    }
+
+    a:hover {
+      color: var(--primary-hover);
+    }
+
+    img {
+      max-width: 100%;
+      display: block;
+    }
+
+    /* ===== Floating Particles (CSS Only) ===== */
+    .particles {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 0;
+      overflow: hidden;
+    }
+
+    .particle {
+      position: absolute;
+      border-radius: 50%;
+      opacity: 0;
+      animation: particleFloat linear infinite;
+    }
+
+    .particle:nth-child(1) {
+      width: 8px; height: 8px;
+      background: var(--secondary);
+      left: 10%;
+      animation-duration: 18s;
+      animation-delay: 0s;
+    }
+    .particle:nth-child(2) {
+      width: 6px; height: 6px;
+      background: var(--accent);
+      left: 25%;
+      animation-duration: 22s;
+      animation-delay: 3s;
+    }
+    .particle:nth-child(3) {
+      width: 10px; height: 10px;
+      background: var(--light);
+      left: 40%;
+      animation-duration: 16s;
+      animation-delay: 1s;
+    }
+    .particle:nth-child(4) {
+      width: 5px; height: 5px;
+      background: var(--secondary);
+      left: 55%;
+      animation-duration: 24s;
+      animation-delay: 5s;
+    }
+    .particle:nth-child(5) {
+      width: 7px; height: 7px;
+      background: var(--accent);
+      left: 70%;
+      animation-duration: 20s;
+      animation-delay: 2s;
+    }
+    .particle:nth-child(6) {
+      width: 9px; height: 9px;
+      background: var(--light);
+      left: 85%;
+      animation-duration: 19s;
+      animation-delay: 4s;
+    }
+    .particle:nth-child(7) {
+      width: 6px; height: 6px;
+      background: var(--secondary);
+      left: 15%;
+      animation-duration: 21s;
+      animation-delay: 7s;
+    }
+    .particle:nth-child(8) {
+      width: 8px; height: 8px;
+      background: var(--accent);
+      left: 60%;
+      animation-duration: 17s;
+      animation-delay: 6s;
+    }
+    .particle:nth-child(9) {
+      width: 5px; height: 5px;
+      background: var(--light);
+      left: 35%;
+      animation-duration: 23s;
+      animation-delay: 8s;
+    }
+    .particle:nth-child(10) {
+      width: 7px; height: 7px;
+      background: var(--secondary);
+      left: 78%;
+      animation-duration: 15s;
+      animation-delay: 1.5s;
+    }
+    .particle:nth-child(11) {
+      width: 4px; height: 4px;
+      background: var(--accent);
+      left: 48%;
+      animation-duration: 26s;
+      animation-delay: 9s;
+    }
+    .particle:nth-child(12) {
+      width: 11px; height: 11px;
+      background: var(--light);
+      left: 92%;
+      animation-duration: 20s;
+      animation-delay: 3.5s;
+    }
+
+    @keyframes particleFloat {
+      0% {
+        transform: translateY(100vh) rotate(0deg);
+        opacity: 0;
+      }
+      10% {
+        opacity: 0.4;
+      }
+      90% {
+        opacity: 0.4;
+      }
+      100% {
+        transform: translateY(-10vh) rotate(360deg);
+        opacity: 0;
+      }
+    }
+
+    /* ===== Layout ===== */
+    .container {
+      max-width: 1140px;
+      margin: 0 auto;
+      padding: 0 24px;
+      position: relative;
+      z-index: 1;
+    }
+
+    section {
+      position: relative;
+      z-index: 1;
+    }
+
+    /* ===== Navigation ===== */
+    .nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      padding: 16px 0;
+      transition: background 0.3s ease, box-shadow 0.3s ease, padding 0.3s ease;
+    }
+
+    .nav.scrolled {
+      background: rgba(255, 248, 240, 0.92);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      box-shadow: var(--shadow-sm);
+      padding: 10px 0;
+    }
+
+    .nav .container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .nav-logo {
+      font-family: 'Fraunces', Georgia, serif;
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .nav-logo .p-italic {
+      font-style: italic;
+      color: var(--primary);
+    }
+
+    .nav-logo .lobster-icon {
+      font-size: 1.3rem;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 32px;
+      list-style: none;
+    }
+
+    .nav-links a {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      transition: color 0.2s ease;
+    }
+
+    .nav-links a:hover {
+      color: var(--primary);
+    }
+
+    .nav-cta {
+      background: var(--primary);
+      color: var(--white) !important;
+      padding: 8px 24px;
+      border-radius: var(--radius-pill);
+      font-weight: 700 !important;
+      transition: background 0.2s ease, transform 0.2s ease !important;
+    }
+
+    .nav-cta:hover {
+      background: var(--primary-hover);
+      color: var(--white) !important;
+      transform: translateY(-1px);
+    }
+
+    /* Mobile nav toggle */
+    .nav-toggle {
+      display: none;
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 4px;
+    }
+
+    .nav-toggle span {
+      display: block;
+      width: 24px;
+      height: 2px;
+      background: var(--text);
+      margin: 6px 0;
+      border-radius: 2px;
+      transition: transform 0.3s ease, opacity 0.3s ease;
+    }
+
+    /* ===== Hero ===== */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      padding: 120px 0 80px;
+      background: linear-gradient(180deg, var(--bg) 0%, var(--blush) 40%, var(--light) 80%, var(--secondary) 100%);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: -50%;
+      right: -20%;
+      width: 70%;
+      height: 140%;
+      background: radial-gradient(ellipse, rgba(255, 181, 167, 0.2) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .hero .container {
+      display: flex;
+      align-items: center;
+      gap: 60px;
+    }
+
+    .hero-content {
+      flex: 1;
+      max-width: 580px;
+    }
+
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--white);
+      border: 1.5px solid var(--secondary);
+      padding: 6px 16px;
+      border-radius: var(--radius-pill);
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--primary);
+      margin-bottom: 24px;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .hero h1 {
+      font-size: clamp(2.5rem, 5vw, 3.75rem);
+      font-weight: 800;
+      color: var(--text);
+      margin-bottom: 20px;
+      letter-spacing: -0.02em;
+    }
+
+    .hero h1 .highlight {
+      color: var(--primary);
+      position: relative;
+    }
+
+    .hero h1 .highlight::after {
+      content: '';
+      position: absolute;
+      bottom: 2px;
+      left: 0;
+      width: 100%;
+      height: 8px;
+      background: var(--secondary);
+      opacity: 0.5;
+      border-radius: 4px;
+      z-index: -1;
+    }
+
+    .hero-sub {
+      font-size: 1.2rem;
+      color: var(--text-muted);
+      margin-bottom: 36px;
+      line-height: 1.8;
+      max-width: 480px;
+    }
+
+    .hero-actions {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 32px;
+      border-radius: var(--radius-pill);
+      font-family: 'Nunito', sans-serif;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      border: 2px solid transparent;
+      transition: all 0.25s ease;
+      text-decoration: none;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: var(--white);
+      border-color: var(--primary);
+      box-shadow: 0 4px 16px rgba(224, 90, 71, 0.3);
+    }
+
+    .btn-primary:hover {
+      background: var(--primary-hover);
+      border-color: var(--primary-hover);
+      color: var(--white);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(224, 90, 71, 0.35);
+    }
+
+    .btn-outline {
+      background: transparent;
+      color: var(--primary);
+      border-color: var(--primary);
+    }
+
+    .btn-outline:hover {
+      background: var(--primary);
+      color: var(--white);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(224, 90, 71, 0.2);
+    }
+
+    /* ===== Lobster Mascot ===== */
+    .hero-mascot {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+    }
+
+    .lobster-wrapper {
+      position: relative;
+      width: 320px;
+      height: 320px;
+    }
+
+    .lobster-bg {
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(circle, var(--white) 0%, var(--light) 60%, transparent 70%);
+      border-radius: 50%;
+      animation: lobsterGlow 4s ease-in-out infinite;
+    }
+
+    @keyframes lobsterGlow {
+      0%, 100% { transform: scale(1); opacity: 0.8; }
+      50% { transform: scale(1.05); opacity: 1; }
+    }
+
+    .lobster-character {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      animation: lobsterBob 3s ease-in-out infinite;
+    }
+
+    @keyframes lobsterBob {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-12px); }
+    }
+
+    .lobster-svg {
+      width: 200px;
+      height: 200px;
+      filter: drop-shadow(0 8px 24px rgba(224, 90, 71, 0.2));
+    }
+
+    /* Decorative bubbles around mascot */
+    .mascot-bubble {
+      position: absolute;
+      border-radius: 50%;
+      background: var(--secondary);
+      opacity: 0.3;
+    }
+
+    .mascot-bubble:nth-child(3) {
+      width: 16px; height: 16px;
+      top: 15%; left: 5%;
+      animation: bubbleFloat 5s ease-in-out infinite;
+    }
+    .mascot-bubble:nth-child(4) {
+      width: 10px; height: 10px;
+      top: 25%; right: 8%;
+      animation: bubbleFloat 4s ease-in-out infinite 1s;
+      background: var(--accent);
+    }
+    .mascot-bubble:nth-child(5) {
+      width: 12px; height: 12px;
+      bottom: 20%; left: 10%;
+      animation: bubbleFloat 6s ease-in-out infinite 2s;
+    }
+    .mascot-bubble:nth-child(6) {
+      width: 8px; height: 8px;
+      bottom: 30%; right: 5%;
+      animation: bubbleFloat 3.5s ease-in-out infinite 0.5s;
+      background: var(--accent);
+    }
+
+    @keyframes bubbleFloat {
+      0%, 100% { transform: translateY(0) scale(1); }
+      50% { transform: translateY(-10px) scale(1.15); }
+    }
+
+    /* ===== Features ===== */
+    .features {
+      padding: 100px 0 120px;
+      background: var(--bg);
+      position: relative;
+    }
+
+    .features::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 120px;
+      background: linear-gradient(180deg, var(--secondary) 0%, var(--bg) 100%);
+    }
+
+    .section-header {
+      text-align: center;
+      margin-bottom: 64px;
+      position: relative;
+    }
+
+    .section-label {
+      display: inline-block;
+      font-size: 0.85rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--primary);
+      margin-bottom: 12px;
+    }
+
+    .section-title {
+      font-size: clamp(2rem, 4vw, 2.75rem);
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 16px;
+    }
+
+    .section-desc {
+      font-size: 1.1rem;
+      color: var(--text-muted);
+      max-width: 560px;
+      margin: 0 auto;
+    }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 28px;
+      position: relative;
+    }
+
+    .feature-card {
+      background: var(--white);
+      border-radius: var(--radius-lg);
+      padding: 40px 36px;
+      position: relative;
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
+      box-shadow: var(--shadow-sm);
+      border: 1px solid rgba(255, 181, 167, 0.15);
+      overflow: hidden;
+    }
+
+    .feature-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+      background: linear-gradient(90deg, var(--primary), var(--secondary));
+      border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+
+    .feature-card:hover {
+      transform: translateY(-6px);
+      box-shadow: var(--shadow-lg);
+    }
+
+    .feature-card:hover::before {
+      opacity: 1;
+    }
+
+    /* Staggered layout offset */
+    .feature-card:nth-child(2) {
+      margin-top: 40px;
+    }
+
+    .feature-card:nth-child(3) {
+      margin-top: -20px;
+    }
+
+    .feature-icon {
+      width: 56px;
+      height: 56px;
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.6rem;
+      margin-bottom: 20px;
+    }
+
+    .feature-card:nth-child(1) .feature-icon {
+      background: linear-gradient(135deg, #FFF0EB, #FFE0D6);
+    }
+    .feature-card:nth-child(2) .feature-icon {
+      background: linear-gradient(135deg, #F0E6FF, #E0D0FF);
+    }
+    .feature-card:nth-child(3) .feature-icon {
+      background: linear-gradient(135deg, #E6FFF0, #D0FFE0);
+    }
+    .feature-card:nth-child(4) .feature-icon {
+      background: linear-gradient(135deg, #FFF6E0, #FFEDD0);
+    }
+
+    .feature-title {
+      font-size: 1.35rem;
+      font-weight: 700;
+      margin-bottom: 12px;
+      color: var(--text);
+    }
+
+    .feature-desc {
+      font-size: 1rem;
+      color: var(--text-muted);
+      line-height: 1.7;
+    }
+
+    /* ===== Quick Start ===== */
+    .quickstart {
+      padding: 100px 0;
+      background: linear-gradient(180deg, var(--bg) 0%, var(--blush) 100%);
+    }
+
+    .quickstart-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 60px;
+    }
+
+    .quickstart-text {
+      flex: 1;
+    }
+
+    .quickstart-text .section-label,
+    .quickstart-text .section-title {
+      text-align: left;
+    }
+
+    .quickstart-text p {
+      font-size: 1.1rem;
+      color: var(--text-muted);
+      margin-bottom: 24px;
+      line-height: 1.8;
+    }
+
+    .quickstart-code-area {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .code-block {
+      background: var(--white);
+      border: 1.5px solid var(--secondary);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      box-shadow: var(--shadow-md);
+      position: relative;
+    }
+
+    .code-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 20px;
+      background: var(--light);
+      border-bottom: 1px solid rgba(255, 181, 167, 0.3);
+    }
+
+    .code-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+
+    .code-dot:nth-child(1) { background: var(--secondary); }
+    .code-dot:nth-child(2) { background: var(--accent); }
+    .code-dot:nth-child(3) { background: var(--primary); }
+
+    .code-header span:last-child {
+      margin-left: auto;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      font-family: 'Nunito', sans-serif;
+    }
+
+    .code-body {
+      padding: 24px;
+      font-family: 'SFMono-Regular', 'Fira Code', 'Fira Mono', Menlo, Consolas, monospace;
+      font-size: 0.9rem;
+      line-height: 1.8;
+      color: var(--text);
+      overflow-x: auto;
+    }
+
+    .code-body .comment {
+      color: var(--accent);
+      font-style: italic;
+    }
+
+    .code-body .cmd {
+      color: var(--primary);
+      font-weight: 600;
+    }
+
+    .code-body .string {
+      color: #6a8759;
+    }
+
+    .code-body .prompt {
+      color: var(--text-muted);
+      user-select: none;
+    }
+
+    .code-copy-btn {
+      position: absolute;
+      top: 12px;
+      right: 16px;
+      background: var(--white);
+      border: 1.5px solid var(--secondary);
+      border-radius: var(--radius-sm);
+      padding: 6px 12px;
+      cursor: pointer;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      font-family: 'Nunito', sans-serif;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .code-copy-btn:hover {
+      background: var(--light);
+      color: var(--primary);
+      border-color: var(--primary);
+    }
+
+    .quickstart-note {
+      margin-top: 20px;
+      padding: 16px 24px;
+      background: var(--white);
+      border-radius: var(--radius-md);
+      border-left: 4px solid var(--accent);
+      font-size: 0.95rem;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    .quickstart-note strong {
+      color: var(--text);
+    }
+
+    /* ===== Philosophy ===== */
+    .philosophy {
+      padding: 100px 0;
+      background: var(--bg);
+      position: relative;
+    }
+
+    .philosophy-card {
+      max-width: 720px;
+      margin: 0 auto;
+      text-align: center;
+      position: relative;
+    }
+
+    .philosophy-quote-mark {
+      font-family: 'Fraunces', Georgia, serif;
+      font-size: 6rem;
+      color: var(--secondary);
+      line-height: 0.5;
+      display: block;
+      margin-bottom: 24px;
+      user-select: none;
+    }
+
+    .philosophy-quote {
+      font-family: 'Fraunces', Georgia, serif;
+      font-size: clamp(1.5rem, 3vw, 2.25rem);
+      font-weight: 600;
+      font-style: italic;
+      color: var(--text);
+      margin-bottom: 28px;
+      line-height: 1.4;
+    }
+
+    .philosophy-body {
+      font-size: 1.1rem;
+      color: var(--text-muted);
+      line-height: 1.8;
+      max-width: 580px;
+      margin: 0 auto;
+    }
+
+    .philosophy-divider {
+      width: 60px;
+      height: 3px;
+      background: linear-gradient(90deg, var(--primary), var(--secondary));
+      border-radius: 2px;
+      margin: 28px auto;
+    }
+
+    /* ===== Specs / At a Glance ===== */
+    .at-a-glance {
+      padding: 80px 0 100px;
+      background: linear-gradient(180deg, var(--bg) 0%, var(--light) 100%);
+    }
+
+    .specs-row {
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      flex-wrap: wrap;
+      margin-top: 48px;
+    }
+
+    .spec-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--white);
+      border: 1.5px solid rgba(255, 181, 167, 0.3);
+      border-radius: var(--radius-pill);
+      padding: 14px 28px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text);
+      box-shadow: var(--shadow-sm);
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .spec-pill:hover {
+      transform: translateY(-3px);
+      box-shadow: var(--shadow-md);
+    }
+
+    .spec-pill .spec-emoji {
+      font-size: 1.2rem;
+    }
+
+    .spec-pill .spec-value {
+      color: var(--primary);
+      font-weight: 700;
+    }
+
+    /* ===== Footer ===== */
+    .footer {
+      position: relative;
+      background: var(--text);
+      color: rgba(255, 248, 240, 0.7);
+      padding: 60px 0 36px;
+    }
+
+    .footer::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+      background: linear-gradient(90deg, var(--primary), var(--secondary), var(--accent), var(--primary));
+      background-size: 300% 100%;
+      animation: gradientSlide 6s linear infinite;
+    }
+
+    @keyframes gradientSlide {
+      0% { background-position: 0% 0; }
+      100% { background-position: 300% 0; }
+    }
+
+    .footer-grid {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 40px;
+      margin-bottom: 48px;
+      flex-wrap: wrap;
+    }
+
+    .footer-brand {
+      max-width: 300px;
+    }
+
+    .footer-brand .nav-logo {
+      color: var(--bg);
+      margin-bottom: 12px;
+    }
+
+    .footer-brand p {
+      font-size: 0.9rem;
+      line-height: 1.7;
+    }
+
+    .footer-links-group h4 {
+      font-family: 'Nunito', sans-serif;
+      font-size: 0.85rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--bg);
+      margin-bottom: 16px;
+    }
+
+    .footer-links-group ul {
+      list-style: none;
+    }
+
+    .footer-links-group li {
+      margin-bottom: 10px;
+    }
+
+    .footer-links-group a {
+      color: rgba(255, 248, 240, 0.6);
+      font-size: 0.9rem;
+      transition: color 0.2s ease;
+    }
+
+    .footer-links-group a:hover {
+      color: var(--secondary);
+    }
+
+    .footer-bottom {
+      border-top: 1px solid rgba(255, 248, 240, 0.1);
+      padding-top: 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .footer-bottom p {
+      font-size: 0.85rem;
+    }
+
+    .footer-bottom .mit-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 14px;
+      border: 1px solid rgba(255, 248, 240, 0.2);
+      border-radius: var(--radius-pill);
+      font-size: 0.8rem;
+      color: rgba(255, 248, 240, 0.5);
+    }
+
+    /* ===== Scroll Animations ===== */
+    .fade-in {
+      opacity: 0;
+      transform: translateY(30px);
+      transition: opacity 0.7s ease, transform 0.7s ease;
+    }
+
+    .fade-in.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .fade-in-left {
+      opacity: 0;
+      transform: translateX(-30px);
+      transition: opacity 0.7s ease, transform 0.7s ease;
+    }
+
+    .fade-in-left.visible {
+      opacity: 1;
+      transform: translateX(0);
+    }
+
+    .fade-in-right {
+      opacity: 0;
+      transform: translateX(30px);
+      transition: opacity 0.7s ease, transform 0.7s ease;
+    }
+
+    .fade-in-right.visible {
+      opacity: 1;
+      transform: translateX(0);
+    }
+
+    /* Staggered delays for feature cards */
+    .feature-card:nth-child(1) { transition-delay: 0s; }
+    .feature-card:nth-child(2) { transition-delay: 0.12s; }
+    .feature-card:nth-child(3) { transition-delay: 0.24s; }
+    .feature-card:nth-child(4) { transition-delay: 0.36s; }
+
+    .spec-pill:nth-child(1) { transition-delay: 0s; }
+    .spec-pill:nth-child(2) { transition-delay: 0.08s; }
+    .spec-pill:nth-child(3) { transition-delay: 0.16s; }
+    .spec-pill:nth-child(4) { transition-delay: 0.24s; }
+    .spec-pill:nth-child(5) { transition-delay: 0.32s; }
+
+    /* ===== Responsive ===== */
+    @media (max-width: 900px) {
+      .hero .container {
+        flex-direction: column;
+        text-align: center;
+      }
+
+      .hero-content {
+        max-width: 100%;
+      }
+
+      .hero-sub {
+        margin-left: auto;
+        margin-right: auto;
+      }
+
+      .hero-actions {
+        justify-content: center;
+      }
+
+      .lobster-wrapper {
+        width: 240px;
+        height: 240px;
+      }
+
+      .lobster-svg {
+        width: 150px;
+        height: 150px;
+      }
+
+      .features-grid {
+        grid-template-columns: 1fr;
+        max-width: 520px;
+        margin: 0 auto;
+      }
+
+      .feature-card:nth-child(2),
+      .feature-card:nth-child(3) {
+        margin-top: 0;
+      }
+
+      .quickstart-wrapper {
+        flex-direction: column;
+      }
+
+      .quickstart-text .section-label,
+      .quickstart-text .section-title {
+        text-align: center;
+      }
+
+      .quickstart-text p {
+        text-align: center;
+      }
+
+      .quickstart-text {
+        text-align: center;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .nav-links {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 248, 240, 0.98);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        flex-direction: column;
+        justify-content: center;
+        gap: 28px;
+        z-index: 99;
+      }
+
+      .nav-links.open {
+        display: flex;
+      }
+
+      .nav-links a {
+        font-size: 1.3rem;
+      }
+
+      .nav-toggle {
+        display: block;
+        z-index: 101;
+      }
+
+      .nav-toggle.open span:nth-child(1) {
+        transform: translateY(8px) rotate(45deg);
+      }
+      .nav-toggle.open span:nth-child(2) {
+        opacity: 0;
+      }
+      .nav-toggle.open span:nth-child(3) {
+        transform: translateY(-8px) rotate(-45deg);
+      }
+
+      .hero {
+        padding: 100px 0 60px;
+        min-height: auto;
+      }
+
+      .hero h1 {
+        font-size: 2.2rem;
+      }
+
+      .btn {
+        padding: 12px 24px;
+        font-size: 0.95rem;
+      }
+
+      .features {
+        padding: 80px 0 100px;
+      }
+
+      .feature-card {
+        padding: 28px 24px;
+      }
+
+      .specs-row {
+        gap: 12px;
+      }
+
+      .spec-pill {
+        padding: 10px 20px;
+        font-size: 0.85rem;
+      }
+
+      .footer-grid {
+        flex-direction: column;
+        gap: 32px;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Floating Particles -->
+  <div class="particles" aria-hidden="true">
+    <div class="particle"></div>
+    <div class="particle"></div>
+    <div class="particle"></div>
+    <div class="particle"></div>
+    <div class="particle"></div>
+    <div class="particle"></div>
+    <div class="particle"></div>
+    <div class="particle"></div>
+    <div class="particle"></div>
+    <div class="particle"></div>
+    <div class="particle"></div>
+    <div class="particle"></div>
+  </div>
+
+  <!-- Navigation -->
+  <nav class="nav" id="nav">
+    <div class="container">
+      <a href="#" class="nav-logo">
+        <span class="lobster-icon">&#x1F99E;</span>
+        <span><span class="p-italic">p</span>Claw</span>
+      </a>
+      <ul class="nav-links" id="navLinks">
+        <li><a href="#features">Features</a></li>
+        <li><a href="#quickstart">Quick Start</a></li>
+        <li><a href="#philosophy">About</a></li>
+        <li><a href="https://github.com/h14h/pClaw" class="nav-cta" target="_blank" rel="noopener">GitHub</a></li>
+      </ul>
+      <button class="nav-toggle" id="navToggle" aria-label="Toggle navigation">
+        <span></span>
+        <span></span>
+        <span></span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="hero" id="hero">
+    <div class="container">
+      <div class="hero-content">
+        <div class="hero-badge fade-in">
+          &#x1F99E; Open source &middot; MIT License
+        </div>
+        <h1 class="fade-in">
+          Meet your <span class="highlight">personal</span> AI&nbsp;agent
+        </h1>
+        <p class="hero-sub fade-in">
+          <em><span style="font-style:italic;font-family:'Fraunces',Georgia,serif;">p</span>Claw</em> remembers you, grows with you, and works the way you do. A tiny, mighty coding companion for your terminal and beyond.
+        </p>
+        <div class="hero-actions fade-in">
+          <a href="#quickstart" class="btn btn-primary">Get Started</a>
+          <a href="#features" class="btn btn-outline">See How It Works</a>
+        </div>
+      </div>
+      <div class="hero-mascot fade-in">
+        <div class="lobster-wrapper">
+          <div class="lobster-bg"></div>
+          <div class="lobster-character">
+            <!-- Friendly Lobster SVG -->
+            <svg class="lobster-svg" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+              <!-- Body -->
+              <ellipse cx="100" cy="110" rx="45" ry="55" fill="#E05A47" />
+              <!-- Belly -->
+              <ellipse cx="100" cy="118" rx="30" ry="38" fill="#FFB5A7" />
+              <!-- Head -->
+              <circle cx="100" cy="62" r="32" fill="#E05A47" />
+              <!-- Face circle -->
+              <circle cx="100" cy="66" r="24" fill="#FFB5A7" />
+              <!-- Left eye -->
+              <ellipse cx="90" cy="60" rx="5" ry="6" fill="#2D2422" />
+              <ellipse cx="91.5" cy="58.5" rx="1.8" ry="2" fill="#FFF8F0" />
+              <!-- Right eye -->
+              <ellipse cx="110" cy="60" rx="5" ry="6" fill="#2D2422" />
+              <ellipse cx="111.5" cy="58.5" rx="1.8" ry="2" fill="#FFF8F0" />
+              <!-- Smile -->
+              <path d="M 90 72 Q 100 82 110 72" stroke="#2D2422" stroke-width="2.5" fill="none" stroke-linecap="round" />
+              <!-- Blush left -->
+              <ellipse cx="82" cy="70" rx="5" ry="3" fill="#FF9B8A" opacity="0.6" />
+              <!-- Blush right -->
+              <ellipse cx="118" cy="70" rx="5" ry="3" fill="#FF9B8A" opacity="0.6" />
+              <!-- Left antenna -->
+              <path d="M 78 42 Q 65 20 55 15" stroke="#E05A47" stroke-width="3.5" fill="none" stroke-linecap="round" />
+              <circle cx="54" cy="14" r="5" fill="#FFB5A7" />
+              <!-- Right antenna -->
+              <path d="M 122 42 Q 135 20 145 15" stroke="#E05A47" stroke-width="3.5" fill="none" stroke-linecap="round" />
+              <circle cx="146" cy="14" r="5" fill="#FFB5A7" />
+              <!-- Left claw arm -->
+              <path d="M 55 100 Q 30 85 22 75" stroke="#E05A47" stroke-width="5" fill="none" stroke-linecap="round" />
+              <!-- Left claw -->
+              <ellipse cx="18" cy="68" rx="12" ry="9" fill="#E05A47" transform="rotate(-20 18 68)" />
+              <path d="M 10 62 Q 14 55 22 60" stroke="#E05A47" stroke-width="4" fill="none" stroke-linecap="round" />
+              <!-- Right claw arm -->
+              <path d="M 145 100 Q 170 85 178 75" stroke="#E05A47" stroke-width="5" fill="none" stroke-linecap="round" />
+              <!-- Right claw -->
+              <ellipse cx="182" cy="68" rx="12" ry="9" fill="#E05A47" transform="rotate(20 182 68)" />
+              <path d="M 190 62 Q 186 55 178 60" stroke="#E05A47" stroke-width="4" fill="none" stroke-linecap="round" />
+              <!-- Left leg 1 -->
+              <line x1="65" y1="125" x2="48" y2="140" stroke="#E05A47" stroke-width="3" stroke-linecap="round" />
+              <!-- Left leg 2 -->
+              <line x1="62" y1="138" x2="44" y2="150" stroke="#E05A47" stroke-width="3" stroke-linecap="round" />
+              <!-- Right leg 1 -->
+              <line x1="135" y1="125" x2="152" y2="140" stroke="#E05A47" stroke-width="3" stroke-linecap="round" />
+              <!-- Right leg 2 -->
+              <line x1="138" y1="138" x2="156" y2="150" stroke="#E05A47" stroke-width="3" stroke-linecap="round" />
+              <!-- Tail -->
+              <path d="M 85 162 Q 100 180 115 162" stroke="#E05A47" stroke-width="3" fill="#E05A47" />
+              <path d="M 80 160 Q 100 185 120 160" stroke="#FFB5A7" stroke-width="0" fill="#FFB5A7" opacity="0.5" />
+              <!-- Tail fan -->
+              <ellipse cx="88" cy="175" rx="8" ry="5" fill="#E05A47" transform="rotate(-15 88 175)" />
+              <ellipse cx="100" cy="178" rx="8" ry="5" fill="#E05A47" />
+              <ellipse cx="112" cy="175" rx="8" ry="5" fill="#E05A47" transform="rotate(15 112 175)" />
+            </svg>
+          </div>
+          <div class="mascot-bubble"></div>
+          <div class="mascot-bubble"></div>
+          <div class="mascot-bubble"></div>
+          <div class="mascot-bubble"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section class="features" id="features">
+    <div class="container">
+      <div class="section-header fade-in">
+        <span class="section-label">What makes it special</span>
+        <h2 class="section-title">An agent that actually <em>knows</em> you</h2>
+        <p class="section-desc">
+          Not just another AI tool. A companion that learns, adapts, and fits your workflow like a glove.
+        </p>
+      </div>
+
+      <div class="features-grid">
+        <div class="feature-card fade-in">
+          <div class="feature-icon">&#x1F9E0;</div>
+          <h3 class="feature-title">Memory That Grows</h3>
+          <p class="feature-desc">
+            Durable semantic memory backed by a vector store. Your agent learns your preferences, your codebase, your patterns. Every conversation makes it smarter.
+          </p>
+        </div>
+
+        <div class="feature-card fade-in">
+          <div class="feature-icon">&#x1F3AD;</div>
+          <h3 class="feature-title">A Personality That's Yours</h3>
+          <p class="feature-desc">
+            Customize your agent's persona with env vars or persona files. Give it a name, a voice, a style. Make it feel like your teammate, not a generic chatbot.
+          </p>
+        </div>
+
+        <div class="feature-card fade-in">
+          <div class="feature-icon">&#x1F4B0;</div>
+          <h3 class="feature-title">Radically Affordable</h3>
+          <p class="feature-desc">
+            $0.20 per million tokens. Runs on a $5/month VPS with 1 vCPU and 1 GB RAM. No GPU required. AI assistance that won't break the bank.
+          </p>
+        </div>
+
+        <div class="feature-card fade-in">
+          <div class="feature-icon">&#x1F50C;</div>
+          <h3 class="feature-title">Goes Where You Go</h3>
+          <p class="feature-desc">
+            Terminal REPL today, Discord bot today, everywhere tomorrow. One single-binary agent that follows you across every surface you work on.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Quick Start -->
+  <section class="quickstart" id="quickstart">
+    <div class="container">
+      <div class="quickstart-wrapper">
+        <div class="quickstart-text fade-in-left">
+          <span class="section-label">Get going in seconds</span>
+          <h2 class="section-title">One env var. One command.</h2>
+          <p>
+            No complex setup. No dependency hell. No GPU provisioning.
+            Just set your Vultr API key and run. You'll have a personal AI coding agent in under a minute.
+          </p>
+          <p>
+            <em><span style="font-style:italic;font-family:'Fraunces',Georgia,serif;">p</span>Claw</em> is a single Go binary &mdash; lightweight enough to run on the cheapest VPS you can find.
+          </p>
+        </div>
+        <div class="quickstart-code-area fade-in-right">
+          <div class="code-block">
+            <div class="code-header">
+              <div class="code-dot"></div>
+              <div class="code-dot"></div>
+              <div class="code-dot"></div>
+              <span>terminal</span>
+            </div>
+            <button class="code-copy-btn" id="copyBtn" onclick="copyCode()">
+              <span id="copyIcon">&#x1F4CB;</span> Copy
+            </button>
+            <div class="code-body">
+              <div><span class="comment"># One command. That's it.</span></div>
+              <div><span class="prompt">$ </span><span class="cmd">export</span> VULTR_API_KEY=<span class="string">"your-token"</span></div>
+              <div><span class="prompt">$ </span><span class="cmd">go run</span> .</div>
+            </div>
+          </div>
+          <div class="quickstart-note">
+            <strong>That's all you need.</strong> One env var, one command, and you have a personal AI coding agent that remembers you.
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Philosophy -->
+  <section class="philosophy" id="philosophy">
+    <div class="container">
+      <div class="philosophy-card fade-in">
+        <span class="philosophy-quote-mark">&ldquo;</span>
+        <p class="philosophy-quote">
+          Born from research. Built with care. Open source forever.
+        </p>
+        <div class="philosophy-divider"></div>
+        <p class="philosophy-body">
+          <em><span style="font-style:italic;font-family:'Fraunces',Georgia,serif;">p</span>Claw</em> started as an experiment: what happens when you stop treating AI agents as disposable tools and start treating them as companions that grow with you? The answer turned out to be something surprisingly personal &mdash; an agent that remembers your codebase, adapts to your style, and gets better the more you work together. We believe the future of AI assistance isn't bigger models or flashier features. It's agents that know you.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- At a Glance -->
+  <section class="at-a-glance" id="specs">
+    <div class="container">
+      <div class="section-header fade-in">
+        <span class="section-label">At a glance</span>
+        <h2 class="section-title">Tiny footprint, mighty results</h2>
+        <p class="section-desc">Everything you need, nothing you don't.</p>
+      </div>
+      <div class="specs-row">
+        <div class="spec-pill fade-in">
+          <span class="spec-emoji">&#x26A1;</span>
+          <span><span class="spec-value">1 vCPU</span> / 1 GB RAM</span>
+        </div>
+        <div class="spec-pill fade-in">
+          <span class="spec-emoji">&#x1F4B8;</span>
+          <span><span class="spec-value">$0.20</span> / million tokens</span>
+        </div>
+        <div class="spec-pill fade-in">
+          <span class="spec-emoji">&#x1F4E6;</span>
+          <span>Single <span class="spec-value">Go binary</span></span>
+        </div>
+        <div class="spec-pill fade-in">
+          <span class="spec-emoji">&#x1F513;</span>
+          <span><span class="spec-value">MIT</span> License</span>
+        </div>
+        <div class="spec-pill fade-in">
+          <span class="spec-emoji">&#x1F310;</span>
+          <span>Vultr <span class="spec-value">Kimi K2</span> + GPT-OSS</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <div class="nav-logo">
+            <span class="lobster-icon">&#x1F99E;</span>
+            <span><span class="p-italic">p</span>Claw</span>
+          </div>
+          <p>An itty-bitty Claw for itty-bitty servers &amp; itty-bitty budgets.</p>
+        </div>
+        <div class="footer-links-group">
+          <h4>Project</h4>
+          <ul>
+            <li><a href="https://github.com/h14h/pClaw" target="_blank" rel="noopener">GitHub</a></li>
+            <li><a href="https://github.com/h14h/pClaw#readme" target="_blank" rel="noopener">Documentation</a></li>
+            <li><a href="https://github.com/h14h/pClaw/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a></li>
+          </ul>
+        </div>
+        <div class="footer-links-group">
+          <h4>Connect</h4>
+          <ul>
+            <li><a href="https://github.com/h14h/pClaw/issues" target="_blank" rel="noopener">Issues</a></li>
+            <li><a href="https://github.com/h14h/pClaw/discussions" target="_blank" rel="noopener">Discussions</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <p>Made with &#x1F99E; by <a href="https://github.com/h14h" target="_blank" rel="noopener" style="color:var(--secondary)">h14h</a></p>
+        <span class="mit-badge">&#x1F513; Open Source &middot; MIT</span>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    /* ===== Navigation scroll effect ===== */
+    const nav = document.getElementById('nav');
+    let lastScroll = 0;
+
+    function onScroll() {
+      const scrollY = window.scrollY;
+      if (scrollY > 40) {
+        nav.classList.add('scrolled');
+      } else {
+        nav.classList.remove('scrolled');
+      }
+      lastScroll = scrollY;
+    }
+
+    window.addEventListener('scroll', onScroll, { passive: true });
+
+    /* ===== Mobile nav toggle ===== */
+    const navToggle = document.getElementById('navToggle');
+    const navLinks = document.getElementById('navLinks');
+
+    navToggle.addEventListener('click', function () {
+      navLinks.classList.toggle('open');
+      navToggle.classList.toggle('open');
+    });
+
+    // Close mobile nav on link click
+    navLinks.querySelectorAll('a').forEach(function (link) {
+      link.addEventListener('click', function () {
+        navLinks.classList.remove('open');
+        navToggle.classList.remove('open');
+      });
+    });
+
+    /* ===== Intersection Observer for fade-in animations ===== */
+    const observerOptions = {
+      root: null,
+      rootMargin: '0px 0px -60px 0px',
+      threshold: 0.1
+    };
+
+    const observer = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+          observer.unobserve(entry.target);
+        }
+      });
+    }, observerOptions);
+
+    document.querySelectorAll('.fade-in, .fade-in-left, .fade-in-right').forEach(function (el) {
+      observer.observe(el);
+    });
+
+    /* ===== Copy code button ===== */
+    function copyCode() {
+      var code = 'export VULTR_API_KEY="your-token"\ngo run .';
+      navigator.clipboard.writeText(code).then(function () {
+        var btn = document.getElementById('copyBtn');
+        var icon = document.getElementById('copyIcon');
+        btn.innerHTML = '<span>&#x2705;</span> Copied!';
+        setTimeout(function () {
+          btn.innerHTML = '<span>&#x1F4CB;</span> Copy';
+        }, 2000);
+      });
+    }
+
+    /* ===== Smooth scroll for anchor links ===== */
+    document.querySelectorAll('a[href^="#"]').forEach(function (anchor) {
+      anchor.addEventListener('click', function (e) {
+        var href = this.getAttribute('href');
+        if (href === '#') return;
+        e.preventDefault();
+        var target = document.querySelector(href);
+        if (target) {
+          var offset = nav.offsetHeight + 16;
+          var top = target.getBoundingClientRect().top + window.scrollY - offset;
+          window.scrollTo({ top: top, behavior: 'smooth' });
+        }
+      });
+    });
+  </script>
+</body>
+</html>
