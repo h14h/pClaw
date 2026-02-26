@@ -182,6 +182,26 @@ VULTR_API_KEY="your-token" ./scripts/run-delegation-harness.sh
 
 Design docs are indexed in `specs/README.md`.
 
+## Research Interests
+
+This project doubles as a testbed for exploring how persistent memory changes AI agent behavior in long-term social settings. The primary questions under investigation:
+
+### Does persistent memory make a chatbot feel more "personal"?
+
+Deploying the bot into a Discord community with durable semantic memory (via Vultr's vector store) lets it organically accumulate facts about the people it interacts with — preferences, personality traits, communication styles, recurring topics. The open question is whether this accumulation produces a qualitative shift in how the bot is perceived: does it start to feel like it *knows* you, or does performance degrade as memory grows noisy and contradictory?
+
+### Can long-term social exposure produce "cultural intuition"?
+
+Human decision-making in organizations is shaped by hundreds of micro-interactions — hallway conversations, offhand comments, observed reactions. Over time, these interactions build an implicit model of team culture, individual communication styles, and organizational priorities. This allows humans to accurately infer *intent* from imperfect instructions: "clean up the auth code" means something different depending on whether your team values speed or correctness, whether the auth system is politically sensitive, and whether the person asking tends to want small tweaks or deep refactors.
+
+Agents don't have this luxury. They're born fresh and take instructions at face value. The hypothesis here is that an AI agent deployed as a long-term chatbot — absorbing conversational context, recording behavioral patterns, and building implicit models of the people and culture around it — could develop something analogous to this "cultural intuition."
+
+### Can absorbed cultural context steer worker agents?
+
+The end goal isn't just a better chatbot. If persistent social memory can encode cultural norms, team preferences, and individual communication patterns, that knowledge could be extracted and injected into *worker* agents (e.g. coding agents, task runners) as contextual guidance. An agent that knows "this team values working code over perfect architecture" and "the person requesting this prefers small, incremental changes" can make better judgment calls when interpreting ambiguous instructions — without requiring the human to spell out every implicit expectation.
+
+This is the bridge between "chatbot with good memory" and "agent with good judgment."
+
 ## Clear TODOs
 
  - [ ] Set up guides for supported inference providers & messaging platforms
