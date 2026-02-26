@@ -1502,3 +1502,171 @@ func TestSearch_InvalidCreatedLeavesZeroTime(t *testing.T) {
 		t.Errorf("expected zero time for invalid created; got %v", results[0].Created)
 	}
 }
+
+// --- recallCache tests ---
+
+func TestRecallCache_HitOnSameQuery(t *testing.T) {
+	rc := &recallCache{}
+	rc.set("hello", "[Memory]\nstuff")
+
+	got, hit := rc.get("hello")
+	if !hit {
+		t.Fatal("expected cache hit")
+	}
+	if got != "[Memory]\nstuff" {
+		t.Fatalf("unexpected cached value: %s", got)
+	}
+}
+
+func TestRecallCache_MissOnDifferentQuery(t *testing.T) {
+	rc := &recallCache{}
+	rc.set("hello", "[Memory]\nstuff")
+
+	_, hit := rc.get("goodbye")
+	if hit {
+		t.Fatal("expected cache miss for different query")
+	}
+}
+
+func TestRecallCache_MissAfterInvalidate(t *testing.T) {
+	rc := &recallCache{}
+	rc.set("hello", "[Memory]\nstuff")
+	rc.invalidate()
+
+	_, hit := rc.get("hello")
+	if hit {
+		t.Fatal("expected cache miss after invalidate")
+	}
+}
+
+func TestRecallCache_AvoidsDuplicateSearchCalls(t *testing.T) {
+	searchResp := `{"results":[{"id":"1","content":"user prefers Go","created":"2026-02-01T10:00:00Z"}]}`
+	summarizeResp := `{"choices":[{"message":{"content":"User prefers Go"}}]}`
+
+	srv, handlers := newPathRoutingServer(map[string][]mockResponse{
+		// Only one search response — a second search call would get a 500.
+		"/vector_store": {{status: 200, body: searchResp}},
+		"/chat":         {{status: 200, body: summarizeResp}},
+	})
+	defer srv.Close()
+
+	client := NewMemoryClient(srv.URL, "test-key", srv.Client())
+	client.mu.Lock()
+	client.collectionID = "col-abc"
+	client.mu.Unlock()
+
+	agent := &Agent{
+		baseURL:            srv.URL,
+		apiKey:             "test-key",
+		httpClient:         srv.Client(),
+		summarizationModel: Summarization,
+		memoryClient:       client,
+		recallTurnCache:    &recallCache{},
+		promptBuilder:      NewSectionedPromptBuilder(DefaultPromptConfig()),
+		promptTransport:    "cli",
+	}
+
+	conversation := []ChatMessage{
+		{Role: "user", Content: "what is my preferred language?"},
+	}
+
+	// First call: populates cache.
+	result1 := agent.withSystemPrompt(context.Background(), conversation, nil, PromptModeFull)
+	sys1, _ := result1[0].Content.(string)
+	if !strings.Contains(sys1, "[Memory]") {
+		t.Fatalf("first call missing [Memory]; got:\n%s", sys1)
+	}
+
+	// Second call: should use cache, not hit the server again.
+	result2 := agent.withSystemPrompt(context.Background(), conversation, nil, PromptModeFull)
+	sys2, _ := result2[0].Content.(string)
+	if !strings.Contains(sys2, "[Memory]") {
+		t.Fatalf("second call missing [Memory]; got:\n%s", sys2)
+	}
+
+	// The vector store search handler should have been called exactly once.
+	searchHandler := handlers["/vector_store"]
+	if len(searchHandler.requests) != 1 {
+		t.Fatalf("expected 1 search request, got %d", len(searchHandler.requests))
+	}
+}
+
+func TestRecallCache_InvalidatedByRecord(t *testing.T) {
+	addResp := `{"item":{"id":"item-1"}}`
+	srv, _ := newMockServer([]mockResponse{
+		{status: 201, body: addResp},
+	})
+	defer srv.Close()
+
+	client := NewMemoryClient(srv.URL, "test-key", srv.Client())
+	client.mu.Lock()
+	client.collectionID = "col-abc"
+	client.mu.Unlock()
+
+	cache := &recallCache{}
+	cache.set("hello", "[Memory]\nold data")
+
+	agent := &Agent{
+		memoryClient:    client,
+		recallTurnCache: cache,
+	}
+
+	input, _ := json.Marshal(RecordInput{
+		Subject:     "test",
+		SubjectType: "person",
+		Descriptor:  "likes Go",
+	})
+	result, err := agent.recordFunction(input)
+	if err != nil {
+		t.Fatalf("recordFunction failed: %v", err)
+	}
+	if result != "Memory stored." {
+		t.Fatalf("unexpected result: %s", result)
+	}
+
+	// Cache should be invalidated.
+	_, hit := cache.get("hello")
+	if hit {
+		t.Fatal("expected cache to be invalidated after record")
+	}
+}
+
+func TestWithSystemPrompt_MinimalModeSkipsRecall(t *testing.T) {
+	searchResp := `{"results":[{"id":"1","content":"user prefers Go","created":"2026-02-01T10:00:00Z"}]}`
+	srv, handlers := newPathRoutingServer(map[string][]mockResponse{
+		"/vector_store": {{status: 200, body: searchResp}},
+	})
+	defer srv.Close()
+
+	client := NewMemoryClient(srv.URL, "test-key", srv.Client())
+	client.mu.Lock()
+	client.collectionID = "col-abc"
+	client.mu.Unlock()
+
+	agent := &Agent{
+		baseURL:            srv.URL,
+		apiKey:             "test-key",
+		httpClient:         srv.Client(),
+		summarizationModel: Summarization,
+		memoryClient:       client,
+		recallTurnCache:    &recallCache{},
+		promptBuilder:      NewSectionedPromptBuilder(DefaultPromptConfig()),
+		promptTransport:    "cli",
+	}
+
+	conversation := []ChatMessage{
+		{Role: "user", Content: "analyze this problem"},
+	}
+
+	result := agent.withSystemPrompt(context.Background(), conversation, nil, PromptModeMinimal)
+	sys, _ := result[0].Content.(string)
+	if strings.Contains(sys, "[Memory]") {
+		t.Fatalf("minimal mode should not contain [Memory]; got:\n%s", sys)
+	}
+
+	// No search requests should have been made.
+	searchHandler := handlers["/vector_store"]
+	if len(searchHandler.requests) != 0 {
+		t.Fatalf("expected 0 search requests in minimal mode, got %d", len(searchHandler.requests))
+	}
+}

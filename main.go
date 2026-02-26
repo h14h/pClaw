@@ -74,6 +74,7 @@ type Agent struct {
 	outputWriter        io.Writer
 	reasoningCallCount  int
 	memoryClient        *MemoryClient
+	recallTurnCache     *recallCache
 	webSearchClient     *WebSearchClient
 	asyncWg             sync.WaitGroup
 }
@@ -642,6 +643,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	for {
 		if readUserInput {
 			a.reasoningCallCount = 0
+			if a.recallTurnCache != nil {
+				a.recallTurnCache.invalidate()
+			}
 			fmt.Print("\u001b[94mYou\u001b[0m: ")
 			userInput, ok := a.getUserMessage()
 			if !ok {
@@ -741,18 +745,22 @@ func (a *Agent) withSystemPrompt(ctx context.Context, conversation []ChatMessage
 		ToolNames: toolNames,
 	})
 
-	// Extract the last user message as the recall query and inject memories.
-	query := ""
-	for i := len(conversation) - 1; i >= 0; i-- {
-		if conversation[i].Role == "user" {
-			if text, ok := conversation[i].Content.(string); ok {
-				query = strings.TrimSpace(text)
+	// Inject [Memory] section for full mode only. Minimal mode (used by
+	// delegated reasoning) operates on a standalone sub-prompt and does not
+	// benefit from memory context.
+	if mode == PromptModeFull {
+		query := ""
+		for i := len(conversation) - 1; i >= 0; i-- {
+			if conversation[i].Role == "user" {
+				if text, ok := conversation[i].Content.(string); ok {
+					query = strings.TrimSpace(text)
+				}
+				break
 			}
-			break
 		}
-	}
-	if recalled := a.recallMemories(ctx, query); recalled != "" {
-		prompt = prompt + "\n\n" + recalled
+		if recalled := a.recallMemories(ctx, query); recalled != "" {
+			prompt = prompt + "\n\n" + recalled
+		}
 	}
 
 	if summary := conversationSummaryFromContext(ctx); summary != "" {
@@ -1397,6 +1405,9 @@ func (a *Agent) HandleUserMessageProgressive(
 	})
 
 	a.reasoningCallCount = 0
+	if a.recallTurnCache != nil {
+		a.recallTurnCache.invalidate()
+	}
 	cs.Append(ChatMessage{
 		Role:    "user",
 		Content: userInput,
