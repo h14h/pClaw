@@ -20,10 +20,12 @@ agent/
 ├── main.go                    # Agent runtime, inference client, tool definitions
 ├── discord.go                 # Discord runtime, command/mention handlers, session manager
 ├── memory.go                  # MemoryClient, record tool, auto-recall, configureMemory
+├── websearch.go               # WebSearchClient, web_search tool, configureWebSearch
 ├── prompting.go               # System prompt builder (SectionedPromptBuilder)
 ├── compaction.go              # ConversationState, rolling summarization, compaction logic
 ├── main_test.go               # Unit tests for tools + dispatch
 ├── memory_test.go             # Unit tests for MemoryClient, record tool, and auto-recall
+├── websearch_test.go          # Unit tests for WebSearchClient, web_search tool, and configureWebSearch
 ├── compaction_test.go         # Unit tests for compaction types, helpers, and HTTP logic
 ├── main_integration_test.go   # Live Vultr integration tests
 ├── main_delegation_harness_integration_test.go # Delegation policy harness (opt-in E2E)
@@ -58,6 +60,9 @@ agent/
 | `summarizeMemories` | `memory.go` | Direct HTTP POST to chat completions (bypasses `runInferenceWithModel`) to produce compact summary of memory items |
 | `recordFunction` | `memory.go` | Tool handler for `record`; stores user-provided content via `MemoryClient.AddItem` |
 | `recallFunction` | `memory.go` | Tool handler for `recall`; searches memory and returns full verbatim results |
+| `WebSearchClient` | `websearch.go` | HTTP client for Tavily Search API; handles search requests and response parsing |
+| `configureWebSearch` | `websearch.go` | Reads `TAVILY_API_KEY`/`WEB_SEARCH_MAX_RESULTS`, creates `WebSearchClient`, sets `agent.webSearchClient` |
+| `webSearchFunction` | `websearch.go` | Tool handler for `web_search`; performs Tavily search and formats results with sources |
 | `ConversationState` | `compaction.go` | Tracks `[]ChatMessage`, rolling `Summary`, and cumulative `SizeBytes`; replaces raw slices throughout the agent loop |
 | `compactConversation` | `compaction.go` | Checks threshold, finds safe split, summarizes prefix, truncates history; non-fatal on error |
 | `summarizeConversation` | `compaction.go` | Direct HTTP POST to chat completions for conversation prefix summarization (bypasses `runInferenceWithModel`) |
@@ -178,6 +183,46 @@ Set `MEMORY_ENABLED=false` (or `0` / `no`) to disable the subsystem entirely:
 2. `agent.memoryClient` remains nil
 3. `record` and `recall` tools are not registered
 4. Auto-recall injects no `[Memory]` section
+
+## Web Search Subsystem
+
+The web search subsystem provides web grounding via the Tavily Search API, enabling the agent to verify factual claims and retrieve current information.
+
+### Client Lifecycle
+
+```text
+configureWebSearch(agent)
+  │
+  ├─ TAVILY_API_KEY empty → return (no web search)
+  ├─ webSearchMaxResults() → WEB_SEARCH_MAX_RESULTS or 5
+  ├─ NewWebSearchClient(defaultTavilyBaseURL, apiKey, httpClient, maxResults)
+  ├─ agent.webSearchClient = client
+  └─ agent.tools = agent.buildTools(nil)  // adds "web_search" tool
+```
+
+No collection bootstrapping or initialization round-trips are needed (unlike memory). The client is stateless.
+
+### Prompt Grounding Rules
+
+When `web_search` is in the tool list, `SectionedPromptBuilder.Build` dynamically appends grounding rules to the **Safety** section:
+
+- Use `web_search` to verify factual claims before stating them
+- Never present unverified information as fact
+
+These rules are omitted when `web_search` is not available.
+
+### Discord Sharing
+
+In Discord mode, `configureWebSearch` is called for each session agent in the factory. Since the client is stateless (no collection bootstrap), there is no need for a shared instance.
+
+### Kill Switch
+
+When `TAVILY_API_KEY` is unset or empty:
+
+1. `configureWebSearch` returns immediately without creating a client
+2. `agent.webSearchClient` remains nil
+3. `web_search` tool is not registered
+4. Grounding prompt rules are not injected
 
 ## Compaction Subsystem
 
