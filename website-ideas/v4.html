@@ -1,0 +1,1027 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>pClaw — itty-bitty agent. GIANT results.</title>
+  <meta name="description" content="A personal AI coding agent that runs on a potato and costs less than a candy bar. Single binary, 1 vCPU, $0.20/M tokens.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Quicksand:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    /* ============================================================
+       RESET & BASE
+       ============================================================ */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0F1729;
+      --bg-light: #162040;
+      --yellow:   #FFE03D;
+      --pink:     #FF4F9A;
+      --cyan:     #00E5FF;
+      --orange:   #FF8C42;
+      --text:     #F0F0F0;
+      --text-dim: #8892a8;
+      --bounce:   cubic-bezier(0.68, -0.55, 0.265, 1.55);
+      --bounce-soft: cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+
+    html {
+      scroll-behavior: smooth;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      font-family: 'Quicksand', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      overflow-x: hidden;
+      line-height: 1.6;
+    }
+
+    /* ============================================================
+       SCROLL-TRIGGERED BOUNCE-IN
+       ============================================================ */
+    .reveal {
+      opacity: 0;
+      transform: translateY(40px) scale(0.95);
+      transition: opacity 0.6s ease, transform 0.8s var(--bounce);
+    }
+    .reveal.visible {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+
+    /* stagger children */
+    .reveal-stagger .reveal-child {
+      opacity: 0;
+      transform: translateY(30px) scale(0.92);
+      transition: opacity 0.5s ease, transform 0.7s var(--bounce);
+    }
+    .reveal-stagger.visible .reveal-child {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+    .reveal-stagger.visible .reveal-child:nth-child(1) { transition-delay: 0s; }
+    .reveal-stagger.visible .reveal-child:nth-child(2) { transition-delay: 0.08s; }
+    .reveal-stagger.visible .reveal-child:nth-child(3) { transition-delay: 0.16s; }
+    .reveal-stagger.visible .reveal-child:nth-child(4) { transition-delay: 0.24s; }
+    .reveal-stagger.visible .reveal-child:nth-child(5) { transition-delay: 0.32s; }
+    .reveal-stagger.visible .reveal-child:nth-child(6) { transition-delay: 0.40s; }
+    .reveal-stagger.visible .reveal-child:nth-child(7) { transition-delay: 0.48s; }
+
+    /* ============================================================
+       FLOATING BACKGROUND ELEMENTS
+       ============================================================ */
+    .floaters {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+      overflow: hidden;
+    }
+    .floater {
+      position: absolute;
+      border-radius: 50%;
+      opacity: 0.12;
+      animation: floatDrift linear infinite;
+    }
+    .floater.shape-star {
+      border-radius: 0;
+      clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);
+    }
+    .floater.shape-lobster {
+      border-radius: 0;
+      font-size: inherit;
+      background: none !important;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .floater.shape-lobster::after {
+      content: '\1F99E';
+      font-size: inherit;
+    }
+
+    @keyframes floatDrift {
+      0%   { transform: translateY(0) rotate(0deg); }
+      25%  { transform: translateY(-15vh) rotate(90deg); }
+      50%  { transform: translateY(-30vh) rotate(180deg); }
+      75%  { transform: translateY(-45vh) rotate(270deg); }
+      100% { transform: translateY(-60vh) rotate(360deg); }
+    }
+
+    /* ============================================================
+       HERO SECTION
+       ============================================================ */
+    .hero {
+      position: relative;
+      z-index: 1;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 2rem 1.5rem;
+      overflow: hidden;
+    }
+
+    .hero-headline {
+      font-family: 'Lilita One', cursive;
+      line-height: 0.95;
+      margin-bottom: 1rem;
+    }
+    .hero-headline .line-itty {
+      display: block;
+      font-size: clamp(1.8rem, 5vw, 3.5rem);
+      color: var(--yellow);
+      animation: bounceIn 0.8s var(--bounce) both;
+      animation-delay: 0.2s;
+    }
+    .hero-headline .line-giant {
+      display: block;
+      font-size: clamp(5rem, 20vw, 14rem);
+      color: var(--pink);
+      letter-spacing: -0.02em;
+      animation: bounceIn 0.8s var(--bounce) both;
+      animation-delay: 0.4s;
+      text-shadow: 0 0 60px rgba(255, 79, 154, 0.3);
+    }
+    .hero-headline .line-results {
+      display: block;
+      font-size: clamp(1.8rem, 5vw, 3.5rem);
+      color: var(--cyan);
+      animation: bounceIn 0.8s var(--bounce) both;
+      animation-delay: 0.6s;
+    }
+
+    @keyframes bounceIn {
+      0%   { opacity: 0; transform: scale(0.3) translateY(40px); }
+      60%  { opacity: 1; transform: scale(1.08) translateY(-5px); }
+      100% { opacity: 1; transform: scale(1) translateY(0); }
+    }
+
+    /* lobster character */
+    .hero-lobster {
+      font-size: clamp(5rem, 15vw, 10rem);
+      line-height: 1;
+      margin: 1rem 0 0.5rem;
+      animation: lobsterFloat 3s ease-in-out infinite, bounceIn 0.8s var(--bounce) both;
+      animation-delay: 0s, 0.1s;
+      cursor: default;
+      user-select: none;
+      filter: drop-shadow(0 0 30px rgba(255, 79, 154, 0.25));
+    }
+    .hero-lobster:hover {
+      animation: lobsterDance 0.4s var(--bounce) 3;
+    }
+
+    @keyframes lobsterFloat {
+      0%, 100% { transform: translateY(0) rotate(-2deg); }
+      50%      { transform: translateY(-12px) rotate(2deg); }
+    }
+    @keyframes lobsterDance {
+      0%   { transform: rotate(0deg) scale(1); }
+      25%  { transform: rotate(-15deg) scale(1.1); }
+      50%  { transform: rotate(15deg) scale(1.15); }
+      75%  { transform: rotate(-10deg) scale(1.1); }
+      100% { transform: rotate(0deg) scale(1); }
+    }
+
+    /* claw snap animation on hover */
+    @keyframes clawSnap {
+      0%, 100% { transform: scaleX(1); }
+      50%      { transform: scaleX(0.85); }
+    }
+
+    .hero-sub {
+      font-size: clamp(1rem, 2.5vw, 1.35rem);
+      color: var(--text-dim);
+      max-width: 520px;
+      margin: 0.5rem auto 2rem;
+      font-weight: 500;
+      animation: fadeUp 0.8s ease both;
+      animation-delay: 0.9s;
+    }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .hero-ctas {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+      justify-content: center;
+      animation: fadeUp 0.8s ease both;
+      animation-delay: 1.1s;
+    }
+
+    .btn {
+      font-family: 'Quicksand', sans-serif;
+      font-weight: 700;
+      font-size: 1.1rem;
+      padding: 0.85rem 2rem;
+      border-radius: 100px;
+      border: 2.5px solid transparent;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      transition: transform 0.3s var(--bounce), box-shadow 0.3s ease;
+    }
+    .btn:hover {
+      transform: scale(1.08) translateY(-3px);
+    }
+    .btn:active {
+      transform: scale(0.96);
+    }
+    .btn-primary {
+      background: var(--yellow);
+      color: var(--bg);
+      box-shadow: 0 4px 20px rgba(255, 224, 61, 0.3);
+    }
+    .btn-primary:hover {
+      box-shadow: 0 8px 30px rgba(255, 224, 61, 0.45);
+    }
+    .btn-outline {
+      background: transparent;
+      border-color: var(--cyan);
+      color: var(--cyan);
+    }
+    .btn-outline:hover {
+      background: rgba(0, 229, 255, 0.08);
+      box-shadow: 0 4px 20px rgba(0, 229, 255, 0.2);
+    }
+
+    /* ============================================================
+       SECTION BASE
+       ============================================================ */
+    section {
+      position: relative;
+      z-index: 1;
+      padding: 5rem 1.5rem;
+    }
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+    .section-label {
+      font-family: 'Lilita One', cursive;
+      font-size: clamp(0.9rem, 2vw, 1.1rem);
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      color: var(--pink);
+      margin-bottom: 0.5rem;
+    }
+    .section-title {
+      font-family: 'Lilita One', cursive;
+      font-size: clamp(2rem, 6vw, 3.5rem);
+      line-height: 1.1;
+      margin-bottom: 1rem;
+    }
+    .section-sub {
+      color: var(--text-dim);
+      font-size: 1.15rem;
+      max-width: 600px;
+      font-weight: 500;
+    }
+
+    /* ============================================================
+       SCALE COMPARISON
+       ============================================================ */
+    .scale {
+      background: linear-gradient(135deg, var(--bg) 0%, var(--bg-light) 100%);
+    }
+    .scale-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 3rem;
+      align-items: center;
+      margin-top: 3rem;
+    }
+
+    .scale-tiny {
+      text-align: center;
+    }
+    .scale-tiny .server-icon {
+      width: 100px;
+      height: 80px;
+      background: var(--bg);
+      border: 3px solid var(--text-dim);
+      border-radius: 12px;
+      margin: 0 auto 1.5rem;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .scale-tiny .server-icon::before {
+      content: '';
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #4ade80;
+      box-shadow: 0 0 8px #4ade80;
+      animation: blink 2s ease-in-out infinite;
+    }
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50%      { opacity: 0.3; }
+    }
+    .scale-tiny .spec-list {
+      list-style: none;
+      font-family: 'Lilita One', cursive;
+      font-size: 1.3rem;
+      color: var(--text-dim);
+    }
+    .scale-tiny .spec-list li {
+      margin: 0.4rem 0;
+    }
+
+    .scale-giant .feature-list {
+      list-style: none;
+    }
+    .scale-giant .feature-list li {
+      font-family: 'Lilita One', cursive;
+      margin: 0.3rem 0;
+      transform-origin: left center;
+      transition: transform 0.3s var(--bounce), color 0.3s ease;
+    }
+    .scale-giant .feature-list li:nth-child(1) { font-size: 1.1rem; color: var(--yellow); }
+    .scale-giant .feature-list li:nth-child(2) { font-size: 1.4rem; color: var(--cyan); }
+    .scale-giant .feature-list li:nth-child(3) { font-size: 1.8rem; color: var(--pink); }
+    .scale-giant .feature-list li:nth-child(4) { font-size: 2.2rem; color: var(--orange); }
+    .scale-giant .feature-list li:nth-child(5) { font-size: 2.7rem; color: var(--yellow); }
+    .scale-giant .feature-list li:nth-child(6) { font-size: 3.2rem; color: var(--cyan); }
+    .scale-giant .feature-list li:nth-child(7) { font-size: 3.8rem; color: var(--pink); }
+
+    .scale-giant .feature-list li:hover {
+      transform: scale(1.05) translateX(5px);
+    }
+
+    @media (max-width: 700px) {
+      .scale-grid {
+        grid-template-columns: 1fr;
+        gap: 2rem;
+      }
+      .scale-giant .feature-list li:nth-child(1) { font-size: 1rem; }
+      .scale-giant .feature-list li:nth-child(2) { font-size: 1.2rem; }
+      .scale-giant .feature-list li:nth-child(3) { font-size: 1.5rem; }
+      .scale-giant .feature-list li:nth-child(4) { font-size: 1.8rem; }
+      .scale-giant .feature-list li:nth-child(5) { font-size: 2.1rem; }
+      .scale-giant .feature-list li:nth-child(6) { font-size: 2.5rem; }
+      .scale-giant .feature-list li:nth-child(7) { font-size: 2.9rem; }
+    }
+
+    /* ============================================================
+       FEATURES CARDS
+       ============================================================ */
+    .features {
+      padding-top: 6rem;
+      padding-bottom: 6rem;
+    }
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1.8rem;
+      margin-top: 3rem;
+    }
+    .feature-card {
+      background: var(--bg-light);
+      border-radius: 24px;
+      padding: 2rem;
+      border: 2px solid rgba(255, 255, 255, 0.05);
+      transition: transform 0.4s var(--bounce), box-shadow 0.3s ease, border-color 0.3s ease;
+      cursor: default;
+    }
+    .feature-card:hover {
+      transform: scale(1.05) rotate(0deg) !important;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+    }
+    .feature-card:nth-child(1) { transform: rotate(-2deg); border-color: rgba(255, 224, 61, 0.2); }
+    .feature-card:nth-child(2) { transform: rotate(1.5deg); border-color: rgba(0, 229, 255, 0.2); }
+    .feature-card:nth-child(3) { transform: rotate(-1deg); border-color: rgba(255, 79, 154, 0.2); }
+    .feature-card:nth-child(4) { transform: rotate(2.5deg); border-color: rgba(255, 140, 66, 0.2); }
+    .feature-card:nth-child(5) { transform: rotate(-1.5deg); border-color: rgba(0, 229, 255, 0.2); }
+    .feature-card:nth-child(6) { transform: rotate(1deg); border-color: rgba(255, 224, 61, 0.2); }
+
+    .feature-card .card-emoji {
+      font-size: 2.5rem;
+      margin-bottom: 0.8rem;
+      display: block;
+      animation: wobble 4s ease-in-out infinite;
+      animation-delay: var(--wobble-delay, 0s);
+    }
+    @keyframes wobble {
+      0%, 100% { transform: rotate(0deg); }
+      25%      { transform: rotate(-5deg); }
+      75%      { transform: rotate(5deg); }
+    }
+
+    .feature-card .card-title {
+      font-family: 'Lilita One', cursive;
+      font-size: 1.4rem;
+      margin-bottom: 0.5rem;
+    }
+    .feature-card:nth-child(1) .card-title { color: var(--yellow); }
+    .feature-card:nth-child(2) .card-title { color: var(--cyan); }
+    .feature-card:nth-child(3) .card-title { color: var(--pink); }
+    .feature-card:nth-child(4) .card-title { color: var(--orange); }
+    .feature-card:nth-child(5) .card-title { color: var(--cyan); }
+    .feature-card:nth-child(6) .card-title { color: var(--yellow); }
+
+    .feature-card .card-desc {
+      color: var(--text-dim);
+      font-weight: 500;
+      font-size: 0.95rem;
+      line-height: 1.5;
+    }
+
+    /* ============================================================
+       HOW IT WORKS
+       ============================================================ */
+    .how-it-works {
+      background: linear-gradient(180deg, var(--bg) 0%, var(--bg-light) 50%, var(--bg) 100%);
+      padding-top: 6rem;
+      padding-bottom: 6rem;
+    }
+    .steps {
+      margin-top: 3rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0rem;
+      position: relative;
+    }
+    /* dotted connector */
+    .step-connector {
+      width: 4px;
+      height: 40px;
+      margin: 0 auto;
+      background: repeating-linear-gradient(
+        to bottom,
+        var(--pink) 0px,
+        var(--pink) 6px,
+        transparent 6px,
+        transparent 12px
+      );
+      animation: dashScroll 1s linear infinite;
+    }
+    @keyframes dashScroll {
+      to { background-position: 0 12px; }
+    }
+
+    .step {
+      display: flex;
+      align-items: flex-start;
+      gap: 1.5rem;
+      max-width: 600px;
+      margin: 0 auto;
+      width: 100%;
+    }
+    .step-num {
+      font-family: 'Lilita One', cursive;
+      font-size: 3rem;
+      line-height: 1;
+      flex-shrink: 0;
+      width: 60px;
+      text-align: center;
+    }
+    .step:nth-child(1) .step-num  { color: var(--yellow); }
+    .step:nth-child(3) .step-num  { color: var(--cyan); }
+    .step:nth-child(5) .step-num  { color: var(--pink); }
+    .step:nth-child(7) .step-num  { color: var(--orange); }
+
+    .step-content {
+      flex: 1;
+    }
+    .step-title {
+      font-family: 'Lilita One', cursive;
+      font-size: 1.3rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .code-block {
+      background: #0a0e1a;
+      border: 1.5px solid rgba(255, 255, 255, 0.08);
+      border-radius: 14px;
+      padding: 1rem 1.2rem;
+      font-family: 'Courier New', monospace;
+      font-size: 0.9rem;
+      color: var(--cyan);
+      overflow-x: auto;
+      line-height: 1.6;
+    }
+    .code-block .prompt { color: var(--pink); }
+    .code-block .cmd    { color: var(--yellow); }
+    .code-block .output { color: var(--text-dim); }
+    .code-block .comment { color: #556; }
+
+    .step-sparkle {
+      font-size: 2.5rem;
+      text-align: center;
+      animation: sparkle 2s ease-in-out infinite;
+    }
+    @keyframes sparkle {
+      0%, 100% { transform: scale(1) rotate(0deg); opacity: 1; }
+      50%      { transform: scale(1.2) rotate(10deg); opacity: 0.8; }
+    }
+
+    /* ============================================================
+       SCROLLING TICKER / MARQUEE
+       ============================================================ */
+    .ticker-wrap {
+      position: relative;
+      z-index: 1;
+      overflow: hidden;
+      padding: 1.2rem 0;
+      background: linear-gradient(90deg, var(--pink), var(--orange), var(--yellow), var(--cyan), var(--pink));
+    }
+    .ticker {
+      display: flex;
+      width: max-content;
+      animation: tickerScroll 20s linear infinite;
+    }
+    .ticker span {
+      font-family: 'Lilita One', cursive;
+      font-size: 1.1rem;
+      color: var(--bg);
+      white-space: nowrap;
+      padding: 0 1.5rem;
+      letter-spacing: 0.05em;
+    }
+    @keyframes tickerScroll {
+      0%   { transform: translateX(0); }
+      100% { transform: translateX(-50%); }
+    }
+
+    /* ============================================================
+       FOOTER
+       ============================================================ */
+    footer {
+      position: relative;
+      z-index: 1;
+      text-align: center;
+      padding: 4rem 1.5rem 3rem;
+    }
+    .footer-lobster {
+      font-size: 4rem;
+      animation: lobsterFloat 3s ease-in-out infinite;
+      display: block;
+      margin-bottom: 1rem;
+    }
+    .footer-text {
+      color: var(--text-dim);
+      font-weight: 600;
+      margin-bottom: 0.8rem;
+      font-size: 1rem;
+    }
+    .footer-links {
+      display: flex;
+      gap: 1.5rem;
+      justify-content: center;
+      margin-bottom: 1.5rem;
+    }
+    .footer-links a {
+      color: var(--cyan);
+      text-decoration: none;
+      font-weight: 600;
+      transition: color 0.2s;
+    }
+    .footer-links a:hover {
+      color: var(--yellow);
+    }
+    .footer-fine {
+      color: #445;
+      font-size: 0.85rem;
+      font-style: italic;
+    }
+
+    /* ============================================================
+       NAV
+       ============================================================ */
+    .top-bar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      padding: 0.8rem 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(15, 23, 41, 0.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      transition: transform 0.3s ease;
+    }
+    .top-bar.hidden {
+      transform: translateY(-100%);
+    }
+    .top-bar .logo {
+      font-family: 'Lilita One', cursive;
+      font-size: 1.3rem;
+      color: var(--text);
+      text-decoration: none;
+    }
+    .top-bar .logo em {
+      font-style: italic;
+      color: var(--cyan);
+    }
+    .top-bar nav {
+      display: flex;
+      gap: 1.5rem;
+      align-items: center;
+    }
+    .top-bar nav a {
+      color: var(--text-dim);
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 0.9rem;
+      transition: color 0.2s;
+    }
+    .top-bar nav a:hover {
+      color: var(--text);
+    }
+    .top-bar .btn-sm {
+      font-size: 0.85rem;
+      padding: 0.5rem 1.2rem;
+    }
+
+    @media (max-width: 600px) {
+      .top-bar nav a:not(.btn) {
+        display: none;
+      }
+    }
+
+    /* ============================================================
+       RESPONSIVE TWEAKS
+       ============================================================ */
+    @media (max-width: 600px) {
+      .hero-headline .line-giant {
+        font-size: clamp(4rem, 18vw, 8rem);
+      }
+      .hero-lobster {
+        font-size: clamp(4rem, 12vw, 7rem);
+      }
+      section {
+        padding: 3.5rem 1.2rem;
+      }
+      .features-grid {
+        grid-template-columns: 1fr;
+      }
+      .feature-card {
+        transform: rotate(0deg) !important;
+      }
+      .step {
+        gap: 1rem;
+      }
+      .step-num {
+        font-size: 2.2rem;
+        width: 45px;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ============================================================
+       FLOATING BACKGROUND ELEMENTS
+       ============================================================ -->
+  <div class="floaters" aria-hidden="true" id="floaters"></div>
+
+  <!-- ============================================================
+       TOP NAV
+       ============================================================ -->
+  <header class="top-bar" id="topBar">
+    <a href="#" class="logo"><em>p</em>Claw</a>
+    <nav>
+      <a href="#features">Features</a>
+      <a href="#how">How It Works</a>
+      <a href="https://github.com/h14h/pClaw" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/h14h/pClaw" class="btn btn-primary btn-sm" target="_blank" rel="noopener">Get the Claw</a>
+    </nav>
+  </header>
+
+  <!-- ============================================================
+       HERO
+       ============================================================ -->
+  <section class="hero">
+    <div class="hero-headline">
+      <span class="line-itty">itty-bitty agent.</span>
+      <span class="line-giant">GIANT</span>
+      <span class="line-results">results.</span>
+    </div>
+
+    <div class="hero-lobster" title="Click for a dance!">&#x1F99E;</div>
+
+    <p class="hero-sub">
+      A personal AI coding agent that runs on a potato and costs less than a candy bar.
+    </p>
+
+    <div class="hero-ctas">
+      <a href="https://github.com/h14h/pClaw" class="btn btn-primary" target="_blank" rel="noopener">
+        Get the Claw &#x1F99E;
+      </a>
+      <a href="#how" class="btn btn-outline">
+        See it work &rarr;
+      </a>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       SCALE COMPARISON
+       ============================================================ -->
+  <section class="scale" id="scale">
+    <div class="container">
+      <div class="reveal">
+        <p class="section-label">Tiny vs. Giant</p>
+        <h2 class="section-title">This much computer.<br>That much power.</h2>
+      </div>
+      <div class="scale-grid">
+        <div class="scale-tiny reveal">
+          <div class="server-icon"></div>
+          <ul class="spec-list">
+            <li>1 vCPU</li>
+            <li>1 GB RAM</li>
+            <li>$5/month VPS</li>
+          </ul>
+        </div>
+        <div class="scale-giant reveal-stagger reveal">
+          <ul class="feature-list">
+            <li class="reveal-child">7 powerful tools</li>
+            <li class="reveal-child">Semantic memory</li>
+            <li class="reveal-child">Reasoning delegation</li>
+            <li class="reveal-child">Web search</li>
+            <li class="reveal-child">Custom personas</li>
+            <li class="reveal-child">Discord bot</li>
+            <li class="reveal-child">Conversation compaction</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       FUN STATS TICKER
+       ============================================================ -->
+  <div class="ticker-wrap" aria-hidden="true">
+    <div class="ticker" id="ticker">
+      <!-- duplicated for seamless loop -->
+      <span>7 TOOLS</span><span>&bull;</span>
+      <span>1 BINARY</span><span>&bull;</span>
+      <span>$0.20/M TOKENS</span><span>&bull;</span>
+      <span>1 vCPU</span><span>&bull;</span>
+      <span>MIT LICENSE</span><span>&bull;</span>
+      <span>WRITTEN IN GO</span><span>&bull;</span>
+      <span>LOBSTER APPROVED &#x1F99E;</span><span>&bull;</span>
+      <span>7 TOOLS</span><span>&bull;</span>
+      <span>1 BINARY</span><span>&bull;</span>
+      <span>$0.20/M TOKENS</span><span>&bull;</span>
+      <span>1 vCPU</span><span>&bull;</span>
+      <span>MIT LICENSE</span><span>&bull;</span>
+      <span>WRITTEN IN GO</span><span>&bull;</span>
+      <span>LOBSTER APPROVED &#x1F99E;</span><span>&bull;</span>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       FEATURES
+       ============================================================ -->
+  <section class="features" id="features">
+    <div class="container">
+      <div class="reveal">
+        <p class="section-label">What You Get</p>
+        <h2 class="section-title">Tiny binary. Giant toolkit.</h2>
+        <p class="section-sub">Everything you need, nothing you don't. Each feature earns its place.</p>
+      </div>
+
+      <div class="features-grid reveal-stagger reveal">
+        <div class="feature-card reveal-child" style="--wobble-delay: 0s;">
+          <span class="card-emoji">&#x1F9E0;</span>
+          <h3 class="card-title">It Remembers!</h3>
+          <p class="card-desc">Vector-backed semantic memory. Your agent actually learns about your codebase and preferences over time.</p>
+        </div>
+        <div class="feature-card reveal-child" style="--wobble-delay: 0.5s;">
+          <span class="card-emoji">&#x1F4B8;</span>
+          <h3 class="card-title">Stupid Cheap</h3>
+          <p class="card-desc">$0.20 per million tokens. That's not a typo. Vultr Inference with Kimi K2 and GPT-OSS 120B.</p>
+        </div>
+        <div class="feature-card reveal-child" style="--wobble-delay: 1s;">
+          <span class="card-emoji">&#x1F916;</span>
+          <h3 class="card-title">Your Personality</h3>
+          <p class="card-desc">Name it. Style it. Make it weird. The persona system lets you craft exactly the vibe you want.</p>
+        </div>
+        <div class="feature-card reveal-child" style="--wobble-delay: 1.5s;">
+          <span class="card-emoji">&#x1F50D;</span>
+          <h3 class="card-title">Street Smart</h3>
+          <p class="card-desc">Web search grounding via Tavily. It can look things up on the internet. Revolutionary, we know.</p>
+        </div>
+        <div class="feature-card reveal-child" style="--wobble-delay: 2s;">
+          <span class="card-emoji">&#x1F9E9;</span>
+          <h3 class="card-title">One Binary</h3>
+          <p class="card-desc"><code>go build</code> and you're done. Single binary, zero runtime dependencies. Ship it to a toaster.</p>
+        </div>
+        <div class="feature-card reveal-child" style="--wobble-delay: 2.5s;">
+          <span class="card-emoji">&#x1F4AC;</span>
+          <h3 class="card-title">Everywhere</h3>
+          <p class="card-desc">Terminal REPL and Discord bot today, more interfaces tomorrow. Your agent, your way.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       HOW IT WORKS
+       ============================================================ -->
+  <section class="how-it-works" id="how">
+    <div class="container">
+      <div class="reveal">
+        <p class="section-label">Get Started</p>
+        <h2 class="section-title">Four steps. Two minutes.</h2>
+        <p class="section-sub">One env var. One command. One new friend.</p>
+      </div>
+
+      <div class="steps">
+        <div class="step reveal">
+          <div class="step-num">1</div>
+          <div class="step-content">
+            <h3 class="step-title">Set one env var</h3>
+            <div class="code-block">
+              <span class="prompt">$</span> <span class="cmd">export VULTR_API_KEY</span>=<span class="output">your-key-here</span>
+            </div>
+          </div>
+        </div>
+        <div class="step-connector reveal"></div>
+
+        <div class="step reveal">
+          <div class="step-num">2</div>
+          <div class="step-content">
+            <h3 class="step-title">Run one command</h3>
+            <div class="code-block">
+              <span class="prompt">$</span> <span class="cmd">go run .</span><br>
+              <span class="output">&#x1F99E; pClaw is ready. What's up?</span>
+            </div>
+          </div>
+        </div>
+        <div class="step-connector reveal"></div>
+
+        <div class="step reveal">
+          <div class="step-num">3</div>
+          <div class="step-content">
+            <h3 class="step-title">Talk to your new friend</h3>
+            <div class="code-block">
+              <span class="prompt">you&gt;</span> <span class="cmd">add error handling to the auth middleware</span><br>
+              <span class="output">&#x1F99E; On it! Let me read the file first...</span><br>
+              <span class="comment"># [reads, edits, tests &mdash; autonomously]</span><br>
+              <span class="output">&#x1F99E; Done! Added try/catch with proper 401 responses.</span>
+            </div>
+          </div>
+        </div>
+        <div class="step-connector reveal"></div>
+
+        <div class="step reveal">
+          <div class="step-num">4</div>
+          <div class="step-content">
+            <h3 class="step-title">It remembers you next time</h3>
+            <div class="step-sparkle">&#x2728;&#x1F9E0;&#x2728;</div>
+            <p style="color: var(--text-dim); font-weight: 500; margin-top: 0.5rem;">
+              Durable semantic memory means your agent gets smarter every session. Context compounds.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       SECOND TICKER
+       ============================================================ -->
+  <div class="ticker-wrap" aria-hidden="true" style="background: linear-gradient(90deg, var(--cyan), var(--pink), var(--yellow), var(--orange), var(--cyan));">
+    <div class="ticker">
+      <span>DURABLE MEMORY</span><span>&bull;</span>
+      <span>CONVERSATION COMPACTION</span><span>&bull;</span>
+      <span>REASONING DELEGATION</span><span>&bull;</span>
+      <span>WEB SEARCH</span><span>&bull;</span>
+      <span>FILE EDITING</span><span>&bull;</span>
+      <span>CUSTOM PERSONAS</span><span>&bull;</span>
+      <span>DISCORD BOT</span><span>&bull;</span>
+      <span>DURABLE MEMORY</span><span>&bull;</span>
+      <span>CONVERSATION COMPACTION</span><span>&bull;</span>
+      <span>REASONING DELEGATION</span><span>&bull;</span>
+      <span>WEB SEARCH</span><span>&bull;</span>
+      <span>FILE EDITING</span><span>&bull;</span>
+      <span>CUSTOM PERSONAS</span><span>&bull;</span>
+      <span>DISCORD BOT</span><span>&bull;</span>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       FOOTER
+       ============================================================ -->
+  <footer>
+    <span class="footer-lobster">&#x1F99E;</span>
+    <p class="footer-text">Made with claws by <strong>h14h</strong></p>
+    <div class="footer-links">
+      <a href="https://github.com/h14h/pClaw" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/h14h/pClaw/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+    </div>
+    <p class="footer-fine">No lobsters were harmed in the making of this agent.</p>
+  </footer>
+
+  <!-- ============================================================
+       JAVASCRIPT
+       ============================================================ -->
+  <script>
+    /* ----------------------------------------------------------
+       INTERSECTION OBSERVER — scroll-triggered bounce-in
+       ---------------------------------------------------------- */
+    (function () {
+      const observer = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((e) => {
+            if (e.isIntersecting) {
+              e.target.classList.add('visible');
+            }
+          });
+        },
+        { threshold: 0.15 }
+      );
+
+      document.querySelectorAll('.reveal, .reveal-stagger').forEach((el) => {
+        observer.observe(el);
+      });
+    })();
+
+    /* ----------------------------------------------------------
+       FLOATING BACKGROUND PARTICLES
+       ---------------------------------------------------------- */
+    (function () {
+      const container = document.getElementById('floaters');
+      const colors = ['#FFE03D', '#FF4F9A', '#00E5FF', '#FF8C42'];
+      const shapes = ['circle', 'star', 'lobster'];
+      const count = 18;
+
+      for (let i = 0; i < count; i++) {
+        const el = document.createElement('div');
+        const shape = shapes[Math.floor(Math.random() * shapes.length)];
+        const color = colors[Math.floor(Math.random() * colors.length)];
+        const size = Math.random() * 20 + 8;
+
+        el.className = 'floater' + (shape === 'star' ? ' shape-star' : shape === 'lobster' ? ' shape-lobster' : '');
+        el.style.width = size + 'px';
+        el.style.height = size + 'px';
+        el.style.background = shape === 'lobster' ? 'none' : color;
+        el.style.left = Math.random() * 100 + '%';
+        el.style.top = (60 + Math.random() * 60) + '%';
+        el.style.animationDuration = (25 + Math.random() * 35) + 's';
+        el.style.animationDelay = -(Math.random() * 40) + 's';
+        if (shape === 'lobster') {
+          el.style.fontSize = (size * 0.9) + 'px';
+          el.style.opacity = '0.18';
+        }
+
+        container.appendChild(el);
+      }
+    })();
+
+    /* ----------------------------------------------------------
+       LOBSTER DANCE ON CLICK
+       ---------------------------------------------------------- */
+    (function () {
+      const lobster = document.querySelector('.hero-lobster');
+      lobster.addEventListener('click', () => {
+        lobster.style.animation = 'none';
+        // force reflow
+        void lobster.offsetWidth;
+        lobster.style.animation = 'lobsterDance 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55) 3';
+        setTimeout(() => {
+          lobster.style.animation = 'lobsterFloat 3s ease-in-out infinite';
+        }, 1200);
+      });
+    })();
+
+    /* ----------------------------------------------------------
+       HIDE NAV ON SCROLL DOWN, SHOW ON SCROLL UP
+       ---------------------------------------------------------- */
+    (function () {
+      const bar = document.getElementById('topBar');
+      let last = 0;
+      window.addEventListener('scroll', () => {
+        const y = window.scrollY;
+        if (y > 80 && y > last) {
+          bar.classList.add('hidden');
+        } else {
+          bar.classList.remove('hidden');
+        }
+        last = y;
+      }, { passive: true });
+    })();
+  </script>
+
+</body>
+</html>

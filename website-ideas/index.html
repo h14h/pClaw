@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>pClaw — Choose Your Experience</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html {
+      font-size: 16px;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    body {
+      background: #0a0a0a;
+      color: #e8e8e8;
+      font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* -- Noise texture overlay -- */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* -- Layout -- */
+    .page {
+      position: relative;
+      z-index: 1;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 4rem 2rem 6rem;
+    }
+
+    /* -- Header -- */
+    .header {
+      text-align: center;
+      margin-bottom: 4rem;
+    }
+
+    .header__title {
+      font-family: 'Instrument Serif', Georgia, serif;
+      font-size: clamp(3.5rem, 8vw, 6rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1;
+      color: #fff;
+      margin-bottom: 0.75rem;
+    }
+
+    .header__tagline {
+      font-size: clamp(1rem, 2.5vw, 1.25rem);
+      color: #999;
+      font-weight: 300;
+      line-height: 1.5;
+      margin-bottom: 2.5rem;
+    }
+
+    .header__choose {
+      font-size: 0.875rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.2em;
+      color: #555;
+      position: relative;
+      display: inline-block;
+    }
+
+    .header__choose::before,
+    .header__choose::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      width: 3rem;
+      height: 1px;
+      background: #333;
+    }
+
+    .header__choose::before {
+      right: calc(100% + 1rem);
+    }
+
+    .header__choose::after {
+      left: calc(100% + 1rem);
+    }
+
+    /* -- Grid -- */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1.5rem;
+    }
+
+    /* Fifth card spans full width centered */
+    .grid .card:nth-child(5) {
+      grid-column: 1 / -1;
+      max-width: calc(50% - 0.75rem);
+      justify-self: center;
+    }
+
+    @media (max-width: 768px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+      .grid .card:nth-child(5) {
+        max-width: 100%;
+      }
+      .page {
+        padding: 3rem 1.25rem 4rem;
+      }
+      .header {
+        margin-bottom: 2.5rem;
+      }
+    }
+
+    /* -- Card base -- */
+    .card {
+      position: relative;
+      border-radius: 16px;
+      overflow: hidden;
+      cursor: pointer;
+      text-decoration: none;
+      color: inherit;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      min-height: 340px;
+      transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1),
+                  box-shadow 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+      transform: translateY(0) scale(1);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .card:hover {
+      transform: translateY(-6px) scale(1.02);
+      box-shadow: 0 24px 80px -12px rgba(0, 0, 0, 0.6);
+    }
+
+    .card:active {
+      transform: translateY(-2px) scale(1.005);
+      transition-duration: 0.1s;
+    }
+
+    /* -- Card content layer -- */
+    .card__content {
+      position: relative;
+      z-index: 2;
+      padding: 2rem;
+    }
+
+    .card__version {
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      margin-bottom: 0.5rem;
+      opacity: 0.6;
+    }
+
+    .card__name {
+      font-family: 'Instrument Serif', Georgia, serif;
+      font-size: 1.75rem;
+      font-weight: 400;
+      line-height: 1.2;
+      margin-bottom: 0.5rem;
+    }
+
+    .card__desc {
+      font-size: 0.875rem;
+      font-weight: 300;
+      line-height: 1.5;
+      opacity: 0.65;
+    }
+
+    .card__arrow {
+      position: absolute;
+      top: 1.5rem;
+      right: 1.5rem;
+      width: 2.25rem;
+      height: 2.25rem;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 3;
+      opacity: 0;
+      transform: translate(-4px, 4px);
+      transition: opacity 0.3s ease, transform 0.3s ease;
+      background: rgba(255, 255, 255, 0.1);
+      backdrop-filter: blur(8px);
+    }
+
+    .card:hover .card__arrow {
+      opacity: 1;
+      transform: translate(0, 0);
+    }
+
+    .card__arrow svg {
+      width: 14px;
+      height: 14px;
+      stroke: #fff;
+      stroke-width: 2;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    /* -- Card background layers -- */
+    .card__bg {
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+    }
+
+    .card__bg::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+    }
+
+    /* ===========================
+       V1 — Terminal Noir
+       =========================== */
+    .card--v1 {
+      background: #080c08;
+    }
+
+    .card--v1 .card__bg {
+      background:
+        repeating-linear-gradient(
+          0deg,
+          transparent,
+          transparent 2px,
+          rgba(0, 255, 65, 0.015) 2px,
+          rgba(0, 255, 65, 0.015) 4px
+        );
+    }
+
+    .card--v1 .card__bg::after {
+      background: linear-gradient(
+        to top,
+        rgba(8, 12, 8, 0.95) 0%,
+        rgba(8, 12, 8, 0.4) 50%,
+        transparent 100%
+      );
+    }
+
+    .card--v1 .card__name {
+      color: #00ff41;
+      text-shadow: 0 0 20px rgba(0, 255, 65, 0.3);
+    }
+
+    .card--v1 .card__version {
+      color: #00ff41;
+    }
+
+    /* Scanline + cursor blink decoration */
+    .card--v1 .card__decor {
+      position: absolute;
+      top: 1.5rem;
+      left: 2rem;
+      z-index: 2;
+      font-family: 'DM Sans', monospace;
+      font-size: 0.7rem;
+      color: #00ff41;
+      opacity: 0.4;
+      letter-spacing: 0.05em;
+    }
+
+    .card--v1 .card__decor .cursor {
+      display: inline-block;
+      width: 7px;
+      height: 12px;
+      background: #00ff41;
+      margin-left: 2px;
+      vertical-align: text-bottom;
+      animation: blink 1s step-end infinite;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+
+    /* ===========================
+       V2 — Warm Companion
+       =========================== */
+    .card--v2 {
+      background: #1a1210;
+    }
+
+    .card--v2 .card__bg {
+      background: radial-gradient(
+        ellipse at 70% 20%,
+        rgba(255, 140, 100, 0.15) 0%,
+        rgba(255, 180, 140, 0.05) 40%,
+        transparent 70%
+      );
+    }
+
+    .card--v2 .card__bg::after {
+      background: linear-gradient(
+        to top,
+        rgba(26, 18, 16, 0.95) 0%,
+        rgba(26, 18, 16, 0.3) 60%,
+        transparent 100%
+      );
+    }
+
+    .card--v2 .card__name {
+      color: #ffb494;
+    }
+
+    .card--v2 .card__version {
+      color: #ff9b75;
+    }
+
+    .card--v2 .card__decor {
+      position: absolute;
+      top: 1.25rem;
+      right: 5rem;
+      z-index: 2;
+      width: 100px;
+      height: 100px;
+      border-radius: 50%;
+      background: radial-gradient(
+        circle,
+        rgba(255, 160, 120, 0.12) 0%,
+        rgba(255, 200, 170, 0.04) 60%,
+        transparent 100%
+      );
+      filter: blur(1px);
+    }
+
+    /* ===========================
+       V3 — Brutalist Manifesto
+       =========================== */
+    .card--v3 {
+      background: #f5f5f0;
+      border: 3px solid #0a0a0a;
+      border-radius: 0;
+    }
+
+    .card--v3 .card__bg::after {
+      background: none;
+    }
+
+    .card--v3 .card__content {
+      padding: 2rem;
+    }
+
+    .card--v3 .card__version {
+      color: #e00;
+      opacity: 1;
+      font-weight: 700;
+    }
+
+    .card--v3 .card__name {
+      color: #0a0a0a;
+      font-family: 'DM Sans', sans-serif;
+      font-weight: 700;
+      font-size: 2.25rem;
+      text-transform: uppercase;
+      letter-spacing: -0.03em;
+      line-height: 1;
+    }
+
+    .card--v3 .card__desc {
+      color: #0a0a0a;
+      opacity: 0.5;
+    }
+
+    .card--v3 .card__decor {
+      position: absolute;
+      top: 0;
+      right: 0;
+      z-index: 2;
+      width: 80px;
+      height: 80px;
+      background: #e00;
+    }
+
+    .card--v3 .card__arrow {
+      background: rgba(0, 0, 0, 0.08);
+    }
+
+    .card--v3 .card__arrow svg {
+      stroke: #0a0a0a;
+    }
+
+    .card--v3:hover {
+      box-shadow: 8px 8px 0 #e00;
+    }
+
+    /* ===========================
+       V4 — Tiny Giant
+       =========================== */
+    .card--v4 {
+      background: #1a0a2e;
+    }
+
+    .card--v4 .card__bg {
+      background:
+        radial-gradient(circle at 20% 30%, rgba(255, 100, 200, 0.12) 0%, transparent 40%),
+        radial-gradient(circle at 80% 60%, rgba(100, 200, 255, 0.1) 0%, transparent 40%),
+        radial-gradient(circle at 50% 80%, rgba(255, 220, 80, 0.08) 0%, transparent 40%);
+    }
+
+    .card--v4 .card__bg::after {
+      background: linear-gradient(
+        to top,
+        rgba(26, 10, 46, 0.95) 0%,
+        rgba(26, 10, 46, 0.2) 60%,
+        transparent 100%
+      );
+    }
+
+    .card--v4 .card__name {
+      color: #ff64c8;
+    }
+
+    .card--v4 .card__version {
+      color: #64c8ff;
+    }
+
+    .card--v4 .card__decor {
+      position: absolute;
+      z-index: 2;
+      top: 1.5rem;
+      left: 2rem;
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .card--v4 .card__decor span {
+      display: block;
+      border-radius: 50%;
+      animation: float 3s ease-in-out infinite;
+    }
+
+    .card--v4 .card__decor span:nth-child(1) {
+      width: 12px;
+      height: 12px;
+      background: #ff64c8;
+      animation-delay: 0s;
+    }
+
+    .card--v4 .card__decor span:nth-child(2) {
+      width: 18px;
+      height: 18px;
+      background: #64c8ff;
+      animation-delay: 0.5s;
+    }
+
+    .card--v4 .card__decor span:nth-child(3) {
+      width: 10px;
+      height: 10px;
+      background: #ffdc50;
+      animation-delay: 1s;
+    }
+
+    @keyframes float {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-8px); }
+    }
+
+    /* ===========================
+       V5 — Blueprint
+       =========================== */
+    .card--v5 {
+      background: #0a0e14;
+    }
+
+    .card--v5 .card__bg {
+      background-image:
+        radial-gradient(circle, rgba(0, 140, 255, 0.12) 1px, transparent 1px);
+      background-size: 20px 20px;
+    }
+
+    .card--v5 .card__bg::after {
+      background: linear-gradient(
+        to top,
+        rgba(10, 14, 20, 0.97) 0%,
+        rgba(10, 14, 20, 0.4) 50%,
+        transparent 100%
+      );
+    }
+
+    .card--v5 .card__name {
+      color: #008cff;
+    }
+
+    .card--v5 .card__version {
+      color: #008cff;
+    }
+
+    .card--v5 .card__decor {
+      position: absolute;
+      z-index: 2;
+      top: 1.5rem;
+      left: 2rem;
+      width: 120px;
+      height: 80px;
+      border: 1px solid rgba(0, 140, 255, 0.2);
+      border-radius: 2px;
+    }
+
+    .card--v5 .card__decor::before {
+      content: '';
+      position: absolute;
+      top: 15px;
+      left: 15px;
+      width: 40px;
+      height: 40px;
+      border: 1px dashed rgba(0, 140, 255, 0.25);
+    }
+
+    .card--v5 .card__decor::after {
+      content: '';
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      width: 30px;
+      height: 20px;
+      border-bottom: 1px solid rgba(0, 140, 255, 0.2);
+      border-right: 1px solid rgba(0, 140, 255, 0.2);
+    }
+
+    /* -- Entrance animation -- */
+    .card {
+      opacity: 0;
+      transform: translateY(30px) scale(0.97);
+    }
+
+    .card.visible {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+
+    .card.visible:hover {
+      transform: translateY(-6px) scale(1.02);
+    }
+
+    .card--v3.visible:hover {
+      transform: translateY(-6px) scale(1.02);
+    }
+
+    /* -- Footer -- */
+    .footer {
+      text-align: center;
+      margin-top: 4rem;
+      padding-top: 2rem;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .footer p {
+      font-size: 0.8rem;
+      color: #444;
+      font-weight: 300;
+    }
+
+    .footer a {
+      color: #666;
+      text-decoration: none;
+      transition: color 0.2s ease;
+    }
+
+    .footer a:hover {
+      color: #aaa;
+    }
+
+    /* Focus styles for accessibility */
+    .card:focus-visible {
+      outline: 2px solid #fff;
+      outline-offset: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+
+    <!-- Header -->
+    <header class="header">
+      <h1 class="header__title"><i>p</i>Claw</h1>
+      <p class="header__tagline">An itty-bitty Claw for itty-bitty servers (&amp; itty-bitty budgets)&ensp;&#x1F99E;</p>
+      <p class="header__choose">Choose your experience</p>
+    </header>
+
+    <!-- Gallery Grid -->
+    <div class="grid">
+
+      <!-- V1 — Terminal Noir -->
+      <a href="v1.html" class="card card--v1" aria-label="Version 1: Terminal Noir">
+        <div class="card__bg"></div>
+        <div class="card__decor">$ pclaw init<span class="cursor"></span></div>
+        <span class="card__arrow"><svg viewBox="0 0 24 24"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg></span>
+        <div class="card__content">
+          <p class="card__version">Version 01</p>
+          <h2 class="card__name">Terminal Noir</h2>
+          <p class="card__desc">Dark terminal aesthetic, phosphor green, hacker elegance</p>
+        </div>
+      </a>
+
+      <!-- V2 — Warm Companion -->
+      <a href="v2.html" class="card card--v2" aria-label="Version 2: Warm Companion">
+        <div class="card__bg"></div>
+        <div class="card__decor"></div>
+        <span class="card__arrow"><svg viewBox="0 0 24 24"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg></span>
+        <div class="card__content">
+          <p class="card__version">Version 02</p>
+          <h2 class="card__name">Warm Companion</h2>
+          <p class="card__desc">Soft coral and peach gradients, friendly, human-centered</p>
+        </div>
+      </a>
+
+      <!-- V3 — Brutalist Manifesto -->
+      <a href="v3.html" class="card card--v3" aria-label="Version 3: Brutalist Manifesto">
+        <div class="card__bg"></div>
+        <div class="card__decor"></div>
+        <span class="card__arrow"><svg viewBox="0 0 24 24"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg></span>
+        <div class="card__content">
+          <p class="card__version">Version 03</p>
+          <h2 class="card__name">Brutalist Manifesto</h2>
+          <p class="card__desc">Massive typography, raw edges, black/white + red accent</p>
+        </div>
+      </a>
+
+      <!-- V4 — Tiny Giant -->
+      <a href="v4.html" class="card card--v4" aria-label="Version 4: Tiny Giant">
+        <div class="card__bg"></div>
+        <div class="card__decor"><span></span><span></span><span></span></div>
+        <span class="card__arrow"><svg viewBox="0 0 24 24"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg></span>
+        <div class="card__content">
+          <p class="card__version">Version 04</p>
+          <h2 class="card__name">Tiny Giant</h2>
+          <p class="card__desc">Playful, whimsical, bouncy animations, bright palette</p>
+        </div>
+      </a>
+
+      <!-- V5 — Blueprint -->
+      <a href="v5.html" class="card card--v5" aria-label="Version 5: Blueprint">
+        <div class="card__bg"></div>
+        <div class="card__decor"></div>
+        <span class="card__arrow"><svg viewBox="0 0 24 24"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg></span>
+        <div class="card__content">
+          <p class="card__version">Version 05</p>
+          <h2 class="card__name">Blueprint</h2>
+          <p class="card__desc">Architectural diagrams, dot-grid, monochrome + electric blue</p>
+        </div>
+      </a>
+
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <p><i>p</i>Claw &mdash; A lightweight AI coding agent</p>
+    </footer>
+
+  </div>
+
+  <script>
+    // Staggered entrance animation
+    document.addEventListener('DOMContentLoaded', function () {
+      var cards = document.querySelectorAll('.card');
+      cards.forEach(function (card, i) {
+        card.style.transition = 'opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1) ' + (i * 0.1) + 's, '
+          + 'transform 0.6s cubic-bezier(0.16, 1, 0.3, 1) ' + (i * 0.1) + 's';
+        // Small delay to ensure the initial state is rendered before animating
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            card.classList.add('visible');
+          });
+        });
+      });
+    });
+  </script>
+</body>
+</html>

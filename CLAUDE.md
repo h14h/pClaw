@@ -1,5 +1,9 @@
 # Agent Project Conventions
 
+## Ignored Directories
+
+- `website-ideas/` — Not part of the project. Do not read, modify, or reference.
+
 ## Project Context
 
 Information about project structure and architecture is available in the "specs/" directory.
