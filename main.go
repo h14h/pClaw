@@ -40,7 +40,7 @@ type Model string
 const (
 	Instruct      Model = "kimi-k2-instruct"
 	Reasoning     Model = "gpt-oss-120b"
-	Summarization Model = "gpt-oss-120b" // memory recall summarization
+	Summarization Model = "qwen2.5-coder-32b-instruct" // memory recall summarization
 )
 
 type ToolEventLogMode string
