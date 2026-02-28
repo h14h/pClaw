@@ -3,6 +3,7 @@ module agent
 go 1.24.1
 
 require (
+	github.com/BurntSushi/toml v1.4.0
 	github.com/bwmarrin/discordgo v0.29.0
 	github.com/invopop/jsonschema v0.13.0
 )

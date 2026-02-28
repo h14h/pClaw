@@ -466,11 +466,24 @@ type ChatToolCallDelta struct {
 }
 
 func main() {
-	if strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN")) != "" {
-		if err := runDiscordBot(context.Background()); err != nil {
+	cfg, err := LoadConfig()
+	if err != nil {
+		fmt.Printf("Error: %s\n", err.Error())
+		os.Exit(1)
+	}
+
+	if cfg.Discord.BotToken != "" {
+		if err := runDiscordBot(context.Background(), cfg); err != nil {
 			fmt.Printf("Error: %s\n", err.Error())
 		}
 		return
+	}
+
+	baseURL := strings.TrimRight(cfg.Provider.BaseURL, "/")
+	apiKey := cfg.Provider.APIKey
+	if apiKey == "" && baseURL == defaultVultrBaseURL {
+		fmt.Println("Error: API key is required (set via the env var named in api_key_env)")
+		os.Exit(1)
 	}
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -481,23 +494,11 @@ func main() {
 		return scanner.Text(), true
 	}
 
-	apiKey := os.Getenv("VULTR_API_KEY")
-	if apiKey == "" {
-		fmt.Println("Error: VULTR_API_KEY is required")
-		os.Exit(1)
-	}
-
-	baseURL := os.Getenv("VULTR_BASE_URL")
-	if baseURL == "" {
-		baseURL = defaultVultrBaseURL
-	}
-	baseURL = strings.TrimRight(baseURL, "/")
-
-	agent := NewAgent(baseURL, apiKey, http.DefaultClient, getUserMessage, nil)
+	agent := NewAgent(baseURL, apiKey, http.DefaultClient, getUserMessage, nil, cfg)
 	configureToolEventLogging(agent)
 	configureServerEventLogging(agent, os.Stdout)
-	configureMemory(context.Background(), agent)
-	configureWebSearch(agent)
+	configureMemory(context.Background(), agent, cfg)
+	configureWebSearch(agent, cfg)
 	if err := agent.Run(context.Background()); err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
 	}
@@ -509,18 +510,34 @@ func NewAgent(
 	httpClient *http.Client,
 	getUserMessage func() (string, bool),
 	tools []ToolDefinition,
+	cfg *ResolvedConfig,
 ) *Agent {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
 
+	primaryModel := Instruct
+	reasoningModel := Reasoning
+	summarizationModel := Summarization
+	if cfg != nil {
+		if cfg.Provider.PrimaryModel != "" {
+			primaryModel = Model(cfg.Provider.PrimaryModel)
+		}
+		if cfg.Provider.ReasoningModel != "" {
+			reasoningModel = Model(cfg.Provider.ReasoningModel)
+		}
+		if cfg.Provider.SummarizationModel != "" {
+			summarizationModel = Model(cfg.Provider.SummarizationModel)
+		}
+	}
+
 	agent := &Agent{
 		baseURL:            baseURL,
 		apiKey:             apiKey,
-		primaryModel:       Instruct,
-		reasoningModel:     Reasoning,
-		summarizationModel: Summarization,
-		promptBuilder:      NewSectionedPromptBuilder(promptConfigFromEnv()),
+		primaryModel:       primaryModel,
+		reasoningModel:     reasoningModel,
+		summarizationModel: summarizationModel,
+		promptBuilder:      NewSectionedPromptBuilder(promptConfigFromCfg(cfg)),
 		promptTransport:    "cli",
 		httpClient:         httpClient,
 		getUserMessage:     getUserMessage,

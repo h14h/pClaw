@@ -16,7 +16,7 @@ func TestDelegationPolicyHarness_E2E(t *testing.T) {
 	}
 
 	baseURL, apiKey := requireRealVultrConfig(t)
-	agent := NewAgent(baseURL, apiKey, http.DefaultClient, nil, nil)
+	agent := NewAgent(baseURL, apiKey, http.DefaultClient, nil, nil, nil)
 
 	runs := intEnvOrDefault(t, "DELEGATION_HARNESS_RUNS", 2)
 	if runs < 1 {

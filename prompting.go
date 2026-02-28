@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -95,35 +94,37 @@ func NewSectionedPromptBuilder(cfg PromptConfig) *SectionedPromptBuilder {
 	return &SectionedPromptBuilder{Config: cfg}
 }
 
-func promptConfigFromEnv() PromptConfig {
+// promptConfigFromCfg builds a PromptConfig from the resolved configuration.
+// When rcfg is nil, returns DefaultPromptConfig unchanged.
+func promptConfigFromCfg(rcfg *ResolvedConfig) PromptConfig {
 	cfg := DefaultPromptConfig()
-
-	if v := strings.TrimSpace(os.Getenv("AGENT_NAME")); v != "" {
-		cfg.AgentName = v
-	}
-	if v := strings.TrimSpace(os.Getenv("AGENT_ROLE_SUMMARY")); v != "" {
-		cfg.RoleSummary = v
+	if rcfg == nil {
+		return cfg
 	}
 
-	// If AGENT_PERSONA_FILE is set and readable, it takes precedence over AGENT_PERSONA.
-	if personaPath := strings.TrimSpace(os.Getenv("AGENT_PERSONA_FILE")); personaPath != "" {
+	ac := rcfg.Config.Agent
+
+	if strings.TrimSpace(ac.Name) != "" {
+		cfg.AgentName = strings.TrimSpace(ac.Name)
+	}
+	if strings.TrimSpace(ac.RoleSummary) != "" {
+		cfg.RoleSummary = strings.TrimSpace(ac.RoleSummary)
+	}
+
+	// If persona_file is set and readable, it takes precedence over persona.
+	if personaPath := strings.TrimSpace(ac.PersonaFile); personaPath != "" {
 		data, err := os.ReadFile(personaPath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to read AGENT_PERSONA_FILE=%q: %v\n", personaPath, err)
+			fmt.Fprintf(os.Stderr, "Warning: failed to read persona_file=%q: %v\n", personaPath, err)
 		} else if persona := strings.TrimSpace(string(data)); persona != "" {
 			cfg.Persona = persona
 		}
-	} else if v := strings.TrimSpace(os.Getenv("AGENT_PERSONA")); v != "" {
-		cfg.Persona = v
+	} else if strings.TrimSpace(ac.Persona) != "" {
+		cfg.Persona = strings.TrimSpace(ac.Persona)
 	}
 
-	if raw := strings.TrimSpace(os.Getenv("AGENT_PROMPT_MAX_PERSONA_CHARS")); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n <= 0 {
-			fmt.Fprintf(os.Stderr, "Warning: invalid AGENT_PROMPT_MAX_PERSONA_CHARS=%q; defaulting to %d\n", raw, cfg.MaxPersonaChars)
-		} else {
-			cfg.MaxPersonaChars = n
-		}
+	if ac.MaxPersonaChars > 0 {
+		cfg.MaxPersonaChars = ac.MaxPersonaChars
 	}
 
 	return cfg

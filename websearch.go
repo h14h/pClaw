@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -227,26 +225,21 @@ func formatWebSearchResult(result *WebSearchResult) string {
 
 // --- Agent wiring ---
 
-// configureWebSearch reads TAVILY_API_KEY from the environment, creates a
-// WebSearchClient, sets agent.webSearchClient, and rebuilds agent.tools so the
-// web_search tool is included. When TAVILY_API_KEY is unset or empty, the agent
-// starts without web search (graceful degradation).
-func configureWebSearch(agent *Agent) {
-	apiKey := strings.TrimSpace(os.Getenv("TAVILY_API_KEY"))
-	if apiKey == "" {
+// configureWebSearch reads web search settings from the resolved config,
+// creates a WebSearchClient, sets agent.webSearchClient, and rebuilds
+// agent.tools so the web_search tool is included. When the API key is unset or
+// empty, the agent starts without web search (graceful degradation).
+func configureWebSearch(agent *Agent, cfg *ResolvedConfig) {
+	if cfg == nil || cfg.WebSearch.APIKey == "" {
 		return
 	}
 
-	maxResults := defaultWebSearchMaxResults
-	if raw := strings.TrimSpace(os.Getenv("WEB_SEARCH_MAX_RESULTS")); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 20 {
-			maxResults = n
-		} else {
-			fmt.Fprintf(os.Stderr, "Warning: invalid WEB_SEARCH_MAX_RESULTS=%q; defaulting to %d\n", raw, defaultWebSearchMaxResults)
-		}
+	maxResults := cfg.Config.WebSearch.MaxResults
+	if maxResults <= 0 || maxResults > 20 {
+		maxResults = defaultWebSearchMaxResults
 	}
 
-	client := NewWebSearchClient(defaultTavilyBaseURL, apiKey, agent.httpClient, maxResults)
+	client := NewWebSearchClient(defaultTavilyBaseURL, cfg.WebSearch.APIKey, agent.httpClient, maxResults)
 	agent.webSearchClient = client
 	agent.tools = agent.buildTools(nil)
 }

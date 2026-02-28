@@ -31,7 +31,7 @@ func requireRealVultrConfig(t *testing.T) (string, string) {
 func TestRunInference_E2E_TextResponse(t *testing.T) {
 	baseURL, apiKey := requireRealVultrConfig(t)
 
-	agent := NewAgent(baseURL, apiKey, http.DefaultClient, nil, nil)
+	agent := NewAgent(baseURL, apiKey, http.DefaultClient, nil, nil, nil)
 	msg, err := agent.runInference(context.Background(), []ChatMessage{{
 		Role:    "user",
 		Content: "Reply with exactly: OK",
@@ -73,7 +73,7 @@ func TestRunInference_E2E_ToolCall(t *testing.T) {
 		},
 	}
 
-	agent := NewAgent(baseURL, apiKey, http.DefaultClient, nil, []ToolDefinition{echoTool})
+	agent := NewAgent(baseURL, apiKey, http.DefaultClient, nil, []ToolDefinition{echoTool}, nil)
 	msg, err := agent.runInference(context.Background(), []ChatMessage{{
 		Role:    "user",
 		Content: "Use the echo tool with value set to 'vultr-test'.",
@@ -158,7 +158,7 @@ func TestAgentRun_E2E_ReadFileTool(t *testing.T) {
 		}
 	}()
 
-	agent := NewAgent(baseURL, apiKey, http.DefaultClient, getUserMessage, []ToolDefinition{readTool})
+	agent := NewAgent(baseURL, apiKey, http.DefaultClient, getUserMessage, []ToolDefinition{readTool}, nil)
 	if err := agent.Run(context.Background()); err != nil {
 		t.Fatalf("agent run failed: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestAgentRun_E2E_ListFilesTool(t *testing.T) {
 		}
 	}()
 
-	agent := NewAgent(baseURL, apiKey, http.DefaultClient, getUserMessage, []ToolDefinition{listTool})
+	agent := NewAgent(baseURL, apiKey, http.DefaultClient, getUserMessage, []ToolDefinition{listTool}, nil)
 	if err := agent.Run(context.Background()); err != nil {
 		t.Fatalf("agent run failed: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestAgentRun_E2E_EditFileTool(t *testing.T) {
 		}
 	}()
 
-	agent := NewAgent(baseURL, apiKey, http.DefaultClient, getUserMessage, []ToolDefinition{editTool})
+	agent := NewAgent(baseURL, apiKey, http.DefaultClient, getUserMessage, []ToolDefinition{editTool}, nil)
 	if err := agent.Run(context.Background()); err != nil {
 		t.Fatalf("agent run failed: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestAgentRun_E2E_EditFileTool(t *testing.T) {
 func TestDelegateReasoning_E2E(t *testing.T) {
 	baseURL, apiKey := requireRealVultrConfig(t)
 
-	agent := NewAgent(baseURL, apiKey, http.DefaultClient, nil, nil)
+	agent := NewAgent(baseURL, apiKey, http.DefaultClient, nil, nil, nil)
 	out, err := agent.delegateReasoning(json.RawMessage(`{"question":"What is 17 * 19? Return only the number."}`))
 	if err != nil {
 		t.Fatalf("delegateReasoning failed: %v", err)
