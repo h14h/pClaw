@@ -119,6 +119,7 @@ func NewSandbox(root string) (*Sandbox, error) {
 			return nil, fmt.Errorf("create workspace directory %s: %w", root, err)
 		}
 	} else {
+		root = expandTilde(root)
 		abs, err := filepath.Abs(root)
 		if err != nil {
 			return nil, fmt.Errorf("resolve working directory %s: %w", root, err)
