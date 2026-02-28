@@ -21,4 +21,4 @@ Design documentation for this project, modeled after the Loom specs layout.
 
 | Spec | Code | Purpose |
 |------|------|---------|
-| [testing.md](./testing.md) | [main_test.go](../main_test.go), [discord_test.go](../discord_test.go), [memory_test.go](../memory_test.go), [main_integration_test.go](../main_integration_test.go) | Unit, integration, and smoke testing strategy |
+| [testing.md](./testing.md) | [main_test.go](../main_test.go), [config_test.go](../config_test.go), [discord_test.go](../discord_test.go), [memory_test.go](../memory_test.go), [main_integration_test.go](../main_integration_test.go) | Unit, integration, and smoke testing strategy |

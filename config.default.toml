@@ -7,6 +7,18 @@ primary_model = "kimi-k2-instruct"
 reasoning_model = "gpt-oss-120b"
 summarization_model = "qwen2.5-coder-32b-instruct"
 
+# Named models (optional). Define models here and select with active_model
+# to avoid editing three fields when switching models.
+# active_model = "glm47"
+#
+# [providers.vultr.models.glm47]
+# model_id = "glm-4.7-flash-q4km"
+# thinking_toggle_keypath = ["chat_template_kwargs", "enable_thinking"]
+#
+# [providers.vultr.models.qwen35]
+# model_id = "qwen3.5-35b-a3b-q4km"
+# thinking_toggle_keypath = ["chat_template_kwargs", "enable_thinking"]
+
 [discord]
 bot_token_env = "DISCORD_BOT_TOKEN"
 application_id = ""

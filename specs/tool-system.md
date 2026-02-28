@@ -82,7 +82,7 @@ CLI wait-state behavior during tool execution:
 
 ## `delegate_reasoning`
 
-Delegates deeper reasoning to `gpt-oss-120b`.
+Delegates deeper reasoning to the configured `reasoning_model`.
 
 Input:
 
@@ -96,7 +96,7 @@ Input:
 Behavior:
 
 1. Enforces per-user-turn call limit (2)
-2. Calls Vultr chat completions with model `gpt-oss-120b`
+2. Calls chat completions with the configured `reasoning_model`
 3. Sends no filesystem tools to the delegated model
 4. Returns concise delegated output from `content` or fallback `reasoning`
 

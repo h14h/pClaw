@@ -12,11 +12,13 @@ via an OpenAI-compatible chat completions endpoint:
 The request always includes conversation history and may include tool definitions.
 Before each request, runtime prepends one generated `role=system` message.
 
-Three models are configured per provider:
+Three model roles are configured per provider:
 
 1. Primary chat model (`primary_model`): used for the main agent loop
 2. Delegated reasoning model (`reasoning_model`): called only via `delegate_reasoning` tool
 3. Summarization model (`summarization_model`): used for memory recall summarization and conversation compaction
+
+When a provider uses named models (`active_model` + `[providers.<name>.models.*]`), all three roles are set to the selected model's `model_id` at config load time. See `specs/configuration.md` § Named Models.
 
 ## Request Model
 

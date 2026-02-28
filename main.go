@@ -28,7 +28,7 @@ const (
 	defaultVultrBaseURL = "https://api.vultrinference.com/v1"
 	defaultReasoningLimit = 2
 	reasoningCallTimeout  = 45 * time.Second
-	reasoningMaxTokens    = 1024
+	reasoningMaxTokens    = 16384
 	primaryMaxTokens      = 4096
 	statusDelay           = 150 * time.Millisecond
 	statusFrameInterval   = 100 * time.Millisecond
