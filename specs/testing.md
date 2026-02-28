@@ -4,7 +4,7 @@
 
 The test suite has three layers:
 
-1. Unit tests (`main_test.go`, `discord_test.go`, `memory_test.go`, `prompting_test.go`, `compaction_test.go`) for tool behavior, dispatch logic, Discord transport, memory subsystem, prompt builder, and conversation compaction
+1. Unit tests (`main_test.go`, `config_test.go`, `discord_test.go`, `memory_test.go`, `prompting_test.go`, `compaction_test.go`) for tool behavior, dispatch logic, config loading, Discord transport, memory subsystem, prompt builder, and conversation compaction
 2. Live integration tests (`main_integration_test.go`) for real Vultr inference flow
 3. Opt-in delegation policy harness (`main_delegation_harness_integration_test.go`) for delegation-rate behavior
 
@@ -50,6 +50,15 @@ The test suite has three layers:
 | `TestCompactConversation_FailureNonFatal` | HTTP error → returns nil, conversation unchanged |
 | `TestCompactConversation_TurnBoundary` | Walk-back ensures kept messages start at a user boundary (no orphaned tool pairs) |
 | `TestConversationSummaryContext` | Round-trip context value; `withSystemPrompt` includes `[Conversation Summary]` when set; omits when not set |
+| `TestExpandTilde*` | Tilde expansion edge cases (prefix, absolute, relative, empty, bare `~`) |
+| `TestLoadConfig_ActiveModelResolvesToProviderFields` | Named model's `model_id` populates all three role fields + thinking toggle |
+| `TestLoadConfig_ActiveModelNotFound` | Error lists available model names |
+| `TestLoadConfig_ActiveModelEmptyModelID` | Error on empty `model_id` |
+| `TestLoadConfig_ActiveModelNoModelsMap` | Error when `active_model` set but no `[models]` defined |
+| `TestLoadConfig_NoActiveModelPreservesExistingFields` | Backward compat: flat fields preserved when no `active_model` |
+| `TestLoadConfig_PCLAWModelEnvOverride` | `PCLAW_MODEL` env var overrides config `active_model` |
+| `TestLoadConfig_ActiveModelNoThinkingToggleKeepsProvider` | Model without toggle preserves provider-level toggle |
+| `TestLoadConfig_RealWorldMultiProvider` | Multi-provider config (Vultr flat + local named models) resolves correctly for each combination |
 
 ## Integration Tests (E2E)
 
@@ -108,14 +117,17 @@ go build -o pclaw .
 
 ### Test Matrix
 
-Run each check against each provider you want to verify. Switch providers by setting `PCLAW_PROVIDER`:
+Run each check against each provider you want to verify. Switch providers with `PCLAW_PROVIDER` and models with `PCLAW_MODEL`:
 
 ```bash
 # Vultr (default)
 PCLAW_PROVIDER=vultr ./pclaw
 
-# Local
+# Local (default active_model from config)
 PCLAW_PROVIDER=local ./pclaw
+
+# Local with specific named model
+PCLAW_PROVIDER=local PCLAW_MODEL=qwen35 ./pclaw
 ```
 
 #### 1. Basic text response

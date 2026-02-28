@@ -41,9 +41,22 @@ type ProviderConfig struct {
 	ReasoningModel     string `toml:"reasoning_model"`
 	SummarizationModel string `toml:"summarization_model"`
 
+	// Named model selection (optional). When ActiveModel is set, the named
+	// model's fields override the flat model/toggle fields above at load time.
+	ActiveModel string                 `toml:"active_model"`
+	Models      map[string]ModelConfig `toml:"models"`
+
 	// Thinking toggle (optional). When ThinkingToggleKeypath is non-empty,
 	// the inference client injects a nested field into the request body to
 	// control per-request thinking. OnValue defaults to true, OffValue to false.
+	ThinkingToggleKeypath  []string    `toml:"thinking_toggle_keypath"`
+	ThinkingToggleOnValue  interface{} `toml:"thinking_toggle_on_value"`
+	ThinkingToggleOffValue interface{} `toml:"thinking_toggle_off_value"`
+}
+
+// ModelConfig defines a named model within a provider.
+type ModelConfig struct {
+	ModelID                string      `toml:"model_id"`
 	ThinkingToggleKeypath  []string    `toml:"thinking_toggle_keypath"`
 	ThinkingToggleOnValue  interface{} `toml:"thinking_toggle_on_value"`
 	ThinkingToggleOffValue interface{} `toml:"thinking_toggle_off_value"`
@@ -186,6 +199,37 @@ func LoadConfig() (*ResolvedConfig, error) {
 			available = append(available, name)
 		}
 		return nil, fmt.Errorf("active provider %q not found in config; available: %s", cfg.ActiveProvider, strings.Join(available, ", "))
+	}
+
+	// Apply PCLAW_MODEL override.
+	if override := strings.TrimSpace(os.Getenv("PCLAW_MODEL")); override != "" {
+		providerCfg.ActiveModel = override
+	}
+
+	// Resolve named model into flat provider fields.
+	if providerCfg.ActiveModel != "" {
+		if len(providerCfg.Models) == 0 {
+			return nil, fmt.Errorf("active_model %q set but provider %q has no [models] defined", providerCfg.ActiveModel, cfg.ActiveProvider)
+		}
+		modelCfg, found := providerCfg.Models[providerCfg.ActiveModel]
+		if !found {
+			available := make([]string, 0, len(providerCfg.Models))
+			for name := range providerCfg.Models {
+				available = append(available, name)
+			}
+			return nil, fmt.Errorf("active_model %q not found in provider %q; available: %s", providerCfg.ActiveModel, cfg.ActiveProvider, strings.Join(available, ", "))
+		}
+		if modelCfg.ModelID == "" {
+			return nil, fmt.Errorf("model %q in provider %q has empty model_id", providerCfg.ActiveModel, cfg.ActiveProvider)
+		}
+		providerCfg.PrimaryModel = modelCfg.ModelID
+		providerCfg.ReasoningModel = modelCfg.ModelID
+		providerCfg.SummarizationModel = modelCfg.ModelID
+		if len(modelCfg.ThinkingToggleKeypath) > 0 {
+			providerCfg.ThinkingToggleKeypath = modelCfg.ThinkingToggleKeypath
+			providerCfg.ThinkingToggleOnValue = modelCfg.ThinkingToggleOnValue
+			providerCfg.ThinkingToggleOffValue = modelCfg.ThinkingToggleOffValue
+		}
 	}
 
 	// Resolve secrets from environment variables.

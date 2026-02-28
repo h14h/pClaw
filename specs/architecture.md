@@ -25,6 +25,7 @@ agent/
 ├── websearch.go               # WebSearchClient, web_search tool, configureWebSearch
 ├── prompting.go               # System prompt builder (SectionedPromptBuilder)
 ├── compaction.go              # ConversationState, rolling summarization, compaction logic
+├── config_test.go             # Unit tests for config loading, named model resolution
 ├── main_test.go               # Unit tests for tools + dispatch
 ├── discord_test.go            # Unit tests for Discord utilities, channel policy, access control
 ├── memory_test.go             # Unit tests for MemoryClient, record tool, and auto-recall
@@ -52,12 +53,12 @@ agent/
 | `executeTool` | `main.go` | Dispatches model tool calls to registered Go functions |
 | `asyncWg` | `main.go` | `sync.WaitGroup` tracking in-flight async (fire-and-forget) tool calls |
 | `WaitForAsync` | `main.go` | Drains `asyncWg`; called after `Run()` returns to ensure background tools complete before exit |
-| `delegateReasoning` | `main.go` | Delegates hard reasoning sub-tasks to `gpt-oss-120b` |
+| `delegateReasoning` | `main.go` | Delegates hard reasoning sub-tasks to the configured `reasoning_model` |
 | `HandleUserMessage` | `main.go` | Transport-agnostic single-turn model/tool loop for external adapters |
 | `HandleUserMessageProgressive` | `main.go` | Transport-agnostic loop variant that emits assistant text parts incrementally via callback |
 | Discord runtime | `discord.go` | Registers `/agent`, handles interactions, and manages per-session conversations |
 | Tool functions | `main.go` | Perform filesystem operations (`read_file`, `list_files`, `edit_file`) |
-| `LoadConfig` | `config.go` | Loads TOML config, resolves env-var secrets, validates active provider |
+| `LoadConfig` | `config.go` | Loads TOML config, resolves env-var secrets, validates active provider, resolves named model selection |
 | Startup wiring (`main`) | `main.go` | Loads config, builds `Agent`, starts CLI REPL or Discord bot |
 | `MemoryClient` | `memory.go` | HTTP client for Vultr vector store; handles collection bootstrap, item add, search, list, delete item, delete collection |
 | `configureMemory` | `memory.go` | Reads memory config, creates `MemoryClient` (with backend-specific credentials), bootstraps collection, sets `agent.memoryClient` |
@@ -318,7 +319,7 @@ Compaction failure (e.g., network error during summarization) emits a `compactio
 2. No conversation persistence outside process memory
 3. No workspace sandboxing; tools operate on provided paths
 4. Tool and inference schemas are static per process start
-5. Models are configured per-provider in the TOML config (`primary_model`, `reasoning_model`, `summarization_model`)
+5. Models are configured per-provider in the TOML config — either as flat fields (`primary_model`, `reasoning_model`, `summarization_model`) or via named model definitions with `active_model` (see `specs/configuration.md` § Named Models)
 
 In Discord mode, each `(channel_id, user_id)` conversation key is isolated with a dedicated in-memory agent/session state and mutex.
 Discord uses progressive part callbacks to emit multiple messages within one logical turn as assistant/tool iterations produce text.

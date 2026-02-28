@@ -37,8 +37,8 @@ Section order is fixed to reduce drift in model behavior.
 
 | Mode | Use Case | Included Sections |
 |------|----------|-------------------|
-| `full` | Primary model turns (`kimi-k2-instruct`) | Identity, Behavior, Tooling, Safety, Runtime |
-| `minimal` | Delegated sub-reasoning (`gpt-oss-120b`) | Behavior, Safety, Runtime (compact) |
+| `full` | Primary model turns (`primary_model`) | Identity, Behavior, Tooling, Safety, Runtime |
+| `minimal` | Delegated sub-reasoning (`reasoning_model`) | Behavior, Safety, Runtime (compact) |
 
 `minimal` intentionally excludes persona-heavy flavor text.
 
