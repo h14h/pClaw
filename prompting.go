@@ -25,9 +25,10 @@ type PromptConfig struct {
 }
 
 type PromptBuildContext struct {
-	Mode      PromptMode
-	Transport string
-	ToolNames []string
+	Mode             PromptMode
+	Transport        string
+	ToolNames        []string
+	WorkingDirectory string
 }
 
 type PromptBuilder interface {
@@ -163,6 +164,9 @@ func (b *SectionedPromptBuilder) Build(ctx PromptBuildContext) string {
 		tooling := "Use tools only when they improve correctness or speed."
 		if len(toolNames) > 0 {
 			tooling += " Available tools: " + strings.Join(toolNames, ", ") + "."
+		}
+		if ctx.WorkingDirectory != "" {
+			tooling += "\nWorking directory: " + ctx.WorkingDirectory
 		}
 		sections = append(sections, formatSection("Tooling", tooling))
 	}

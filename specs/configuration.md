@@ -69,6 +69,7 @@ Agent identity and prompt configuration.
 | `persona` | string | No | built-in default | Inline persona text for system prompt composition. |
 | `persona_file` | string | No | `""` | Path to persona text file. When readable and non-empty, overrides `persona`. |
 | `max_persona_chars` | int | No | `600` | Character cap applied to persona text in system prompt. |
+| `working_directory` | string | No | `""` | Sandbox root for filesystem tools. When empty, defaults to `$XDG_DATA_HOME/pclaw/workspace` (fallback `~/.local/share/pclaw/workspace`). All `read_file`, `list_files`, and `edit_file` operations are constrained to this directory tree. |
 
 ## `[memory]`
 

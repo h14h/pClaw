@@ -121,10 +121,11 @@ Input:
 Behavior:
 
 1. JSON-decodes `path`
-2. Calls `os.ReadFile`
-3. Returns file content as string
+2. Resolves path through sandbox (`Sandbox.Resolve`)
+3. Calls `os.ReadFile` on the resolved path
+4. Returns file content as string
 
-Errors are returned directly (decode errors, path errors, permission errors).
+Errors are returned directly (sandbox violations, decode errors, path errors, permission errors).
 
 ## `list_files`
 
@@ -140,8 +141,8 @@ Input:
 
 Behavior:
 
-1. Defaults to `"."` when `path` is empty
-2. Calls `os.ReadDir`
+1. Resolves path through sandbox (`Sandbox.Resolve`); empty path resolves to sandbox root
+2. Calls `os.ReadDir` on the resolved path
 3. Emits JSON array of names
 4. Appends `/` suffix to directory names
 
@@ -162,15 +163,17 @@ Input:
 Behavior:
 
 1. Rejects invalid input when `path == ""` or `old_str == new_str`
-2. If file exists: replaces all matches of `old_str` with `new_str`
-3. If file does not exist and `old_str == ""`: creates file (and parent dirs)
-4. Returns `"OK"` for edits, success message for create path
+2. Resolves path through sandbox (`Sandbox.Resolve`)
+3. If file exists: replaces all matches of `old_str` with `new_str`
+4. If file does not exist and `old_str == ""`: creates file (and parent dirs)
+5. Returns `"OK"` for edits, success message for create path
 
 Error conditions:
 
-1. `old_str not found in file` when no replacement occurs and `old_str != ""`
-2. Read/write filesystem errors
-3. Directory creation errors during file creation path
+1. Sandbox violation (path resolves outside working directory)
+2. `old_str not found in file` when no replacement occurs and `old_str != ""`
+3. Read/write filesystem errors
+4. Directory creation errors during file creation path
 
 ## `record`
 
@@ -323,9 +326,34 @@ Use the recall tool with a targeted query to retrieve full details.
 
 This section appears after the standard prompt sections (`[Identity]`, `[Behavior]`, `[Tooling]`, `[Safety]`, `[Runtime]`) so that recalled context is available to the model on every turn.
 
+## Working Directory Sandbox
+
+All filesystem tools (`read_file`, `list_files`, `edit_file`) resolve paths through a `Sandbox` that constrains access to a single directory tree.
+
+### Configuration
+
+The sandbox root is set via `working_directory` in `[agent]` config. When empty (default), it uses `$XDG_DATA_HOME/pclaw/workspace` (fallback `~/.local/share/pclaw/workspace`), creating the directory automatically on first run.
+
+### Path Resolution
+
+1. Empty paths resolve to the sandbox root
+2. Relative paths are joined with the sandbox root
+3. Absolute paths within the sandbox are allowed
+4. Absolute paths outside the sandbox are rejected
+5. `../` traversals that escape the sandbox are rejected
+6. Symlinks are evaluated via `filepath.EvalSymlinks` to prevent symlink escapes
+7. For non-existent files (e.g. `edit_file` create path), the parent directory is validated instead
+
+### Implementation
+
+- `Sandbox` struct with `root string` field and `Resolve(userPath string) (string, error)` method
+- Created in `NewAgent` from config; panics on invalid configuration (fatal misconfiguration)
+- Tool closures (`readFileToolDefinition`, `listFilesToolDefinition`, `editFileToolDefinition`) call `Resolve` before any filesystem operation
+- Standalone `ReadFile`/`ListFiles`/`EditFile` functions remain exported for backward compatibility but are not sandbox-aware
+- The sandbox root is injected into the system prompt `[Tooling]` section via `PromptBuildContext.WorkingDirectory`
+
 ## Current Gaps
 
-1. No path boundary checks (tools can access files outside workspace)
-2. No file size limits for reads
-3. `edit_file` performs global replace without match-count enforcement
-4. No per-tool timeout or cancellation boundary for filesystem tools
+1. No file size limits for reads
+2. `edit_file` performs global replace without match-count enforcement
+3. No per-tool timeout or cancellation boundary for filesystem tools
