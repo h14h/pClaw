@@ -94,6 +94,73 @@ Optional harness tuning env vars:
 3. `DELEGATION_HARNESS_MIN_OPINION_PROMPT_RATE` (default `0.50`)
 4. `DELEGATION_HARNESS_MAX_SIMPLE_RATE` (default `0.20`)
 
+## Manual Smoke Tests
+
+Manual smoke tests verify end-to-end behavior against live inference backends. Run these after making changes to inference, tool dispatch, memory, or provider configuration.
+
+### Prerequisites
+
+Build the binary:
+
+```bash
+go build -o pclaw .
+```
+
+### Test Matrix
+
+Run each check against each provider you want to verify. Switch providers by setting `PCLAW_PROVIDER`:
+
+```bash
+# Vultr (default)
+PCLAW_PROVIDER=vultr ./pclaw
+
+# Local
+PCLAW_PROVIDER=local ./pclaw
+```
+
+#### 1. Basic text response
+
+Send a simple prompt and confirm the model responds coherently.
+
+```
+> What is 2+2?
+```
+
+**Pass**: model returns a text answer (not an error or empty response).
+
+#### 2. Tool call (read_file)
+
+Ask the model to read a known file.
+
+```
+> Read the file config.default.toml
+```
+
+**Pass**: model calls `read_file`, displays the file contents, and summarizes or acknowledges them.
+
+#### 3. Delegate reasoning
+
+Ask a question that triggers the `delegate_reasoning` tool.
+
+```
+> Think step by step: what are the prime factors of 360?
+```
+
+**Pass**: model delegates to the reasoning model and returns a correct answer. Look for the reasoning delegation status indicator or server event log output.
+
+#### 4. Web search (when configured)
+
+```
+> Search the web for the current weather in San Francisco.
+```
+
+**Pass**: model calls `web_search` and returns results with source URLs.
+
+### Gaps
+
+- **Memory**: No standardized smoke test for record/recall yet. Needs a strategy for isolated test collections to avoid polluting production vector stores.
+- **Discord**: No agent-oriented manual test procedure yet. Rely on human testing.
+
 ## Current Coverage Shape
 
 Well covered:

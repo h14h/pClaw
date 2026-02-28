@@ -11,7 +11,8 @@ summarization_model = "qwen2.5-coder-32b-instruct"
 bot_token_env = "DISCORD_BOT_TOKEN"
 application_id = ""
 guild_id = ""
-allowed_channel_ids = []
+# "all" = respond in all channels, "none" = DMs only, or ["id1", "id2"] for specific channels
+allowed_channel_ids = "all"
 allowed_user_ids = []
 
 [agent]
@@ -25,9 +26,6 @@ max_persona_chars = 600
 enabled = true
 backend = "vultr"
 collection_name = "agent-memory"
-db_path = "./pclaw-memory.db"
-embedding_url = "http://localhost:8081/v1/embeddings"
-embedding_dimension = 768
 
 [web_search]
 api_key_env = "TAVILY_API_KEY"

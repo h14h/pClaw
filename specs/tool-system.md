@@ -307,7 +307,7 @@ When `Agent.memoryClient` is non-nil, every call to `withSystemPrompt` automatic
 1. The last user message in the conversation is extracted as the recall query.
 2. `Agent.recallMemories(ctx, query)` calls `MemoryClient.Search(ctx, query)`.
 3. Search results are capped to 10 items and fed to `Agent.summarizeMemories(ctx, items)`.
-4. `summarizeMemories` makes a direct HTTP POST to `/chat/completions` using the `Summarization` model (`gpt-oss-120b`), bypassing `runInferenceWithModel`/`withSystemPrompt` to avoid infinite recursion. Timeout is 15 seconds, max tokens is 256.
+4. `summarizeMemories` makes a direct HTTP POST to `/chat/completions` using the active provider's `summarization_model`, bypassing `runInferenceWithModel`/`withSystemPrompt` to avoid infinite recursion. Timeout is 15 seconds, max tokens is 256.
 5. The summary is formatted as a `[Memory]` section appended to the base system prompt, with a hint to use the `recall` tool for full details.
 6. On summarization failure, the system falls back to programmatic truncation (each item truncated to 80 characters).
 7. On search error or empty results the section is omitted; no crash or propagated error occurs.

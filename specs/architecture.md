@@ -18,15 +18,19 @@ implementations are all in `main.go`.
 ```text
 agent/
 ├── main.go                    # Agent runtime, inference client, tool definitions
+├── config.go                  # TOML config structs, LoadConfig, resolution logic
+├── config.default.toml        # Embedded default config (created on first run)
 ├── discord.go                 # Discord runtime, command/mention handlers, session manager
 ├── memory.go                  # MemoryClient, record tool, auto-recall, configureMemory
 ├── websearch.go               # WebSearchClient, web_search tool, configureWebSearch
 ├── prompting.go               # System prompt builder (SectionedPromptBuilder)
 ├── compaction.go              # ConversationState, rolling summarization, compaction logic
 ├── main_test.go               # Unit tests for tools + dispatch
+├── discord_test.go            # Unit tests for Discord utilities, channel policy, access control
 ├── memory_test.go             # Unit tests for MemoryClient, record tool, and auto-recall
 ├── websearch_test.go          # Unit tests for WebSearchClient, web_search tool, and configureWebSearch
 ├── compaction_test.go         # Unit tests for compaction types, helpers, and HTTP logic
+├── prompting_test.go          # Unit tests for system prompt composition
 ├── main_integration_test.go   # Live Vultr integration tests
 ├── main_delegation_harness_integration_test.go # Delegation policy harness (opt-in E2E)
 └── specs/
@@ -53,15 +57,16 @@ agent/
 | `HandleUserMessageProgressive` | `main.go` | Transport-agnostic loop variant that emits assistant text parts incrementally via callback |
 | Discord runtime | `discord.go` | Registers `/agent`, handles interactions, and manages per-session conversations |
 | Tool functions | `main.go` | Perform filesystem operations (`read_file`, `list_files`, `edit_file`) |
-| Startup wiring (`main`) | `main.go` | Reads env config, builds `Agent`, starts interactive session |
+| `LoadConfig` | `config.go` | Loads TOML config, resolves env-var secrets, validates active provider |
+| Startup wiring (`main`) | `main.go` | Loads config, builds `Agent`, starts CLI REPL or Discord bot |
 | `MemoryClient` | `memory.go` | HTTP client for Vultr vector store; handles collection bootstrap, item add, search, list, delete item, delete collection |
-| `configureMemory` | `memory.go` | Reads `MEMORY_ENABLED`/`MEMORY_COLLECTION_NAME`, creates `MemoryClient`, bootstraps collection, sets `agent.memoryClient` |
+| `configureMemory` | `memory.go` | Reads memory config, creates `MemoryClient` (with backend-specific credentials), bootstraps collection, sets `agent.memoryClient` |
 | `recallMemories` | `memory.go` | Performs semantic search, summarizes results via `summarizeMemories`, and formats as `[Memory]` system-prompt section |
 | `summarizeMemories` | `memory.go` | Direct HTTP POST to chat completions (bypasses `runInferenceWithModel`) to produce compact summary of memory items |
 | `recordFunction` | `memory.go` | Tool handler for `record`; stores user-provided content via `MemoryClient.AddItem` |
 | `recallFunction` | `memory.go` | Tool handler for `recall`; searches memory and returns full verbatim results |
 | `WebSearchClient` | `websearch.go` | HTTP client for Tavily Search API; handles search requests and response parsing |
-| `configureWebSearch` | `websearch.go` | Reads `TAVILY_API_KEY`/`WEB_SEARCH_MAX_RESULTS`, creates `WebSearchClient`, sets `agent.webSearchClient` |
+| `configureWebSearch` | `websearch.go` | Reads web search config, creates `WebSearchClient`, sets `agent.webSearchClient` |
 | `webSearchFunction` | `websearch.go` | Tool handler for `web_search`; performs Tavily search and formats results with sources |
 | `ConversationState` | `compaction.go` | Tracks `[]ChatMessage`, rolling `Summary`, and cumulative `SizeBytes`; replaces raw slices throughout the agent loop |
 | `compactConversation` | `compaction.go` | Checks threshold, finds safe split, summarizes prefix, truncates history; non-fatal on error |
@@ -136,11 +141,14 @@ The durable memory subsystem adds cross-session persistence backed by Vultr's ma
 ### Client Lifecycle
 
 ```text
-configureMemory(ctx, agent)
+configureMemory(ctx, agent, cfg)
   │
-  ├─ isMemoryDisabled() → return if MEMORY_ENABLED is falsy
-  ├─ memoryCollectionName() → MEMORY_COLLECTION_NAME or "agent-memory"
-  ├─ NewMemoryClient(agent.baseURL, apiKey, httpClient)
+  ├─ cfg.Memory.Enabled == false → return
+  ├─ Resolve collection name (cfg or default "agent-memory")
+  ├─ Resolve memory backend credentials:
+  │     memory.backend == "vultr" → use Vultr provider's base_url + api_key
+  │     otherwise → use active inference provider's credentials
+  ├─ NewMemoryClient(memBaseURL, memAPIKey, httpClient)
   ├─ client.EnsureCollection(ctx, name)
   │     GET /vector_store → find by name
   │     POST /vector_store if missing → cache returned ID
@@ -189,7 +197,7 @@ In Discord mode, a single `MemoryClient` is created once before the session mana
 
 ### Kill Switch
 
-Set `MEMORY_ENABLED=false` (or `0` / `no`) to disable the subsystem entirely:
+Set `memory.enabled = false` in the config to disable the subsystem entirely:
 
 1. `configureMemory` returns immediately without creating a client
 2. `agent.memoryClient` remains nil
@@ -203,10 +211,10 @@ The web search subsystem provides web grounding via the Tavily Search API, enabl
 ### Client Lifecycle
 
 ```text
-configureWebSearch(agent)
+configureWebSearch(agent, cfg)
   │
-  ├─ TAVILY_API_KEY empty → return (no web search)
-  ├─ webSearchMaxResults() → WEB_SEARCH_MAX_RESULTS or 5
+  ├─ cfg.WebSearch.APIKey empty → return (no web search)
+  ├─ maxResults from cfg or default 5
   ├─ NewWebSearchClient(defaultTavilyBaseURL, apiKey, httpClient, maxResults)
   ├─ agent.webSearchClient = client
   └─ agent.tools = agent.buildTools(nil)  // adds "web_search" tool
@@ -229,7 +237,7 @@ In Discord mode, `configureWebSearch` is called for each session agent in the fa
 
 ### Kill Switch
 
-When `TAVILY_API_KEY` is unset or empty:
+When `web_search.api_key_env` is unset or the named env var is empty:
 
 1. `configureWebSearch` returns immediately without creating a client
 2. `agent.webSearchClient` remains nil
@@ -244,10 +252,10 @@ The compaction subsystem prevents unbounded growth of the in-memory conversation
 
 | Symbol | Value | Purpose |
 |--------|-------|---------|
-| `compactionSizeThreshold` | 12000 bytes | Trigger compaction when `SizeBytes` exceeds this |
-| `compactionKeepMessages` | 10 | Number of recent messages to retain after compaction |
+| `compactionSizeThreshold` | 2048 bytes | Trigger compaction when `SizeBytes` exceeds this |
+| `compactionKeepMessages` | 8 | Number of recent messages to retain after compaction |
 | `compactionTimeout` | 20s | HTTP timeout for summarization calls |
-| `compactionMaxTokens` | 512 | Token budget for the summarization model |
+| `compactionMaxTokens` | 256 | Token budget for the summarization model |
 
 `ConversationState` replaces the raw `[]ChatMessage` slice throughout the codebase:
 
@@ -310,7 +318,7 @@ Compaction failure (e.g., network error during summarization) emits a `compactio
 2. No conversation persistence outside process memory
 3. No workspace sandboxing; tools operate on provided paths
 4. Tool and inference schemas are static per process start
-5. Primary model is fixed to `kimi-k2-instruct`; reasoning model is fixed to `gpt-oss-120b`; summarization model is fixed to `qwen2.5-coder-32b-instruct`
+5. Models are configured per-provider in the TOML config (`primary_model`, `reasoning_model`, `summarization_model`)
 
 In Discord mode, each `(channel_id, user_id)` conversation key is isolated with a dedicated in-memory agent/session state and mutex.
 Discord uses progressive part callbacks to emit multiple messages within one logical turn as assistant/tool iterations produce text.

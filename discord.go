@@ -70,6 +70,7 @@ func runDiscordBot(ctx context.Context, cfg *ResolvedConfig) error {
 
 	applicationID := strings.TrimSpace(cfg.Discord.ApplicationID)
 	guildID := strings.TrimSpace(cfg.Discord.GuildID)
+	channelPolicy := cfg.Discord.ChannelPolicy
 	allowedChannelIDs := cfg.Discord.AllowedChannelSet
 	allowedUserIDs := cfg.Discord.AllowedUserSet
 	serverEventSink := newServerEventSinkFromEnv(os.Stdout)
@@ -83,7 +84,19 @@ func runDiscordBot(ctx context.Context, cfg *ResolvedConfig) error {
 		if colName == "" {
 			colName = defaultMemoryCollectionName
 		}
-		client := NewMemoryClient(baseURL, apiKey, http.DefaultClient)
+		// When memory backend is "vultr", use the Vultr provider's credentials
+		// rather than the active inference provider's.
+		memBaseURL := baseURL
+		memAPIKey := apiKey
+		if cfg.Config.Memory.Backend == "vultr" {
+			if vultrCfg, ok := cfg.Config.Providers["vultr"]; ok {
+				memBaseURL = strings.TrimRight(vultrCfg.BaseURL, "/")
+				if vultrCfg.APIKeyEnv != "" {
+					memAPIKey = strings.TrimSpace(os.Getenv(vultrCfg.APIKeyEnv))
+				}
+			}
+		}
+		client := NewMemoryClient(memBaseURL, memAPIKey, http.DefaultClient)
 		if err := client.EnsureCollection(ctx, colName); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: memory initialization failed, running without memory: %v\n", err)
 		} else {
@@ -116,6 +129,9 @@ func runDiscordBot(ctx context.Context, cfg *ResolvedConfig) error {
 	dg.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMessages | discordgo.IntentsDirectMessages | discordgo.IntentsMessageContent
 
 	dg.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		if applicationID == "" {
+			return
+		}
 		if i.Type != discordgo.InteractionApplicationCommand {
 			return
 		}
@@ -144,7 +160,7 @@ func runDiscordBot(ctx context.Context, cfg *ResolvedConfig) error {
 			"command_name": i.ApplicationCommandData().Name,
 		})
 
-		if !isAllowedDiscordRequest(i.ChannelID, userID, allowedChannelIDs, allowedUserIDs) {
+		if !isAllowedDiscordRequest(isDMChannel(s, i.ChannelID), i.ChannelID, userID, channelPolicy, allowedChannelIDs, allowedUserIDs) {
 			emitServerEventWithSink(eventCtx, serverEventSink, ServerLogLevelWarn, "discord.request.rejected", "discord request rejected", map[string]interface{}{
 				"reason": "not_allowed",
 				"source": "slash",
@@ -246,7 +262,7 @@ func runDiscordBot(ctx context.Context, cfg *ResolvedConfig) error {
 		emitServerEventWithSink(eventCtx, serverEventSink, ServerLogLevelInfo, "discord.request.received", "discord message received", map[string]interface{}{
 			"source": source,
 		})
-		if !isAllowedDiscordRequest(m.ChannelID, m.Author.ID, allowedChannelIDs, allowedUserIDs) {
+		if !isAllowedDiscordRequest(isDM, m.ChannelID, m.Author.ID, channelPolicy, allowedChannelIDs, allowedUserIDs) {
 			emitServerEventWithSink(eventCtx, serverEventSink, ServerLogLevelWarn, "discord.request.rejected", "discord request rejected", map[string]interface{}{
 				"reason": "not_allowed",
 				"source": source,
@@ -329,11 +345,14 @@ func runDiscordBot(ctx context.Context, cfg *ResolvedConfig) error {
 		}},
 	}
 
-	if _, err := dg.ApplicationCommandCreate(applicationID, guildID, command); err != nil {
-		return fmt.Errorf("register slash command: %w", err)
+	if applicationID != "" {
+		if _, err := dg.ApplicationCommandCreate(applicationID, guildID, command); err != nil {
+			return fmt.Errorf("register slash command: %w", err)
+		}
+		fmt.Printf("Discord bot is running. Registered /%s command and mention chat.\n", discordCommandName)
+	} else {
+		fmt.Println("Discord bot is running (mention/DM only, no slash command registered).")
 	}
-
-	fmt.Printf("Discord bot is running. Registered /%s command and mention chat.\n", discordCommandName)
 	waitForShutdownSignal(ctx)
 	return nil
 }
@@ -371,10 +390,17 @@ func interactionUserID(i *discordgo.InteractionCreate) string {
 	return ""
 }
 
-func isAllowedDiscordRequest(channelID, userID string, allowedChannelIDs, allowedUserIDs map[string]struct{}) bool {
-	if len(allowedChannelIDs) > 0 {
-		if _, ok := allowedChannelIDs[channelID]; !ok {
+func isAllowedDiscordRequest(isDM bool, channelID, userID string, channelPolicy ChannelPolicy, allowedChannelIDs, allowedUserIDs map[string]struct{}) bool {
+	// DMs are always allowed regardless of channel policy.
+	if !isDM {
+		switch channelPolicy {
+		case ChannelPolicyNone:
 			return false
+		case ChannelPolicyList:
+			if _, ok := allowedChannelIDs[channelID]; !ok {
+				return false
+			}
+		// ChannelPolicyAll: no channel restriction
 		}
 	}
 	if len(allowedUserIDs) > 0 {

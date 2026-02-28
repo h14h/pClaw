@@ -3,19 +3,20 @@
 ## Overview
 
 Inference is handled by `Agent.runInferenceWithModel()` and `Agent.runInferenceStreamWithModel()`
-via Vultr's chat completions endpoint:
+via an OpenAI-compatible chat completions endpoint:
 
 - Method: `POST`
 - Path: `/chat/completions`
-- Base URL: `VULTR_BASE_URL` (default `https://api.vultrinference.com/v1`)
+- Base URL: configured per provider via `base_url` in `[providers.<name>]`
 
 The request always includes conversation history and may include tool definitions.
 Before each request, runtime prepends one generated `role=system` message.
 
-Two models are used:
+Three models are configured per provider:
 
-1. Primary chat model: `kimi-k2-instruct`
-2. Delegated reasoning model: `gpt-oss-120b` (called only via `delegate_reasoning` tool)
+1. Primary chat model (`primary_model`): used for the main agent loop
+2. Delegated reasoning model (`reasoning_model`): called only via `delegate_reasoning` tool
+3. Summarization model (`summarization_model`): used for memory recall summarization and conversation compaction
 
 ## Request Model
 
@@ -23,7 +24,7 @@ Two models are used:
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `model` | string | Fixed by runtime path (`kimi-k2-instruct` primary, `gpt-oss-120b` reasoning) |
+| `model` | string | Set from active provider config (`primary_model`, `reasoning_model`, or `summarization_model`) |
 | `messages` | `[]ChatMessage` | Full conversation history |
 | `max_tokens` | int | `4096` for primary model, `1024` for reasoning model |
 | `stream` | bool | Set to `true` for primary CLI inference calls |
@@ -32,8 +33,10 @@ Two models are used:
 
 Authentication and content headers:
 
-1. `Authorization: Bearer <VULTR_API_KEY>`
+1. `Authorization: Bearer <api_key>` (omitted when the provider has no `api_key_env` or the env var is empty)
 2. `Content-Type: application/json`
+
+When a provider defines `thinking_toggle_keypath`, the request body is augmented with a nested field controlling per-request thinking. Standard agent loop turns inject the off value; `delegate_reasoning` calls inject the on value. See `specs/configuration.md` § `[providers.<name>]` for details.
 
 ## Response Handling
 
@@ -59,10 +62,13 @@ CLI wait-state behavior for primary streaming inference:
 2. Indicator delay is `150ms` to avoid flicker on fast responses
 3. Indicator clears immediately when first content delta arrives, request completes, or request errors
 
-For `gpt-oss-120b` reasoning calls, output can be returned as either:
+For delegated reasoning calls, output can be returned as any of:
 
 1. `message.content` string
-2. `message.reasoning` string (fallback when content is empty)
+2. `message.reasoning_content` string (used by some models like GLM)
+3. `message.reasoning` string (fallback when both content and reasoning_content are empty)
+
+The same priority applies during streaming: both `reasoning` and `reasoning_content` deltas are accumulated.
 
 CLI wait-state behavior for delegated reasoning:
 
@@ -119,6 +125,10 @@ These bubble to `Agent.Run()` and terminate the session.
 1. Per-turn delegation limit of 2 calls
 2. Per-call timeout of 45 seconds
 3. No tools exposed to the reasoning model
+
+## Known Issues
+
+1. **Intermittent `delta` array in stream chunks**: Some Vultr API responses return `choices[].delta` as `[]` (empty array) instead of `{}` (object) in certain SSE chunks. This causes `json.Unmarshal` to fail in `processStreamEvent`, which aborts the stream and surfaces an error to the user. The fix is to skip malformed chunks (log a warning, continue parsing) rather than treating them as fatal. Observed intermittently during delegation-heavy prompts.
 
 ## Operational Notes
 
