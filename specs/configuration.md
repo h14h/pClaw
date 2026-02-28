@@ -2,100 +2,113 @@
 
 ## Overview
 
-Runtime configuration is environment-driven and resolved at process startup in `main()`.
-There is no config file layer and no CLI argument parsing.
+Configuration is loaded from a TOML file at startup. On first run, a default config is created from the embedded `config.default.toml`.
 
-Precedence is:
+### Config File Location
 
-1. Environment variables
-2. Hardcoded defaults (for optional values)
+Checked in order:
 
-## Environment Variables
+1. `PCLAW_CONFIG` env var (explicit path)
+2. `$XDG_CONFIG_HOME/pclaw/config.toml`
+3. `~/.config/pclaw/config.toml`
 
-| Variable | Required | Default | Purpose |
-|----------|----------|---------|---------|
-| `VULTR_API_KEY` | Yes | none | Bearer token for Vultr Inference |
-| `VULTR_BASE_URL` | No | `https://api.vultrinference.com/v1` | API base URL |
-| `TOOL_EVENT_LOG` | No | `off` | CLI tool event logging mode (`off` or `debug`) |
-| `SERVER_EVENT_LOG` | No | `off` | Server event logging mode (`off`, `line`, or `verbose`) |
-| `DISCORD_BOT_TOKEN` | No | none | Enables Discord mode and authenticates bot session |
-| `DISCORD_APPLICATION_ID` | No | inferred from bot user when possible | Application ID for slash command registration |
-| `DISCORD_GUILD_ID` | No | empty (global registration) | Guild scope for slash command registration |
-| `DISCORD_ALLOWED_CHANNEL_IDS` | No | empty | Comma-separated channel allowlist |
-| `DISCORD_ALLOWED_USER_IDS` | No | empty | Comma-separated user allowlist |
-| `AGENT_NAME` | No | `Codex` | Prompt identity name used in system prompt `Identity` section |
-| `AGENT_ROLE_SUMMARY` | No | built-in default | Prompt role summary used in system prompt `Identity` section |
-| `AGENT_PERSONA` | No | built-in default | Inline persona text for system prompt composition |
-| `AGENT_PERSONA_FILE` | No | empty | Path to persona text file; when readable and non-empty, overrides `AGENT_PERSONA` |
-| `AGENT_PROMPT_MAX_PERSONA_CHARS` | No | `600` | Character cap applied to persona text embedded in system prompt |
-| `MEMORY_ENABLED` | No | `true` (enabled) | Set to `false`, `0`, or `no` to disable durable memory (no `record`/`recall` tools, no auto-recall) |
-| `MEMORY_COLLECTION_NAME` | No | `agent-memory` | Vultr vector store collection name used for semantic memory |
-| `TAVILY_API_KEY` | No | none | Enables web search grounding when set; Tavily API bearer token |
-| `WEB_SEARCH_MAX_RESULTS` | No | `5` | Number of search results per web_search call (1-20) |
+### Environment Variable Overrides
 
-Model selection is not environment-configurable.
+| Variable | Purpose |
+|----------|---------|
+| `PCLAW_CONFIG` | Override config file path |
+| `PCLAW_PROVIDER` | Override `active_provider` from config |
+| `TOOL_EVENT_LOG` | CLI tool event logging: `off` (default) or `debug` |
+| `SERVER_EVENT_LOG` | Server event logging: `off` (default), `line`, or `verbose` |
 
-1. Primary chat model is fixed to `kimi-k2-instruct`
-2. Reasoning delegation model is fixed to `gpt-oss-120b`
-3. Memory recall summarization model is fixed to `gpt-oss-120b`
+API keys and tokens are not set directly — instead, the config names an env var to read from (e.g. `api_key_env = "VULTR_API_KEY"`).
 
-`main.go` defines these via a named type:
+---
 
-1. `type Model string`
-2. `const Instruct Model = "kimi-k2-instruct"`
-3. `const Reasoning Model = "gpt-oss-120b"`
-4. `const Summarization Model = "gpt-oss-120b"`
+## Top-Level
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `active_provider` | string | Yes | — | Name of the provider to use (must match a key in `[providers]`). Overridden by `PCLAW_PROVIDER` env var. |
+
+## `[providers.<name>]`
+
+Named inference backends. Define one or more; `active_provider` selects which one is used.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `api_key_env` | string | No | — | Name of env var containing the API key. When empty, no Authorization header is sent (for local/keyless servers). |
+| `base_url` | string | Yes | — | Base URL for the OpenAI-compatible API (e.g. `https://api.vultrinference.com/v1`). |
+| `primary_model` | string | Yes | — | Model ID for primary chat inference. |
+| `reasoning_model` | string | Yes | — | Model ID for `delegate_reasoning` tool calls. |
+| `summarization_model` | string | Yes | — | Model ID for memory recall summarization and conversation compaction. |
+| `thinking_toggle_keypath` | string[] | No | — | JSON keypath for injecting a thinking toggle into request bodies (e.g. `["chat_template_kwargs", "enable_thinking"]`). When empty, no toggle is injected. |
+| `thinking_toggle_on_value` | any | No | `true` | Value injected at the keypath when thinking is enabled. |
+| `thinking_toggle_off_value` | any | No | `false` | Value injected at the keypath when thinking is disabled. |
+
+## `[discord]`
+
+Discord bot settings. The bot starts in Discord mode when `bot_token_env` is set and the resolved token is non-empty.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `bot_token_env` | string | No | — | Name of env var containing the Discord bot token. When empty, Discord mode is disabled. |
+| `application_id` | string | No | `""` | Discord application ID for slash command registration. When empty, slash commands are skipped and the bot runs in mention/DM-only mode. |
+| `guild_id` | string | No | `""` | Scope slash command registration to this guild. When empty, the slash command is registered globally. Only relevant when `application_id` is set. |
+| `allowed_channel_ids` | string or string[] | No | `"all"` | Channel access policy. `"all"`: respond in all guild channels. `"none"`: DM-only (reject all guild channels). `["id1", "id2"]`: whitelist specific channel IDs. DMs are always allowed regardless of this setting. |
+| `allowed_user_ids` | string[] | No | `[]` | User ID allowlist. When non-empty, only listed users can interact with the bot (applies to both guild channels and DMs). Empty = no restriction. |
+
+## `[agent]`
+
+Agent identity and prompt configuration.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `name` | string | No | `"Codex"` | Agent name used in system prompt identity section. |
+| `role_summary` | string | No | built-in default | Role summary used in system prompt identity section. |
+| `persona` | string | No | built-in default | Inline persona text for system prompt composition. |
+| `persona_file` | string | No | `""` | Path to persona text file. When readable and non-empty, overrides `persona`. |
+| `max_persona_chars` | int | No | `600` | Character cap applied to persona text in system prompt. |
+
+## `[memory]`
+
+Durable semantic memory subsystem.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `enabled` | bool | No | `true` | Enable/disable the memory subsystem (`record`/`recall` tools and auto-recall). |
+| `backend` | string | No | `"vultr"` | Memory storage backend. Currently only `"vultr"` (vector store API). When set to `"vultr"`, the memory client uses the Vultr provider's credentials regardless of the active inference provider. |
+| `collection_name` | string | No | `"agent-memory"` | Vector store collection name. |
+
+## `[web_search]`
+
+Web search grounding via Tavily.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `api_key_env` | string | No | — | Name of env var containing the Tavily API key. When empty, web search is disabled. |
+| `max_results` | int | No | `5` | Number of search results per `web_search` call (1-20). |
+
+---
 
 ## Startup Resolution
 
-Initialization sequence:
-
-1. If `DISCORD_BOT_TOKEN` is set, start Discord runtime path
-2. Read `VULTR_API_KEY`; exit with status 1 when missing
-3. Read `VULTR_BASE_URL`; fallback to `defaultVultrBaseURL`
-4. Trim trailing slash from base URL with `strings.TrimRight(baseURL, "/")`
-5. Build runtime (`Agent` for CLI, session-scoped `Agent`s for Discord)
-6. Configure tool event logging from `TOOL_EVENT_LOG` (CLI mode)
-7. Configure server event logging from `SERVER_EVENT_LOG`
-
-CLI initialization sequence:
-
-1. Read `VULTR_API_KEY`; exit with status 1 when missing
-2. Read `VULTR_BASE_URL`; fallback to `defaultVultrBaseURL`
-3. Trim trailing slash from base URL with `strings.TrimRight(baseURL, "/")`
-4. Create `Agent` via `NewAgent(...)`
-5. Configure tool event logging from `TOOL_EVENT_LOG`
-6. Configure server event logging from `SERVER_EVENT_LOG`
-7. Call `configureMemory(ctx, agent)` — reads `MEMORY_ENABLED` and `MEMORY_COLLECTION_NAME`, creates `MemoryClient`, bootstraps the vector store collection, and sets `agent.memoryClient`; on failure logs a warning and continues without memory
-8. Call `configureWebSearch(agent)` — reads `TAVILY_API_KEY` and `WEB_SEARCH_MAX_RESULTS`, creates `WebSearchClient`, and sets `agent.webSearchClient`; when `TAVILY_API_KEY` is unset, continues without web search
-
-## Behavioral Notes
-
-1. `VULTR_API_KEY` is mandatory for both runtime and integration tests
-2. Base URL normalization avoids `//chat/completions` construction issues
-3. Tool registry includes built-ins and `delegate_reasoning`
-4. HTTP client defaults to `http.DefaultClient` unless explicitly injected
-5. `TOOL_EVENT_LOG=off` keeps tool-event output silent while preserving spinner-based wait feedback
-6. `TOOL_EVENT_LOG=debug` emits structured `tool_event` lines to stderr
-7. `SERVER_EVENT_LOG=line` emits compact single-line events: timestamp, level, event name, plus `tool` (for tool events) and `error` (for failures). All other metadata and fields are suppressed.
-8. `SERVER_EVENT_LOG=verbose` emits full single-line events with all metadata (trace, turn, session, source, channel, user, message/interaction IDs) and all fields for deep troubleshooting
-8. Discord mode disables spinner output, routes responses through slash commands (`/agent`) and mention-based chat, emits assistant text progressively as it is produced, and refreshes typing indicators while work is ongoing
+1. Load and parse TOML config file (creating from defaults if needed)
+2. Apply `PCLAW_PROVIDER` env var override to `active_provider`
+3. Resolve the active provider config and read its API key from the named env var
+4. Resolve Discord config: read bot token, parse channel policy, build user allowlist
+5. Resolve web search config: read Tavily API key
+6. If Discord bot token is present, start Discord mode; otherwise start CLI REPL
+7. Configure memory (using Vultr provider credentials when `backend = "vultr"`)
+8. Configure web search (when Tavily key is present)
+9. Configure logging from `TOOL_EVENT_LOG` and `SERVER_EVENT_LOG` env vars
 
 ## Integration Test Configuration
 
-`main_integration_test.go` uses the same variable contract:
+Tests use the same config resolution. `VULTR_API_KEY` must be set for integration tests; when missing, tests skip.
 
-1. Missing `VULTR_API_KEY` causes tests to `t.Skip(...)`
-2. `VULTR_BASE_URL` falls back to the same default
-3. Base URL is normalized by trimming trailing slash
+Memory integration test requires explicit opt-in:
 
-This keeps test behavior aligned with production startup behavior.
-
-`memory_test.go` contains one live-API integration test (`TestMemoryRoundTrip_Integration`) that requires two opt-in env vars:
-
-| Variable | Required for memory integration test | Purpose |
-|----------|--------------------------------------|---------|
-| `MEMORY_INTEGRATION_TEST` | Yes (must be `true`) | Explicit opt-in to run the live memory round-trip test; without this the test is always skipped, even if `VULTR_API_KEY` is set |
-| `VULTR_API_KEY` | Yes | Bearer token for the Vultr vector store API |
-
-Run with: `VULTR_API_KEY=<key> MEMORY_INTEGRATION_TEST=true go test ./... -run Integration`
+```
+VULTR_API_KEY=<key> MEMORY_INTEGRATION_TEST=true go test ./... -run Integration
+```

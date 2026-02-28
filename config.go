@@ -41,12 +41,22 @@ type ProviderConfig struct {
 
 // DiscordConfig holds Discord bot connection and access control settings.
 type DiscordConfig struct {
-	BotTokenEnv       string   `toml:"bot_token_env"`
-	ApplicationID     string   `toml:"application_id"`
-	GuildID           string   `toml:"guild_id"`
-	AllowedChannelIDs []string `toml:"allowed_channel_ids"`
-	AllowedUserIDs    []string `toml:"allowed_user_ids"`
+	BotTokenEnv       string      `toml:"bot_token_env"`
+	ApplicationID     string      `toml:"application_id"`
+	GuildID           string      `toml:"guild_id"`
+	AllowedChannelIDs interface{} `toml:"allowed_channel_ids"` // "all", "none", or []string
+	AllowedUserIDs    []string    `toml:"allowed_user_ids"`
 }
+
+// ChannelPolicy controls which guild channels the bot responds in.
+// DMs are always allowed regardless of policy.
+type ChannelPolicy int
+
+const (
+	ChannelPolicyAll  ChannelPolicy = iota // respond in all channels
+	ChannelPolicyNone                      // guild channels blocked (DM-only)
+	ChannelPolicyList                      // only specific channel IDs
+)
 
 // AgentConfig holds agent identity and prompt configuration.
 type AgentConfig struct {
@@ -62,11 +72,6 @@ type MemoryConfig struct {
 	Enabled        bool   `toml:"enabled"`
 	Backend        string `toml:"backend"`
 	CollectionName string `toml:"collection_name"`
-
-	// SQLite-specific fields (ignored when Backend is "vultr").
-	DBPath             string `toml:"db_path"`
-	EmbeddingURL       string `toml:"embedding_url"`
-	EmbeddingDimension int    `toml:"embedding_dimension"`
 }
 
 // WebSearchConfig holds web search configuration.
@@ -86,7 +91,8 @@ type ResolvedProvider struct {
 type ResolvedDiscord struct {
 	DiscordConfig
 	BotToken          string              // resolved from BotTokenEnv
-	AllowedChannelSet map[string]struct{} // built from AllowedChannelIDs
+	ChannelPolicy     ChannelPolicy       // parsed from AllowedChannelIDs
+	AllowedChannelSet map[string]struct{} // populated only when ChannelPolicy == ChannelPolicyList
 	AllowedUserSet    map[string]struct{} // built from AllowedUserIDs
 }
 
@@ -183,9 +189,14 @@ func LoadConfig() (*ResolvedConfig, error) {
 		resolved.Provider.APIKey = strings.TrimSpace(os.Getenv(providerCfg.APIKeyEnv))
 	}
 
+	channelPolicy, channelSet, err := resolveChannelPolicy(cfg.Discord.AllowedChannelIDs)
+	if err != nil {
+		return nil, fmt.Errorf("discord.allowed_channel_ids: %w", err)
+	}
 	resolved.Discord = ResolvedDiscord{
 		DiscordConfig:     cfg.Discord,
-		AllowedChannelSet: sliceToSet(cfg.Discord.AllowedChannelIDs),
+		ChannelPolicy:     channelPolicy,
+		AllowedChannelSet: channelSet,
 		AllowedUserSet:    sliceToSet(cfg.Discord.AllowedUserIDs),
 	}
 	if cfg.Discord.BotTokenEnv != "" {
@@ -200,6 +211,45 @@ func LoadConfig() (*ResolvedConfig, error) {
 	}
 
 	return resolved, nil
+}
+
+// resolveChannelPolicy interprets the allowed_channel_ids config value.
+// Accepts "all", "none", an array of channel ID strings, or nil/empty (defaults to "all").
+func resolveChannelPolicy(v interface{}) (ChannelPolicy, map[string]struct{}, error) {
+	if v == nil {
+		return ChannelPolicyAll, nil, nil
+	}
+	switch val := v.(type) {
+	case string:
+		switch strings.ToLower(strings.TrimSpace(val)) {
+		case "all", "":
+			return ChannelPolicyAll, nil, nil
+		case "none":
+			return ChannelPolicyNone, nil, nil
+		default:
+			return 0, nil, fmt.Errorf("invalid string value %q (expected \"all\" or \"none\")", val)
+		}
+	case []string:
+		if len(val) == 0 {
+			return ChannelPolicyAll, nil, nil
+		}
+		return ChannelPolicyList, sliceToSet(val), nil
+	case []interface{}:
+		ids := make([]string, 0, len(val))
+		for i, item := range val {
+			s, ok := item.(string)
+			if !ok {
+				return 0, nil, fmt.Errorf("element %d is not a string", i)
+			}
+			ids = append(ids, s)
+		}
+		if len(ids) == 0 {
+			return ChannelPolicyAll, nil, nil
+		}
+		return ChannelPolicyList, sliceToSet(ids), nil
+	default:
+		return 0, nil, fmt.Errorf("expected \"all\", \"none\", or an array of channel IDs")
+	}
 }
 
 // sliceToSet converts a string slice to a set (map[string]struct{}),

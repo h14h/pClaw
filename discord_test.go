@@ -216,6 +216,97 @@ func TestProgressiveDiscordSender_SplitsLongPart(t *testing.T) {
 	}
 }
 
+func TestResolveChannelPolicy(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      interface{}
+		wantPolicy ChannelPolicy
+		wantSet    map[string]struct{}
+		wantErr    bool
+	}{
+		{"nil defaults to all", nil, ChannelPolicyAll, nil, false},
+		{"string all", "all", ChannelPolicyAll, nil, false},
+		{"string ALL", "ALL", ChannelPolicyAll, nil, false},
+		{"string empty", "", ChannelPolicyAll, nil, false},
+		{"string none", "none", ChannelPolicyNone, nil, false},
+		{"string NONE", "NONE", ChannelPolicyNone, nil, false},
+		{"string invalid", "bogus", 0, nil, true},
+		{"[]string with IDs", []string{"111", "222"}, ChannelPolicyList, map[string]struct{}{"111": {}, "222": {}}, false},
+		{"[]string empty", []string{}, ChannelPolicyAll, nil, false},
+		{"[]interface with IDs", []interface{}{"111", "222"}, ChannelPolicyList, map[string]struct{}{"111": {}, "222": {}}, false},
+		{"[]interface empty", []interface{}{}, ChannelPolicyAll, nil, false},
+		{"[]interface non-string", []interface{}{123}, 0, nil, true},
+		{"unexpected type", 42, 0, nil, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			policy, set, err := resolveChannelPolicy(tc.input)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if policy != tc.wantPolicy {
+				t.Fatalf("policy = %d, want %d", policy, tc.wantPolicy)
+			}
+			if tc.wantSet == nil && set != nil && len(set) > 0 {
+				t.Fatalf("expected nil/empty set, got %v", set)
+			}
+			for k := range tc.wantSet {
+				if _, ok := set[k]; !ok {
+					t.Fatalf("missing key %q in set", k)
+				}
+			}
+		})
+	}
+}
+
+func TestIsAllowedDiscordRequest(t *testing.T) {
+	ids := map[string]struct{}{"ch1": {}, "ch2": {}}
+	users := map[string]struct{}{"u1": {}}
+
+	tests := []struct {
+		name      string
+		isDM      bool
+		channelID string
+		userID    string
+		policy    ChannelPolicy
+		channels  map[string]struct{}
+		users     map[string]struct{}
+		want      bool
+	}{
+		// ChannelPolicyAll — any channel allowed
+		{"all policy, guild channel", false, "ch99", "u1", ChannelPolicyAll, nil, users, true},
+		{"all policy, DM", true, "dm1", "u1", ChannelPolicyAll, nil, users, true},
+
+		// ChannelPolicyNone — guild blocked, DMs pass
+		{"none policy, guild channel", false, "ch1", "u1", ChannelPolicyNone, nil, users, false},
+		{"none policy, DM", true, "dm1", "u1", ChannelPolicyNone, nil, users, true},
+
+		// ChannelPolicyList — only listed channels, DMs always pass
+		{"list policy, allowed channel", false, "ch1", "u1", ChannelPolicyList, ids, users, true},
+		{"list policy, unlisted channel", false, "ch99", "u1", ChannelPolicyList, ids, users, false},
+		{"list policy, DM bypasses list", true, "dm1", "u1", ChannelPolicyList, ids, users, true},
+
+		// User filter applies regardless
+		{"all policy, unlisted user", false, "ch1", "u99", ChannelPolicyAll, nil, users, false},
+		{"none policy, DM unlisted user", true, "dm1", "u99", ChannelPolicyNone, nil, users, false},
+		{"no user filter", false, "ch1", "anyone", ChannelPolicyAll, nil, nil, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isAllowedDiscordRequest(tc.isDM, tc.channelID, tc.userID, tc.policy, tc.channels, tc.users)
+			if got != tc.want {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestStartTypingHeartbeat_EmitsUntilStopped(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
