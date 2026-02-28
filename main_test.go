@@ -1241,3 +1241,315 @@ func TestStreamReasoningContent(t *testing.T) {
 		t.Fatalf("expected reasoning_content accumulated, got %q", reasoningBuilder.String())
 	}
 }
+
+func TestSandboxResolveRelative(t *testing.T) {
+	root := t.TempDir()
+	sb, err := NewSandbox(root)
+	if err != nil {
+		t.Fatalf("NewSandbox: %v", err)
+	}
+	// Create subdir so the parent exists for resolution.
+	if err := os.MkdirAll(filepath.Join(root, "subdir"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	resolved, err := sb.Resolve("subdir/file.txt")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	expected := filepath.Join(root, "subdir", "file.txt")
+	if resolved != expected {
+		t.Fatalf("expected %q, got %q", expected, resolved)
+	}
+}
+
+func TestSandboxResolveAbsoluteInside(t *testing.T) {
+	root := t.TempDir()
+	sb, err := NewSandbox(root)
+	if err != nil {
+		t.Fatalf("NewSandbox: %v", err)
+	}
+	// Create a file inside root.
+	inside := filepath.Join(root, "inside.txt")
+	if err := os.WriteFile(inside, []byte("hi"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	resolved, err := sb.Resolve(inside)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved != inside {
+		t.Fatalf("expected %q, got %q", inside, resolved)
+	}
+}
+
+func TestSandboxResolveAbsoluteOutside(t *testing.T) {
+	root := t.TempDir()
+	sb, err := NewSandbox(root)
+	if err != nil {
+		t.Fatalf("NewSandbox: %v", err)
+	}
+	_, err = sb.Resolve("/etc/passwd")
+	if err == nil {
+		t.Fatal("expected error for absolute path outside sandbox")
+	}
+}
+
+func TestSandboxResolveDotDotEscape(t *testing.T) {
+	root := t.TempDir()
+	sb, err := NewSandbox(root)
+	if err != nil {
+		t.Fatalf("NewSandbox: %v", err)
+	}
+	_, err = sb.Resolve("../../etc/passwd")
+	if err == nil {
+		t.Fatal("expected error for dot-dot escape")
+	}
+}
+
+func TestSandboxResolveDotDotWithinRoot(t *testing.T) {
+	root := t.TempDir()
+	sb, err := NewSandbox(root)
+	if err != nil {
+		t.Fatalf("NewSandbox: %v", err)
+	}
+	// Create subdir and file.
+	if err := os.MkdirAll(filepath.Join(root, "subdir"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	target := filepath.Join(root, "file.txt")
+	if err := os.WriteFile(target, []byte("hi"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	resolved, err := sb.Resolve("subdir/../file.txt")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved != target {
+		t.Fatalf("expected %q, got %q", target, resolved)
+	}
+}
+
+func TestSandboxResolveSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	sb, err := NewSandbox(root)
+	if err != nil {
+		t.Fatalf("NewSandbox: %v", err)
+	}
+	// Create a symlink inside root that points outside.
+	link := filepath.Join(root, "escape")
+	if err := os.Symlink("/tmp", link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	_, err = sb.Resolve("escape")
+	if err == nil {
+		t.Fatal("expected error for symlink escape")
+	}
+}
+
+func TestSandboxResolveEmpty(t *testing.T) {
+	root := t.TempDir()
+	sb, err := NewSandbox(root)
+	if err != nil {
+		t.Fatalf("NewSandbox: %v", err)
+	}
+	resolved, err := sb.Resolve("")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved != root {
+		t.Fatalf("expected root %q, got %q", root, resolved)
+	}
+}
+
+func TestSandboxResolveNewFileValidParent(t *testing.T) {
+	root := t.TempDir()
+	sb, err := NewSandbox(root)
+	if err != nil {
+		t.Fatalf("NewSandbox: %v", err)
+	}
+	// newfile.txt doesn't exist, but parent (root) does.
+	resolved, err := sb.Resolve("newfile.txt")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	expected := filepath.Join(root, "newfile.txt")
+	if resolved != expected {
+		t.Fatalf("expected %q, got %q", expected, resolved)
+	}
+}
+
+func TestSandboxDefaultXDG(t *testing.T) {
+	// Use a temp dir as XDG_DATA_HOME so we don't touch real filesystem.
+	tmpXDG := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpXDG)
+
+	sb, err := NewSandbox("")
+	if err != nil {
+		t.Fatalf("NewSandbox with default: %v", err)
+	}
+	expected := filepath.Join(tmpXDG, "pclaw", "workspace")
+	if sb.Root() != expected {
+		t.Fatalf("expected root %q, got %q", expected, sb.Root())
+	}
+	// Directory should have been created.
+	info, err := os.Stat(expected)
+	if err != nil {
+		t.Fatalf("expected directory to exist: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("expected a directory at %s", expected)
+	}
+}
+
+// newSandboxedAgent creates an Agent with a sandbox rooted at the given directory.
+func newSandboxedAgent(t *testing.T, root string) *Agent {
+	t.Helper()
+	cfg := &ResolvedConfig{
+		Config: Config{
+			Agent: AgentConfig{WorkingDirectory: root},
+		},
+	}
+	return NewAgent("http://example.com", "key", nil, nil, nil, cfg)
+}
+
+// findTool returns the tool with the given name from the agent.
+func findTool(t *testing.T, agent *Agent, name string) ToolDefinition {
+	t.Helper()
+	for _, tool := range agent.tools {
+		if tool.Name == name {
+			return tool
+		}
+	}
+	t.Fatalf("tool %q not found", name)
+	return ToolDefinition{}
+}
+
+func TestSandboxedReadFile(t *testing.T) {
+	root := t.TempDir()
+	agent := newSandboxedAgent(t, root)
+	readFile := findTool(t, agent, "read_file")
+
+	// Write a file inside the sandbox.
+	inside := filepath.Join(root, "hello.txt")
+	if err := os.WriteFile(inside, []byte("world"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// Reading a relative path inside sandbox should succeed.
+	input, _ := json.Marshal(ReadFileInput{Path: "hello.txt"})
+	out, err := readFile.Function(input)
+	if err != nil {
+		t.Fatalf("read inside sandbox: %v", err)
+	}
+	if out != "world" {
+		t.Fatalf("expected %q, got %q", "world", out)
+	}
+
+	// Reading an absolute path outside sandbox should fail.
+	input, _ = json.Marshal(ReadFileInput{Path: "/etc/hostname"})
+	_, err = readFile.Function(input)
+	if err == nil {
+		t.Fatal("expected error for path outside sandbox")
+	}
+
+	// Reading a dot-dot escape should fail.
+	input, _ = json.Marshal(ReadFileInput{Path: "../../etc/passwd"})
+	_, err = readFile.Function(input)
+	if err == nil {
+		t.Fatal("expected error for dot-dot escape")
+	}
+}
+
+func TestSandboxedListFiles(t *testing.T) {
+	root := t.TempDir()
+	agent := newSandboxedAgent(t, root)
+	listFiles := findTool(t, agent, "list_files")
+
+	// Create files and dirs inside sandbox.
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("a"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "sub"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	// Listing with empty path should list sandbox root.
+	input, _ := json.Marshal(ListFilesInput{})
+	out, err := listFiles.Function(input)
+	if err != nil {
+		t.Fatalf("list sandbox root: %v", err)
+	}
+	var files []string
+	if err := json.Unmarshal([]byte(out), &files); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("expected 2 entries, got %d: %v", len(files), files)
+	}
+
+	// Listing an absolute path outside sandbox should fail.
+	input, _ = json.Marshal(ListFilesInput{Path: "/tmp"})
+	_, err = listFiles.Function(input)
+	if err == nil {
+		t.Fatal("expected error for path outside sandbox")
+	}
+}
+
+func TestSandboxedEditFile(t *testing.T) {
+	root := t.TempDir()
+	agent := newSandboxedAgent(t, root)
+	editFile := findTool(t, agent, "edit_file")
+
+	// Edit (create) a new file inside sandbox.
+	input, _ := json.Marshal(EditFileInput{
+		Path:   "new.txt",
+		OldStr: "",
+		NewStr: "created",
+	})
+	out, err := editFile.Function(input)
+	if err != nil {
+		t.Fatalf("create inside sandbox: %v", err)
+	}
+	if out == "" {
+		t.Fatal("expected non-empty result for file creation")
+	}
+	content, err := os.ReadFile(filepath.Join(root, "new.txt"))
+	if err != nil {
+		t.Fatalf("read created file: %v", err)
+	}
+	if string(content) != "created" {
+		t.Fatalf("expected %q, got %q", "created", string(content))
+	}
+
+	// Edit an existing file inside sandbox.
+	input, _ = json.Marshal(EditFileInput{
+		Path:   "new.txt",
+		OldStr: "created",
+		NewStr: "modified",
+	})
+	out, err = editFile.Function(input)
+	if err != nil {
+		t.Fatalf("edit inside sandbox: %v", err)
+	}
+	if out != "OK" {
+		t.Fatalf("expected %q, got %q", "OK", out)
+	}
+	content, err = os.ReadFile(filepath.Join(root, "new.txt"))
+	if err != nil {
+		t.Fatalf("read edited file: %v", err)
+	}
+	if string(content) != "modified" {
+		t.Fatalf("expected %q, got %q", "modified", string(content))
+	}
+
+	// Creating a file outside sandbox should fail.
+	input, _ = json.Marshal(EditFileInput{
+		Path:   "/tmp/escape.txt",
+		OldStr: "",
+		NewStr: "nope",
+	})
+	_, err = editFile.Function(input)
+	if err == nil {
+		t.Fatal("expected error for path outside sandbox")
+	}
+}

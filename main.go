@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -76,6 +76,7 @@ type Agent struct {
 	memoryClient        *MemoryClient
 	recallTurnCache     *recallCache
 	webSearchClient     *WebSearchClient
+	sandbox             *Sandbox
 	asyncWg             sync.WaitGroup
 
 	// Thinking toggle: when thinkingToggleKeypath is non-empty, inference
@@ -83,6 +84,114 @@ type Agent struct {
 	thinkingToggleKeypath  []string
 	thinkingToggleOnValue  interface{}
 	thinkingToggleOffValue interface{}
+}
+
+// Sandbox constrains filesystem tool access to a single directory tree.
+type Sandbox struct {
+	root string
+}
+
+// defaultWorkingDirectory returns the default sandbox root:
+// $XDG_DATA_HOME/pclaw/workspace, falling back to ~/.local/share/pclaw/workspace.
+func defaultWorkingDirectory() (string, error) {
+	base := os.Getenv("XDG_DATA_HOME")
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("cannot determine home directory: %w", err)
+		}
+		base = filepath.Join(home, ".local", "share")
+	}
+	return filepath.Join(base, "pclaw", "workspace"), nil
+}
+
+// NewSandbox creates a Sandbox rooted at root. When root is empty, it defaults
+// to defaultWorkingDirectory() and creates the directory if it doesn't exist.
+// When root is non-empty, it resolves to an absolute path and validates it's a directory.
+func NewSandbox(root string) (*Sandbox, error) {
+	if root == "" {
+		var err error
+		root, err = defaultWorkingDirectory()
+		if err != nil {
+			return nil, err
+		}
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			return nil, fmt.Errorf("create workspace directory %s: %w", root, err)
+		}
+	} else {
+		abs, err := filepath.Abs(root)
+		if err != nil {
+			return nil, fmt.Errorf("resolve working directory %s: %w", root, err)
+		}
+		root = abs
+		info, err := os.Stat(root)
+		if err != nil {
+			return nil, fmt.Errorf("working directory %s: %w", root, err)
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("working directory %s is not a directory", root)
+		}
+	}
+	return &Sandbox{root: root}, nil
+}
+
+// Resolve resolves userPath relative to the sandbox root and validates that
+// the resolved path is contained within the sandbox. Relative paths are joined
+// with the root. Absolute paths are cleaned. Symlinks are evaluated to prevent
+// escapes. For non-existent files (e.g. edit_file create path), the parent
+// directory is validated instead.
+func (s *Sandbox) Resolve(userPath string) (string, error) {
+	if userPath == "" {
+		return s.root, nil
+	}
+
+	var joined string
+	if filepath.IsAbs(userPath) {
+		joined = filepath.Clean(userPath)
+	} else {
+		joined = filepath.Join(s.root, userPath)
+	}
+
+	// Try to resolve symlinks on the full path first.
+	resolved, err := filepath.EvalSymlinks(joined)
+	if err != nil {
+		// Path doesn't exist — walk up to find the nearest existing ancestor
+		// and validate it's inside the sandbox. This supports edit_file
+		// creating new files in new subdirectories.
+		candidate := joined
+		for {
+			parent := filepath.Dir(candidate)
+			if parent == candidate {
+				// Reached filesystem root without finding an existing ancestor.
+				return "", fmt.Errorf("path %q: no existing ancestor found", userPath)
+			}
+			resolvedParent, perr := filepath.EvalSymlinks(parent)
+			if perr != nil {
+				candidate = parent
+				continue
+			}
+			if !s.contains(resolvedParent) {
+				return "", fmt.Errorf("path %q resolves outside sandbox %s", userPath, s.root)
+			}
+			// Ancestor is valid and inside sandbox; return the cleaned joined path.
+			return joined, nil
+		}
+	}
+
+	if !s.contains(resolved) {
+		return "", fmt.Errorf("path %q resolves outside sandbox %s", userPath, s.root)
+	}
+	return resolved, nil
+}
+
+// Root returns the absolute sandbox root path.
+func (s *Sandbox) Root() string {
+	return s.root
+}
+
+// contains checks whether resolved is equal to or under the sandbox root.
+func (s *Sandbox) contains(resolved string) bool {
+	return resolved == s.root || strings.HasPrefix(resolved, s.root+string(filepath.Separator))
 }
 
 type ServerEventLogMode string
@@ -562,6 +671,15 @@ func NewAgent(
 			agent.thinkingToggleOffValue = false
 		}
 	}
+	var workDir string
+	if cfg != nil {
+		workDir = cfg.Config.Agent.WorkingDirectory
+	}
+	sb, err := NewSandbox(workDir)
+	if err != nil {
+		panic(fmt.Sprintf("fatal: sandbox initialization failed: %v", err))
+	}
+	agent.sandbox = sb
 	agent.tools = agent.buildTools(tools)
 	return agent
 }
@@ -633,9 +751,9 @@ func serverEventSinkIncludesVerboseContent(sink ServerEventSink) bool {
 
 func (a *Agent) buildTools(extraTools []ToolDefinition) []ToolDefinition {
 	tools := []ToolDefinition{
-		ReadFileDefinition,
-		ListFilesDefinition,
-		EditFileDefinition,
+		a.readFileToolDefinition(),
+		a.listFilesToolDefinition(),
+		a.editFileToolDefinition(),
 	}
 	tools = append(tools, a.reasoningToolDefinition())
 	if a.memoryClient != nil {
@@ -659,6 +777,106 @@ func (a *Agent) buildTools(extraTools []ToolDefinition) []ToolDefinition {
 		}
 	}
 	return tools
+}
+
+func (a *Agent) readFileToolDefinition() ToolDefinition {
+	return ToolDefinition{
+		Name:        "read_file",
+		Description: "Read the contents of a file. Paths are relative to the working directory. Use this when you want to see what's inside a file. Do not use this with directory names.",
+		InputSchema: ReadFileInputSchema,
+		Function: func(input json.RawMessage) (string, error) {
+			var args ReadFileInput
+			if err := json.Unmarshal(input, &args); err != nil {
+				return "", err
+			}
+			resolved, err := a.sandbox.Resolve(args.Path)
+			if err != nil {
+				return "", err
+			}
+			content, err := os.ReadFile(resolved)
+			if err != nil {
+				return "", err
+			}
+			return string(content), nil
+		},
+	}
+}
+
+func (a *Agent) listFilesToolDefinition() ToolDefinition {
+	return ToolDefinition{
+		Name:        "list_files",
+		Description: "List files and directories at a given path (non-recursive). If no path is provided, lists files in the working directory.",
+		InputSchema: ListFilesInputSchema,
+		Function: func(input json.RawMessage) (string, error) {
+			var args ListFilesInput
+			if err := json.Unmarshal(input, &args); err != nil {
+				return "", err
+			}
+			resolved, err := a.sandbox.Resolve(args.Path)
+			if err != nil {
+				return "", err
+			}
+			entries, err := os.ReadDir(resolved)
+			if err != nil {
+				return "", err
+			}
+			var files []string
+			for _, entry := range entries {
+				name := entry.Name()
+				if entry.IsDir() {
+					files = append(files, name+"/")
+				} else {
+					files = append(files, name)
+				}
+			}
+			result, err := json.Marshal(files)
+			if err != nil {
+				return "", err
+			}
+			return string(result), nil
+		},
+	}
+}
+
+func (a *Agent) editFileToolDefinition() ToolDefinition {
+	return ToolDefinition{
+		Name: "edit_file",
+		Description: `Make edits to a text file. Paths are relative to the working directory.
+
+Replaces 'old_str' with 'new_str' in the given file. 'old_str' and 'new_str' MUST be different from each other.
+
+If the file specified with path doesn't exist, it will be created.`,
+		InputSchema: EditFileInputSchema,
+		Function: func(input json.RawMessage) (string, error) {
+			var args EditFileInput
+			if err := json.Unmarshal(input, &args); err != nil {
+				return "", err
+			}
+			if args.Path == "" || args.OldStr == args.NewStr {
+				return "", fmt.Errorf("invalid input parameters")
+			}
+			resolved, err := a.sandbox.Resolve(args.Path)
+			if err != nil {
+				return "", err
+			}
+			content, err := os.ReadFile(resolved)
+			if err != nil {
+				if os.IsNotExist(err) && args.OldStr == "" {
+					return createNewFile(resolved, args.NewStr)
+				}
+				return "", err
+			}
+			oldContent := string(content)
+			newContent := strings.Replace(oldContent, args.OldStr, args.NewStr, -1)
+			if oldContent == newContent && args.OldStr != "" {
+				return "", fmt.Errorf("old_str not found in file")
+			}
+			if err := os.WriteFile(resolved, []byte(newContent), 0o644); err != nil {
+				return "", err
+			}
+			return "OK", nil
+		},
+	}
 }
 
 func (a *Agent) reasoningToolDefinition() ToolDefinition {
@@ -775,11 +993,15 @@ func (a *Agent) withSystemPrompt(ctx context.Context, conversation []ChatMessage
 	for _, tool := range tools {
 		toolNames = append(toolNames, tool.Name)
 	}
-	prompt := a.promptBuilder.Build(PromptBuildContext{
+	buildCtx := PromptBuildContext{
 		Mode:      mode,
 		Transport: a.promptTransport,
 		ToolNames: toolNames,
-	})
+	}
+	if a.sandbox != nil {
+		buildCtx.WorkingDirectory = a.sandbox.Root()
+	}
+	prompt := a.promptBuilder.Build(buildCtx)
 
 	// Inject [Memory] section for full mode only. Minimal mode (used by
 	// delegated reasoning) operates on a standalone sub-prompt and does not
@@ -1939,7 +2161,7 @@ func EditFile(input json.RawMessage) (string, error) {
 }
 
 func createNewFile(filePath, content string) (string, error) {
-	dir := path.Dir(filePath)
+	dir := filepath.Dir(filePath)
 	if dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return "", fmt.Errorf("failed to create directory: %w", err)

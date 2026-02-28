@@ -50,6 +50,31 @@ func TestSectionedPromptBuilderTruncatesPersona(t *testing.T) {
 	}
 }
 
+func TestPromptBuildContextWorkingDirectory(t *testing.T) {
+	builder := NewSectionedPromptBuilder(DefaultPromptConfig())
+	prompt := builder.Build(PromptBuildContext{
+		Mode:             PromptModeFull,
+		Transport:        "cli",
+		ToolNames:        []string{"read_file"},
+		WorkingDirectory: "/tmp/test-sandbox",
+	})
+	if !strings.Contains(prompt, "Working directory: /tmp/test-sandbox") {
+		t.Fatalf("expected working directory in prompt, got: %s", prompt)
+	}
+}
+
+func TestPromptBuildContextWorkingDirectoryOmittedWhenEmpty(t *testing.T) {
+	builder := NewSectionedPromptBuilder(DefaultPromptConfig())
+	prompt := builder.Build(PromptBuildContext{
+		Mode:      PromptModeFull,
+		Transport: "cli",
+		ToolNames: []string{"read_file"},
+	})
+	if strings.Contains(prompt, "Working directory:") {
+		t.Fatalf("did not expect working directory in prompt when empty, got: %s", prompt)
+	}
+}
+
 func TestPrependSystemPromptEnsuresSingleLeadingSystemMessage(t *testing.T) {
 	conversation := []ChatMessage{
 		{Role: "system", Content: "old"},

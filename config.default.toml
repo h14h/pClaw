@@ -21,6 +21,7 @@ role_summary = ""
 persona = ""
 persona_file = ""
 max_persona_chars = 600
+working_directory = ""
 
 [memory]
 enabled = true

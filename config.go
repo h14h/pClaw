@@ -60,11 +60,12 @@ const (
 
 // AgentConfig holds agent identity and prompt configuration.
 type AgentConfig struct {
-	Name            string `toml:"name"`
-	RoleSummary     string `toml:"role_summary"`
-	Persona         string `toml:"persona"`
-	PersonaFile     string `toml:"persona_file"`
-	MaxPersonaChars int    `toml:"max_persona_chars"`
+	Name             string `toml:"name"`
+	RoleSummary      string `toml:"role_summary"`
+	Persona          string `toml:"persona"`
+	PersonaFile      string `toml:"persona_file"`
+	MaxPersonaChars  int    `toml:"max_persona_chars"`
+	WorkingDirectory string `toml:"working_directory"`
 }
 
 // MemoryConfig holds memory subsystem configuration.
