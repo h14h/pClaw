@@ -77,6 +77,12 @@ type Agent struct {
 	recallTurnCache     *recallCache
 	webSearchClient     *WebSearchClient
 	asyncWg             sync.WaitGroup
+
+	// Thinking toggle: when thinkingToggleKeypath is non-empty, inference
+	// requests inject a nested field to control per-request thinking.
+	thinkingToggleKeypath  []string
+	thinkingToggleOnValue  interface{}
+	thinkingToggleOffValue interface{}
 }
 
 type ServerEventLogMode string
@@ -385,11 +391,12 @@ func (s *StatusIndicator) Stop() {
 }
 
 type ChatMessage struct {
-	Role       string         `json:"role"`
-	Content    interface{}    `json:"content,omitempty"`
-	Reasoning  string         `json:"reasoning,omitempty"`
-	ToolCalls  []ChatToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string         `json:"tool_call_id,omitempty"`
+	Role             string         `json:"role"`
+	Content          interface{}    `json:"content,omitempty"`
+	Reasoning        string         `json:"reasoning,omitempty"`
+	ReasoningContent string         `json:"reasoning_content,omitempty"`
+	ToolCalls        []ChatToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string         `json:"tool_call_id,omitempty"`
 }
 
 type ChatToolCall struct {
@@ -442,10 +449,11 @@ type ChatCompletionStreamResponse struct {
 	Choices []struct {
 		Index int `json:"index"`
 		Delta struct {
-			Role      string              `json:"role,omitempty"`
-			Content   interface{}         `json:"content,omitempty"`
-			Reasoning string              `json:"reasoning,omitempty"`
-			ToolCalls []ChatToolCallDelta `json:"tool_calls,omitempty"`
+			Role             string              `json:"role,omitempty"`
+			Content          interface{}         `json:"content,omitempty"`
+			Reasoning        string              `json:"reasoning,omitempty"`
+			ReasoningContent string              `json:"reasoning_content,omitempty"`
+			ToolCalls        []ChatToolCallDelta `json:"tool_calls,omitempty"`
 		} `json:"delta"`
 		Message      ChatMessage `json:"message,omitempty"`
 		FinishReason string      `json:"finish_reason,omitempty"`
@@ -542,6 +550,17 @@ func NewAgent(
 		httpClient:         httpClient,
 		getUserMessage:     getUserMessage,
 		outputWriter:       os.Stdout,
+	}
+	if cfg != nil && len(cfg.Provider.ThinkingToggleKeypath) > 0 {
+		agent.thinkingToggleKeypath = cfg.Provider.ThinkingToggleKeypath
+		agent.thinkingToggleOnValue = cfg.Provider.ThinkingToggleOnValue
+		agent.thinkingToggleOffValue = cfg.Provider.ThinkingToggleOffValue
+		if agent.thinkingToggleOnValue == nil {
+			agent.thinkingToggleOnValue = true
+		}
+		if agent.thinkingToggleOffValue == nil {
+			agent.thinkingToggleOffValue = false
+		}
 	}
 	agent.tools = agent.buildTools(tools)
 	return agent
@@ -737,7 +756,7 @@ func (a *Agent) Run(ctx context.Context) error {
 }
 
 func (a *Agent) runInference(ctx context.Context, conversation []ChatMessage) (ChatMessage, error) {
-	return a.runInferenceWithModel(ctx, a.primaryModel, conversation, a.tools, primaryMaxTokens, PromptModeFull)
+	return a.runInferenceWithModel(ctx, a.primaryModel, conversation, a.tools, primaryMaxTokens, PromptModeFull, false)
 }
 
 func (a *Agent) runInferenceStream(
@@ -745,7 +764,7 @@ func (a *Agent) runInferenceStream(
 	conversation []ChatMessage,
 	onTextDelta func(string),
 ) (ChatMessage, error) {
-	return a.runInferenceStreamWithModel(ctx, a.primaryModel, conversation, a.tools, primaryMaxTokens, onTextDelta, PromptModeFull)
+	return a.runInferenceStreamWithModel(ctx, a.primaryModel, conversation, a.tools, primaryMaxTokens, onTextDelta, PromptModeFull, false)
 }
 
 func (a *Agent) withSystemPrompt(ctx context.Context, conversation []ChatMessage, tools []ToolDefinition, mode PromptMode) []ChatMessage {
@@ -787,6 +806,38 @@ func (a *Agent) withSystemPrompt(ctx context.Context, conversation []ChatMessage
 	return prependSystemPrompt(conversation, prompt)
 }
 
+// injectThinkingToggle merges the thinking toggle into the marshaled request
+// body when thinkingToggleKeypath is configured. The thinking parameter selects
+// whether the on or off value is injected.
+func (a *Agent) injectThinkingToggle(body []byte, thinking bool) ([]byte, error) {
+	if len(a.thinkingToggleKeypath) == 0 {
+		return body, nil
+	}
+
+	value := a.thinkingToggleOffValue
+	if thinking {
+		value = a.thinkingToggleOnValue
+	}
+
+	// Build the nested structure from keypath, bottom-up.
+	var nested interface{} = value
+	for i := len(a.thinkingToggleKeypath) - 1; i >= 0; i-- {
+		nested = map[string]interface{}{a.thinkingToggleKeypath[i]: nested}
+	}
+
+	// Merge into the request body.
+	var requestMap map[string]interface{}
+	if err := json.Unmarshal(body, &requestMap); err != nil {
+		return nil, err
+	}
+	if topLevel, ok := nested.(map[string]interface{}); ok {
+		for k, v := range topLevel {
+			requestMap[k] = v
+		}
+	}
+	return json.Marshal(requestMap)
+}
+
 func (a *Agent) runInferenceWithModel(
 	ctx context.Context,
 	model Model,
@@ -794,6 +845,7 @@ func (a *Agent) runInferenceWithModel(
 	tools []ToolDefinition,
 	maxTokens int,
 	mode PromptMode,
+	thinking bool,
 ) (ChatMessage, error) {
 	promptedConversation := a.withSystemPrompt(ctx, conversation, tools, mode)
 	startedAt := time.Now()
@@ -836,6 +888,16 @@ func (a *Agent) runInferenceWithModel(
 		})
 		return ChatMessage{}, err
 	}
+	body, err = a.injectThinkingToggle(body, thinking)
+	if err != nil {
+		a.emitServerEvent(ctx, ServerLogLevelError, "llm.request.failed", "inference request failed", map[string]interface{}{
+			"model":       string(model),
+			"stream":      false,
+			"duration_ms": time.Since(startedAt).Milliseconds(),
+			"error":       err.Error(),
+		})
+		return ChatMessage{}, err
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
@@ -847,7 +909,9 @@ func (a *Agent) runInferenceWithModel(
 		})
 		return ChatMessage{}, err
 	}
-	req.Header.Set("Authorization", "Bearer "+a.apiKey)
+	if a.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+a.apiKey)
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := a.httpClient.Do(req)
@@ -937,6 +1001,7 @@ func (a *Agent) runInferenceStreamWithModel(
 	maxTokens int,
 	onTextDelta func(string),
 	mode PromptMode,
+	thinking bool,
 ) (ChatMessage, error) {
 	promptedConversation := a.withSystemPrompt(ctx, conversation, tools, mode)
 	startedAt := time.Now()
@@ -980,6 +1045,16 @@ func (a *Agent) runInferenceStreamWithModel(
 		})
 		return ChatMessage{}, err
 	}
+	body, err = a.injectThinkingToggle(body, thinking)
+	if err != nil {
+		a.emitServerEvent(ctx, ServerLogLevelError, "llm.request.failed", "inference request failed", map[string]interface{}{
+			"model":       string(model),
+			"stream":      true,
+			"duration_ms": time.Since(startedAt).Milliseconds(),
+			"error":       err.Error(),
+		})
+		return ChatMessage{}, err
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
@@ -991,7 +1066,9 @@ func (a *Agent) runInferenceStreamWithModel(
 		})
 		return ChatMessage{}, err
 	}
-	req.Header.Set("Authorization", "Bearer "+a.apiKey)
+	if a.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+a.apiKey)
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := a.httpClient.Do(req)
@@ -1157,6 +1234,9 @@ func (a *Agent) processStreamEvent(
 		}
 		if choice.Delta.Reasoning != "" {
 			reasoningBuilder.WriteString(choice.Delta.Reasoning)
+		}
+		if choice.Delta.ReasoningContent != "" {
+			reasoningBuilder.WriteString(choice.Delta.ReasoningContent)
 		}
 		for _, deltaCall := range choice.Delta.ToolCalls {
 			call, exists := toolCallsByIndex[deltaCall.Index]
@@ -1699,7 +1779,7 @@ func (a *Agent) delegateReasoning(input json.RawMessage) (string, error) {
 	msg, err := a.runInferenceWithModel(timeoutCtx, a.reasoningModel, []ChatMessage{{
 		Role:    "user",
 		Content: reasoningPrompt,
-	}}, nil, reasoningMaxTokens, PromptModeMinimal)
+	}}, nil, reasoningMaxTokens, PromptModeMinimal, true)
 	spinner.Stop()
 	if err != nil {
 		return "", err
@@ -1708,6 +1788,9 @@ func (a *Agent) delegateReasoning(input json.RawMessage) (string, error) {
 	content, ok := msg.Content.(string)
 	if ok && strings.TrimSpace(content) != "" {
 		return strings.TrimSpace(content), nil
+	}
+	if strings.TrimSpace(msg.ReasoningContent) != "" {
+		return strings.TrimSpace(msg.ReasoningContent), nil
 	}
 	if strings.TrimSpace(msg.Reasoning) != "" {
 		return strings.TrimSpace(msg.Reasoning), nil

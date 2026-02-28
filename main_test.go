@@ -1084,3 +1084,160 @@ func TestExecuteToolAsync_ErrorNonFatal(t *testing.T) {
 		t.Fatal("expected ToolEventFailed for async tool error")
 	}
 }
+
+func TestInjectThinkingToggle_NoKeypath(t *testing.T) {
+	agent := NewAgent("http://example.com", "key", nil, nil, nil, nil)
+	body := []byte(`{"model":"test","messages":[]}`)
+	out, err := agent.injectThinkingToggle(body, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !bytes.Equal(body, out) {
+		t.Fatalf("expected unchanged body when no keypath set, got %s", out)
+	}
+}
+
+func TestInjectThinkingToggle_InjectsNestedField(t *testing.T) {
+	agent := NewAgent("http://example.com", "key", nil, nil, nil, nil)
+	agent.thinkingToggleKeypath = []string{"chat_template_kwargs", "enable_thinking"}
+	agent.thinkingToggleOnValue = true
+	agent.thinkingToggleOffValue = false
+
+	body := []byte(`{"model":"test","messages":[]}`)
+
+	// Test thinking=true injects on value.
+	onBody, err := agent.injectThinkingToggle(body, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var onResult map[string]interface{}
+	if err := json.Unmarshal(onBody, &onResult); err != nil {
+		t.Fatalf("unmarshal on body: %v", err)
+	}
+	kwargs, ok := onResult["chat_template_kwargs"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected chat_template_kwargs map, got %T", onResult["chat_template_kwargs"])
+	}
+	if kwargs["enable_thinking"] != true {
+		t.Fatalf("expected enable_thinking=true, got %v", kwargs["enable_thinking"])
+	}
+
+	// Test thinking=false injects off value.
+	offBody, err := agent.injectThinkingToggle(body, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var offResult map[string]interface{}
+	if err := json.Unmarshal(offBody, &offResult); err != nil {
+		t.Fatalf("unmarshal off body: %v", err)
+	}
+	kwargs, ok = offResult["chat_template_kwargs"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected chat_template_kwargs map, got %T", offResult["chat_template_kwargs"])
+	}
+	if kwargs["enable_thinking"] != false {
+		t.Fatalf("expected enable_thinking=false, got %v", kwargs["enable_thinking"])
+	}
+}
+
+func TestInjectThinkingToggle_ComplexValue(t *testing.T) {
+	agent := NewAgent("http://example.com", "key", nil, nil, nil, nil)
+	agent.thinkingToggleKeypath = []string{"chat_template_kwargs"}
+	agent.thinkingToggleOnValue = map[string]interface{}{"enable_thinking": true}
+	agent.thinkingToggleOffValue = map[string]interface{}{"enable_thinking": false}
+
+	body := []byte(`{"model":"test"}`)
+	out, err := agent.injectThinkingToggle(body, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal(out, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	kwargs, ok := result["chat_template_kwargs"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected chat_template_kwargs map, got %T", result["chat_template_kwargs"])
+	}
+	if kwargs["enable_thinking"] != true {
+		t.Fatalf("expected enable_thinking=true, got %v", kwargs["enable_thinking"])
+	}
+}
+
+func TestDelegateReasoningUsesReasoningContent(t *testing.T) {
+	// GLM returns thinking as reasoning_content, not reasoning.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"x","model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"","reasoning_content":"the reasoning output"}}]}`))
+	}))
+	defer server.Close()
+
+	agent := NewAgent(server.URL, "key", server.Client(), nil, nil, nil)
+	out, err := agent.delegateReasoning(json.RawMessage(`{"question":"why"}`))
+	if err != nil {
+		t.Fatalf("delegateReasoning: %v", err)
+	}
+	if out != "the reasoning output" {
+		t.Fatalf("expected reasoning_content output, got %q", out)
+	}
+}
+
+func TestOptionalAPIKey_NoAuthHeader(t *testing.T) {
+	var sawAuth bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			sawAuth = true
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"x","model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	defer server.Close()
+
+	agent := NewAgent(server.URL, "", server.Client(), nil, nil, nil)
+	_, err := agent.runInference(context.Background(), []ChatMessage{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("runInference: %v", err)
+	}
+	if sawAuth {
+		t.Fatal("expected no Authorization header when API key is empty")
+	}
+}
+
+func TestOptionalAPIKey_SetsAuthHeader(t *testing.T) {
+	var sawAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"x","model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	defer server.Close()
+
+	agent := NewAgent(server.URL, "test-key", server.Client(), nil, nil, nil)
+	_, err := agent.runInference(context.Background(), []ChatMessage{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("runInference: %v", err)
+	}
+	if sawAuth != "Bearer test-key" {
+		t.Fatalf("expected Authorization header 'Bearer test-key', got %q", sawAuth)
+	}
+}
+
+func TestStreamReasoningContent(t *testing.T) {
+	// Verify streaming accumulates reasoning_content deltas.
+	agent := NewAgent("http://example.com", "key", nil, nil, nil, nil)
+	message := ChatMessage{Role: "assistant"}
+	var contentBuilder strings.Builder
+	var reasoningBuilder strings.Builder
+	toolCallsByIndex := map[int]*ChatToolCall{}
+	toolCallOrder := []int{}
+
+	// Simulate a stream event with reasoning_content.
+	payload := `{"id":"x","model":"m","choices":[{"index":0,"delta":{"reasoning_content":"thinking..."}}]}`
+	err := agent.processStreamEvent(payload, &message, &contentBuilder, &reasoningBuilder, toolCallsByIndex, &toolCallOrder, nil)
+	if err != nil {
+		t.Fatalf("processStreamEvent: %v", err)
+	}
+	if reasoningBuilder.String() != "thinking..." {
+		t.Fatalf("expected reasoning_content accumulated, got %q", reasoningBuilder.String())
+	}
+}

@@ -170,7 +170,9 @@ func (a *Agent) summarizeConversation(ctx context.Context, priorSummary, newCont
 	if err != nil {
 		return "", fmt.Errorf("summarize conversation: create request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+a.apiKey)
+	if a.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+a.apiKey)
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := a.httpClient.Do(req)
