@@ -626,17 +626,21 @@ func (a *Agent) recallFunction(input json.RawMessage) (string, error) {
 
 const defaultMemoryCollectionName = "agent-memory"
 
-// configureMemory reads MEMORY_ENABLED and MEMORY_COLLECTION_NAME from the
-// environment, creates a MemoryClient, calls EnsureCollection, sets
-// agent.memoryClient, and rebuilds agent.tools so the record and recall tools
-// are included. On any failure it logs a warning to stderr and leaves
-// agent.memoryClient nil (graceful degradation). No error is returned; the agent
-// continues without memory.
-func configureMemory(ctx context.Context, agent *Agent) {
-	if isMemoryDisabled() {
+// configureMemory reads the memory section from the resolved config, creates a
+// MemoryClient, calls EnsureCollection, sets agent.memoryClient, and rebuilds
+// agent.tools so the record and recall tools are included. On any failure it
+// logs a warning to stderr and leaves agent.memoryClient nil (graceful
+// degradation). No error is returned; the agent continues without memory.
+func configureMemory(ctx context.Context, agent *Agent, cfg *ResolvedConfig) {
+	if cfg == nil || !cfg.Config.Memory.Enabled {
 		return
 	}
-	collectionName := memoryCollectionName()
+
+	collectionName := cfg.Config.Memory.CollectionName
+	if collectionName == "" {
+		collectionName = defaultMemoryCollectionName
+	}
+
 	client := NewMemoryClient(agent.baseURL, agent.apiKey, agent.httpClient)
 	if err := client.EnsureCollection(ctx, collectionName); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: memory initialization failed, running without memory: %v\n", err)
@@ -645,22 +649,6 @@ func configureMemory(ctx context.Context, agent *Agent) {
 	agent.memoryClient = client
 	agent.recallTurnCache = &recallCache{}
 	agent.tools = agent.buildTools(nil)
-}
-
-// isMemoryDisabled reports whether the MEMORY_ENABLED env var has been set to a
-// falsy value ("false", "0", or "no"). Memory is enabled by default.
-func isMemoryDisabled() bool {
-	v := strings.ToLower(strings.TrimSpace(os.Getenv("MEMORY_ENABLED")))
-	return v == "false" || v == "0" || v == "no"
-}
-
-// memoryCollectionName returns the collection name from MEMORY_COLLECTION_NAME,
-// falling back to defaultMemoryCollectionName when the env var is unset or empty.
-func memoryCollectionName() string {
-	if name := strings.TrimSpace(os.Getenv("MEMORY_COLLECTION_NAME")); name != "" {
-		return name
-	}
-	return defaultMemoryCollectionName
 }
 
 // recordFunction is the execution handler for the `record` tool.

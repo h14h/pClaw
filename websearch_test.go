@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 )
@@ -220,7 +219,7 @@ func TestWebSearchFunction_Success(t *testing.T) {
 	})
 	defer srv.Close()
 
-	agent := NewAgent("http://unused", "unused-key", http.DefaultClient, nil, nil)
+	agent := NewAgent("http://unused", "unused-key", http.DefaultClient, nil, nil, nil)
 	agent.webSearchClient = NewWebSearchClient(srv.URL, "test-key", srv.Client(), 5)
 
 	input, _ := json.Marshal(WebSearchInput{Query: "test query"})
@@ -237,7 +236,7 @@ func TestWebSearchFunction_Success(t *testing.T) {
 }
 
 func TestWebSearchFunction_EmptyQuery(t *testing.T) {
-	agent := NewAgent("http://unused", "unused-key", http.DefaultClient, nil, nil)
+	agent := NewAgent("http://unused", "unused-key", http.DefaultClient, nil, nil, nil)
 	agent.webSearchClient = NewWebSearchClient("http://unused", "key", nil, 5)
 
 	input, _ := json.Marshal(WebSearchInput{Query: ""})
@@ -251,7 +250,7 @@ func TestWebSearchFunction_EmptyQuery(t *testing.T) {
 }
 
 func TestWebSearchFunction_WhitespaceQuery(t *testing.T) {
-	agent := NewAgent("http://unused", "unused-key", http.DefaultClient, nil, nil)
+	agent := NewAgent("http://unused", "unused-key", http.DefaultClient, nil, nil, nil)
 	agent.webSearchClient = NewWebSearchClient("http://unused", "key", nil, 5)
 
 	input, _ := json.Marshal(WebSearchInput{Query: "   "})
@@ -263,11 +262,23 @@ func TestWebSearchFunction_WhitespaceQuery(t *testing.T) {
 
 // --- configureWebSearch tests ---
 
-func TestConfigureWebSearch_WithAPIKey(t *testing.T) {
-	t.Setenv("TAVILY_API_KEY", "test-tavily-key")
+func testWebSearchConfig(apiKey string, maxResults int) *ResolvedConfig {
+	return &ResolvedConfig{
+		Config: Config{
+			WebSearch: WebSearchConfig{MaxResults: maxResults},
+		},
+		WebSearch: ResolvedWebSearch{
+			WebSearchConfig: WebSearchConfig{MaxResults: maxResults},
+			APIKey:          apiKey,
+		},
+	}
+}
 
-	agent := NewAgent("http://unused", "unused-key", http.DefaultClient, nil, nil)
-	configureWebSearch(agent)
+func TestConfigureWebSearch_WithAPIKey(t *testing.T) {
+	cfg := testWebSearchConfig("test-tavily-key", 5)
+
+	agent := NewAgent("http://unused", "unused-key", http.DefaultClient, nil, nil, nil)
+	configureWebSearch(agent, cfg)
 
 	if agent.webSearchClient == nil {
 		t.Fatal("expected webSearchClient to be set")
@@ -287,10 +298,10 @@ func TestConfigureWebSearch_WithAPIKey(t *testing.T) {
 }
 
 func TestConfigureWebSearch_WithoutAPIKey(t *testing.T) {
-	t.Setenv("TAVILY_API_KEY", "")
+	cfg := testWebSearchConfig("", 5)
 
-	agent := NewAgent("http://unused", "unused-key", http.DefaultClient, nil, nil)
-	configureWebSearch(agent)
+	agent := NewAgent("http://unused", "unused-key", http.DefaultClient, nil, nil, nil)
+	configureWebSearch(agent, cfg)
 
 	if agent.webSearchClient != nil {
 		t.Fatal("expected webSearchClient to be nil when no API key")
@@ -304,11 +315,10 @@ func TestConfigureWebSearch_WithoutAPIKey(t *testing.T) {
 }
 
 func TestConfigureWebSearch_CustomMaxResults(t *testing.T) {
-	t.Setenv("TAVILY_API_KEY", "test-key")
-	t.Setenv("WEB_SEARCH_MAX_RESULTS", "10")
+	cfg := testWebSearchConfig("test-key", 10)
 
-	agent := NewAgent("http://unused", "unused-key", http.DefaultClient, nil, nil)
-	configureWebSearch(agent)
+	agent := NewAgent("http://unused", "unused-key", http.DefaultClient, nil, nil, nil)
+	configureWebSearch(agent, cfg)
 
 	if agent.webSearchClient == nil {
 		t.Fatal("expected webSearchClient to be set")
@@ -319,11 +329,10 @@ func TestConfigureWebSearch_CustomMaxResults(t *testing.T) {
 }
 
 func TestConfigureWebSearch_InvalidMaxResults(t *testing.T) {
-	t.Setenv("TAVILY_API_KEY", "test-key")
-	t.Setenv("WEB_SEARCH_MAX_RESULTS", "notanumber")
+	cfg := testWebSearchConfig("test-key", 0)
 
-	agent := NewAgent("http://unused", "unused-key", http.DefaultClient, nil, nil)
-	configureWebSearch(agent)
+	agent := NewAgent("http://unused", "unused-key", http.DefaultClient, nil, nil, nil)
+	configureWebSearch(agent, cfg)
 
 	if agent.webSearchClient == nil {
 		t.Fatal("expected webSearchClient to be set")
@@ -348,7 +357,7 @@ func TestNewWebSearchClient_Defaults(t *testing.T) {
 // --- buildTools integration ---
 
 func TestBuildTools_IncludesWebSearch(t *testing.T) {
-	agent := NewAgent("http://unused", "unused-key", http.DefaultClient, nil, nil)
+	agent := NewAgent("http://unused", "unused-key", http.DefaultClient, nil, nil, nil)
 	agent.webSearchClient = NewWebSearchClient("http://unused", "key", nil, 5)
 	tools := agent.buildTools(nil)
 
@@ -365,7 +374,7 @@ func TestBuildTools_IncludesWebSearch(t *testing.T) {
 }
 
 func TestBuildTools_ExcludesWebSearchWhenNil(t *testing.T) {
-	agent := NewAgent("http://unused", "unused-key", http.DefaultClient, nil, nil)
+	agent := NewAgent("http://unused", "unused-key", http.DefaultClient, nil, nil, nil)
 	tools := agent.buildTools(nil)
 
 	for _, tool := range tools {
@@ -420,7 +429,7 @@ func TestWebSearchToolDispatch(t *testing.T) {
 	tavilySrv := httptest.NewServer(tavilyHandler)
 	defer tavilySrv.Close()
 
-	agent := NewAgent("http://unused", "unused-key", http.DefaultClient, nil, nil)
+	agent := NewAgent("http://unused", "unused-key", http.DefaultClient, nil, nil, nil)
 	agent.webSearchClient = NewWebSearchClient(tavilySrv.URL, "test-key", tavilySrv.Client(), 5)
 	agent.tools = agent.buildTools(nil)
 
@@ -453,26 +462,22 @@ func TestWebSearchToolDispatch(t *testing.T) {
 	}
 }
 
-// --- Environment variable handling ---
+// --- Config-driven handling ---
 
-func TestConfigureWebSearch_EnvUnset(t *testing.T) {
-	os.Unsetenv("TAVILY_API_KEY")
-	os.Unsetenv("WEB_SEARCH_MAX_RESULTS")
-
-	agent := NewAgent("http://unused", "unused-key", http.DefaultClient, nil, nil)
-	configureWebSearch(agent)
+func TestConfigureWebSearch_NilConfig(t *testing.T) {
+	agent := NewAgent("http://unused", "unused-key", http.DefaultClient, nil, nil, nil)
+	configureWebSearch(agent, nil)
 
 	if agent.webSearchClient != nil {
-		t.Error("expected no webSearchClient when TAVILY_API_KEY is unset")
+		t.Error("expected no webSearchClient when config is nil")
 	}
 }
 
 func TestConfigureWebSearch_MaxResultsOutOfRange(t *testing.T) {
-	t.Setenv("TAVILY_API_KEY", "test-key")
-	t.Setenv("WEB_SEARCH_MAX_RESULTS", "50") // > 20
+	cfg := testWebSearchConfig("test-key", 50) // > 20
 
-	agent := NewAgent("http://unused", "unused-key", http.DefaultClient, nil, nil)
-	configureWebSearch(agent)
+	agent := NewAgent("http://unused", "unused-key", http.DefaultClient, nil, nil, nil)
+	configureWebSearch(agent, cfg)
 
 	if agent.webSearchClient == nil {
 		t.Fatal("expected webSearchClient to be set")

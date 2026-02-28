@@ -808,74 +808,32 @@ func TestBuildTools_ExcludesRecordWhenMemoryDisabled(t *testing.T) {
 	}
 }
 
-// --- isMemoryDisabled tests ---
-
-func TestIsMemoryDisabled_FalseByDefault(t *testing.T) {
-	t.Setenv("MEMORY_ENABLED", "")
-	if isMemoryDisabled() {
-		t.Error("expected memory to be enabled when MEMORY_ENABLED is unset")
-	}
-}
-
-func TestIsMemoryDisabled_FalseyValues(t *testing.T) {
-	for _, v := range []string{"false", "FALSE", "False", "0", "no", "NO", "No"} {
-		t.Run(v, func(t *testing.T) {
-			t.Setenv("MEMORY_ENABLED", v)
-			if !isMemoryDisabled() {
-				t.Errorf("expected isMemoryDisabled()=true for MEMORY_ENABLED=%q", v)
-			}
-		})
-	}
-}
-
-func TestIsMemoryDisabled_TruthyValues(t *testing.T) {
-	for _, v := range []string{"true", "TRUE", "1", "yes", "YES"} {
-		t.Run(v, func(t *testing.T) {
-			t.Setenv("MEMORY_ENABLED", v)
-			if isMemoryDisabled() {
-				t.Errorf("expected isMemoryDisabled()=false for MEMORY_ENABLED=%q", v)
-			}
-		})
-	}
-}
-
-// --- memoryCollectionName tests ---
-
-func TestMemoryCollectionName_DefaultWhenUnset(t *testing.T) {
-	t.Setenv("MEMORY_COLLECTION_NAME", "")
-	name := memoryCollectionName()
-	if name != defaultMemoryCollectionName {
-		t.Errorf("expected %q, got %q", defaultMemoryCollectionName, name)
-	}
-}
-
-func TestMemoryCollectionName_UsesEnvVar(t *testing.T) {
-	t.Setenv("MEMORY_COLLECTION_NAME", "my-custom-collection")
-	name := memoryCollectionName()
-	if name != "my-custom-collection" {
-		t.Errorf("expected %q, got %q", "my-custom-collection", name)
-	}
-}
-
-func TestMemoryCollectionName_TrimsWhitespace(t *testing.T) {
-	t.Setenv("MEMORY_COLLECTION_NAME", "  trimmed  ")
-	name := memoryCollectionName()
-	if name != "trimmed" {
-		t.Errorf("expected %q, got %q", "trimmed", name)
-	}
-}
-
 // --- configureMemory tests ---
 
-func TestConfigureMemory_DisabledByEnv(t *testing.T) {
-	t.Setenv("MEMORY_ENABLED", "false")
+func TestConfigureMemory_DisabledByConfig(t *testing.T) {
+	cfg := &ResolvedConfig{
+		Config: Config{
+			Memory: MemoryConfig{Enabled: false},
+		},
+	}
 	agent := &Agent{
 		apiKey:     "key",
 		httpClient: http.DefaultClient,
 	}
-	configureMemory(context.Background(), agent)
+	configureMemory(context.Background(), agent, cfg)
 	if agent.memoryClient != nil {
-		t.Error("expected memoryClient to remain nil when MEMORY_ENABLED=false")
+		t.Error("expected memoryClient to remain nil when memory is disabled")
+	}
+}
+
+func TestConfigureMemory_NilConfig(t *testing.T) {
+	agent := &Agent{
+		apiKey:     "key",
+		httpClient: http.DefaultClient,
+	}
+	configureMemory(context.Background(), agent, nil)
+	if agent.memoryClient != nil {
+		t.Error("expected memoryClient to remain nil when config is nil")
 	}
 }
 
@@ -1120,8 +1078,6 @@ func waitForIndex(t *testing.T, attempt int) {
 }
 
 func TestConfigureMemory_UsesCustomCollectionName(t *testing.T) {
-	t.Setenv("MEMORY_COLLECTION_NAME", "custom-col")
-
 	listResp := `{"collections":[]}`
 	createResp := `{"collection":{"id":"col-new","name":"custom-col"}}`
 	srv, h := newMockServer([]mockResponse{
@@ -1133,7 +1089,7 @@ func TestConfigureMemory_UsesCustomCollectionName(t *testing.T) {
 	// Run EnsureCollection directly (mirrors what configureMemory does) to verify
 	// the custom collection name is passed through.
 	client := NewMemoryClient(srv.URL, "key", srv.Client())
-	if err := client.EnsureCollection(context.Background(), memoryCollectionName()); err != nil {
+	if err := client.EnsureCollection(context.Background(), "custom-col"); err != nil {
 		t.Fatalf("EnsureCollection: %v", err)
 	}
 

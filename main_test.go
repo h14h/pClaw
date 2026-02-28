@@ -180,7 +180,7 @@ func TestEditFileInvalidInput(t *testing.T) {
 }
 
 func TestExecuteToolNotFound(t *testing.T) {
-	agent := NewAgent("http://example.com", "key", nil, nil, nil)
+	agent := NewAgent("http://example.com", "key", nil, nil, nil, nil)
 	msg := agent.executeTool(context.Background(), ChatToolCall{
 		ID:   "call_1",
 		Type: "function",
@@ -213,7 +213,7 @@ func TestExecuteToolArgs(t *testing.T) {
 		},
 	}
 
-	agent := NewAgent("http://example.com", "key", nil, nil, []ToolDefinition{echoTool})
+	agent := NewAgent("http://example.com", "key", nil, nil, []ToolDefinition{echoTool}, nil)
 	args, err := json.Marshal(map[string]string{"value": "ok"})
 	if err != nil {
 		t.Fatalf("marshal args: %v", err)
@@ -251,7 +251,7 @@ func TestExecuteToolEmitsStartedAndSucceededEvents(t *testing.T) {
 		},
 	}
 
-	agent := NewAgent("http://example.com", "key", nil, nil, []ToolDefinition{echoTool})
+	agent := NewAgent("http://example.com", "key", nil, nil, []ToolDefinition{echoTool}, nil)
 	sink := &capturedToolEventSink{}
 	agent.toolEventSink = sink
 
@@ -278,7 +278,7 @@ func TestExecuteToolEmitsStartedAndSucceededEvents(t *testing.T) {
 }
 
 func TestExecuteToolEmitsFailedEventForMissingTool(t *testing.T) {
-	agent := NewAgent("http://example.com", "key", nil, nil, nil)
+	agent := NewAgent("http://example.com", "key", nil, nil, nil, nil)
 	sink := &capturedToolEventSink{}
 	agent.toolEventSink = sink
 
@@ -514,7 +514,7 @@ func TestLineServerEventSinkFormatsReadableLine(t *testing.T) {
 }
 
 func TestEmitToolEventAlsoEmitsServerEvent(t *testing.T) {
-	agent := NewAgent("http://example.com", "key", nil, nil, nil)
+	agent := NewAgent("http://example.com", "key", nil, nil, nil, nil)
 	serverSink := &capturedServerEventSink{}
 	agent.serverEventSink = serverSink
 
@@ -539,14 +539,14 @@ func TestEmitToolEventAlsoEmitsServerEvent(t *testing.T) {
 }
 
 func TestNewAgentDefaultsToNoToolEventSink(t *testing.T) {
-	agent := NewAgent("http://example.com", "key", nil, nil, nil)
+	agent := NewAgent("http://example.com", "key", nil, nil, nil, nil)
 	if agent.toolEventSink != nil {
 		t.Fatalf("expected nil default toolEventSink, got %T", agent.toolEventSink)
 	}
 }
 
 func TestNewAgentDefaults(t *testing.T) {
-	agent := NewAgent("http://example.com", "key", nil, nil, nil)
+	agent := NewAgent("http://example.com", "key", nil, nil, nil, nil)
 
 	if agent.primaryModel != Instruct {
 		t.Fatalf("expected primary model %q, got %q", Instruct, agent.primaryModel)
@@ -586,7 +586,7 @@ func TestRunInferenceUsesPrimaryModel(t *testing.T) {
 	}))
 	defer server.Close()
 
-	agent := NewAgent(server.URL, "key", server.Client(), nil, nil)
+	agent := NewAgent(server.URL, "key", server.Client(), nil, nil, nil)
 	_, err := agent.runInference(context.Background(), []ChatMessage{{Role: "user", Content: "hi"}})
 	if err != nil {
 		t.Fatalf("runInference: %v", err)
@@ -627,7 +627,7 @@ func TestRunInferenceStream_UsesStreamAndEmitsText(t *testing.T) {
 	}))
 	defer server.Close()
 
-	agent := NewAgent(server.URL, "key", server.Client(), nil, nil)
+	agent := NewAgent(server.URL, "key", server.Client(), nil, nil, nil)
 	var streamed strings.Builder
 	msg, err := agent.runInferenceStream(context.Background(), []ChatMessage{{Role: "user", Content: "hi"}}, func(delta string) {
 		streamed.WriteString(delta)
@@ -665,7 +665,7 @@ func TestRunInferenceStream_ReconstructsToolCalls(t *testing.T) {
 	}))
 	defer server.Close()
 
-	agent := NewAgent(server.URL, "key", server.Client(), nil, nil)
+	agent := NewAgent(server.URL, "key", server.Client(), nil, nil, nil)
 	msg, err := agent.runInferenceStream(context.Background(), []ChatMessage{{Role: "user", Content: "hi"}}, nil)
 	if err != nil {
 		t.Fatalf("runInferenceStream: %v", err)
@@ -707,7 +707,7 @@ func TestDelegateReasoningUsesReasoningModel(t *testing.T) {
 	}))
 	defer server.Close()
 
-	agent := NewAgent(server.URL, "key", server.Client(), nil, nil)
+	agent := NewAgent(server.URL, "key", server.Client(), nil, nil, nil)
 	out, err := agent.delegateReasoning(json.RawMessage(`{"question":"why","context":"ctx"}`))
 	if err != nil {
 		t.Fatalf("delegateReasoning: %v", err)
@@ -734,7 +734,7 @@ func TestDelegateReasoningUsesReasoningModel(t *testing.T) {
 }
 
 func TestDelegateReasoningLimit(t *testing.T) {
-	agent := NewAgent("http://example.com", "key", nil, nil, nil)
+	agent := NewAgent("http://example.com", "key", nil, nil, nil, nil)
 	agent.reasoningCallCount = defaultReasoningLimit
 
 	_, err := agent.delegateReasoning(json.RawMessage(`{"question":"why"}`))
@@ -789,7 +789,7 @@ func TestHandleUserMessage_ToolLoopAndFinalText(t *testing.T) {
 		},
 	}
 
-	agent := NewAgent(server.URL, "key", server.Client(), nil, []ToolDefinition{echoTool})
+	agent := NewAgent(server.URL, "key", server.Client(), nil, []ToolDefinition{echoTool}, nil)
 	updatedCS, response, err := agent.HandleUserMessage(context.Background(), NewConversationState(), "test")
 	if err != nil {
 		t.Fatalf("HandleUserMessage: %v", err)
@@ -840,7 +840,7 @@ func TestHandleUserMessageProgressive_EmitsPartsInOrder(t *testing.T) {
 	}
 
 	var gotParts []string
-	agent := NewAgent(server.URL, "key", server.Client(), nil, []ToolDefinition{echoTool})
+	agent := NewAgent(server.URL, "key", server.Client(), nil, []ToolDefinition{echoTool}, nil)
 	updatedCS, response, err := agent.HandleUserMessageProgressive(context.Background(), NewConversationState(), "test", func(part string) error {
 		gotParts = append(gotParts, part)
 		return nil
@@ -903,7 +903,7 @@ func TestExecuteToolAsync_ReturnsSyntheticResult(t *testing.T) {
 	}))
 	defer server.Close()
 
-	agent := NewAgent(server.URL, "key", server.Client(), nil, []ToolDefinition{slowTool})
+	agent := NewAgent(server.URL, "key", server.Client(), nil, []ToolDefinition{slowTool}, nil)
 	updatedCS, response, err := agent.HandleUserMessage(context.Background(), NewConversationState(), "test")
 	if err != nil {
 		t.Fatalf("HandleUserMessage: %v", err)
@@ -980,7 +980,7 @@ func TestExecuteToolSync_UnchangedBehavior(t *testing.T) {
 	}))
 	defer server.Close()
 
-	agent := NewAgent(server.URL, "key", server.Client(), nil, []ToolDefinition{echoTool})
+	agent := NewAgent(server.URL, "key", server.Client(), nil, []ToolDefinition{echoTool}, nil)
 	updatedCS, response, err := agent.HandleUserMessage(context.Background(), NewConversationState(), "test")
 	if err != nil {
 		t.Fatalf("HandleUserMessage: %v", err)
@@ -1045,7 +1045,7 @@ func TestExecuteToolAsync_ErrorNonFatal(t *testing.T) {
 	}))
 	defer server.Close()
 
-	agent := NewAgent(server.URL, "key", server.Client(), nil, []ToolDefinition{errorTool})
+	agent := NewAgent(server.URL, "key", server.Client(), nil, []ToolDefinition{errorTool}, nil)
 	sink := &capturedToolEventSink{}
 	agent.toolEventSink = sink
 

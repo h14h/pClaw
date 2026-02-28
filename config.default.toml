@@ -1,0 +1,34 @@
+active_provider = "vultr"
+
+[providers.vultr]
+api_key_env = "VULTR_API_KEY"
+base_url = "https://api.vultrinference.com/v1"
+primary_model = "kimi-k2-instruct"
+reasoning_model = "gpt-oss-120b"
+summarization_model = "qwen2.5-coder-32b-instruct"
+
+[discord]
+bot_token_env = "DISCORD_BOT_TOKEN"
+application_id = ""
+guild_id = ""
+allowed_channel_ids = []
+allowed_user_ids = []
+
+[agent]
+name = "Codex"
+role_summary = ""
+persona = ""
+persona_file = ""
+max_persona_chars = 600
+
+[memory]
+enabled = true
+backend = "vultr"
+collection_name = "agent-memory"
+db_path = "./pclaw-memory.db"
+embedding_url = "http://localhost:8081/v1/embeddings"
+embedding_dimension = 768
+
+[web_search]
+api_key_env = "TAVILY_API_KEY"
+max_results = 5

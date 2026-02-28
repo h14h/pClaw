@@ -56,35 +56,33 @@ func (m *discordSessionManager) get(sessionKey string) (*discordSessionState, bo
 	return state, true
 }
 
-func runDiscordBot(ctx context.Context) error {
-	apiKey := strings.TrimSpace(os.Getenv("VULTR_API_KEY"))
-	if apiKey == "" {
-		return fmt.Errorf("VULTR_API_KEY is required")
+func runDiscordBot(ctx context.Context, cfg *ResolvedConfig) error {
+	baseURL := strings.TrimRight(cfg.Provider.BaseURL, "/")
+	apiKey := cfg.Provider.APIKey
+	if apiKey == "" && baseURL == defaultVultrBaseURL {
+		return fmt.Errorf("API key is required (set via the env var named in api_key_env)")
 	}
 
-	baseURL := strings.TrimSpace(os.Getenv("VULTR_BASE_URL"))
-	if baseURL == "" {
-		baseURL = defaultVultrBaseURL
-	}
-	baseURL = strings.TrimRight(baseURL, "/")
-
-	token := strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN"))
+	token := cfg.Discord.BotToken
 	if token == "" {
-		return fmt.Errorf("DISCORD_BOT_TOKEN is required")
+		return fmt.Errorf("Discord bot token is required (set via the env var named in bot_token_env)")
 	}
 
-	applicationID := strings.TrimSpace(os.Getenv("DISCORD_APPLICATION_ID"))
-	guildID := strings.TrimSpace(os.Getenv("DISCORD_GUILD_ID"))
-	allowedChannelIDs := csvToSet(os.Getenv("DISCORD_ALLOWED_CHANNEL_IDS"))
-	allowedUserIDs := csvToSet(os.Getenv("DISCORD_ALLOWED_USER_IDS"))
+	applicationID := strings.TrimSpace(cfg.Discord.ApplicationID)
+	guildID := strings.TrimSpace(cfg.Discord.GuildID)
+	allowedChannelIDs := cfg.Discord.AllowedChannelSet
+	allowedUserIDs := cfg.Discord.AllowedUserSet
 	serverEventSink := newServerEventSinkFromEnv(os.Stdout)
 
 	// Create a single shared MemoryClient for all Discord session agents.
 	// Sharing avoids redundant EnsureCollection round-trips and keeps the
 	// same collection ID across agents in this process.
 	var sharedMemClient *MemoryClient
-	if !isMemoryDisabled() {
-		colName := memoryCollectionName()
+	if cfg.Config.Memory.Enabled {
+		colName := cfg.Config.Memory.CollectionName
+		if colName == "" {
+			colName = defaultMemoryCollectionName
+		}
 		client := NewMemoryClient(baseURL, apiKey, http.DefaultClient)
 		if err := client.EnsureCollection(ctx, colName); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: memory initialization failed, running without memory: %v\n", err)
@@ -94,16 +92,16 @@ func runDiscordBot(ctx context.Context) error {
 	}
 
 	manager := newDiscordSessionManager(func() *Agent {
-		agent := NewAgent(baseURL, apiKey, http.DefaultClient, nil, nil)
+		agent := NewAgent(baseURL, apiKey, http.DefaultClient, nil, nil, cfg)
 		agent.setOutputWriter(io.Discard)
 		agent.setPromptTransport("discord")
 		agent.serverEventSink = serverEventSink
 		if sharedMemClient != nil {
 			agent.memoryClient = sharedMemClient
 		}
-		configureWebSearch(agent)
+		configureWebSearch(agent, cfg)
 		// Rebuild tools after all clients are set. configureWebSearch
-		// rebuilds when TAVILY_API_KEY is present, but we need a rebuild
+		// rebuilds when the API key is present, but we need a rebuild
 		// when only memoryClient was set and web search is absent.
 		if agent.webSearchClient == nil && sharedMemClient != nil {
 			agent.tools = agent.buildTools(nil)
