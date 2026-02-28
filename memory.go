@@ -401,7 +401,9 @@ func (a *Agent) summarizeMemories(ctx context.Context, items []string) (string, 
 	if err != nil {
 		return "", fmt.Errorf("summarize memories: create request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+a.apiKey)
+	if a.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+a.apiKey)
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := a.httpClient.Do(req)
