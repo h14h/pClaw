@@ -114,6 +114,7 @@ func promptConfigFromCfg(rcfg *ResolvedConfig) PromptConfig {
 
 	// If persona_file is set and readable, it takes precedence over persona.
 	if personaPath := strings.TrimSpace(ac.PersonaFile); personaPath != "" {
+		personaPath = expandTilde(personaPath)
 		data, err := os.ReadFile(personaPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to read persona_file=%q: %v\n", personaPath, err)

@@ -10,6 +10,16 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// expandTilde replaces a leading "~/" in path with the user's home directory.
+func expandTilde(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, path[2:])
+		}
+	}
+	return path
+}
+
 //go:embed config.default.toml
 var defaultConfigTOML string
 

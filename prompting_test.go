@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -90,5 +92,31 @@ func TestPrependSystemPromptEnsuresSingleLeadingSystemMessage(t *testing.T) {
 	}
 	if out[1].Role != "user" {
 		t.Fatalf("expected user as second message, got: %#v", out[1])
+	}
+}
+
+func TestPromptConfigFromCfgExpandsTildeInPersonaFile(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("cannot determine home directory")
+	}
+
+	// Create a temp persona file under the home directory.
+	tmpDir := filepath.Join(home, ".pclaw-test-"+t.Name())
+	os.MkdirAll(tmpDir, 0o755)
+	defer os.RemoveAll(tmpDir)
+
+	personaFile := filepath.Join(tmpDir, "persona.md")
+	os.WriteFile(personaFile, []byte("I am a test persona"), 0o644)
+
+	// Build a tilde-prefixed path: ~/.pclaw-test-<name>/persona.md
+	rel, _ := filepath.Rel(home, personaFile)
+	tildePath := "~/" + rel
+
+	rcfg := &ResolvedConfig{Config: Config{Agent: AgentConfig{PersonaFile: tildePath}}}
+	cfg := promptConfigFromCfg(rcfg)
+
+	if cfg.Persona != "I am a test persona" {
+		t.Fatalf("expected persona from tilde path, got: %q", cfg.Persona)
 	}
 }
