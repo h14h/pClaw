@@ -643,7 +643,21 @@ func configureMemory(ctx context.Context, agent *Agent, cfg *ResolvedConfig) {
 		collectionName = defaultMemoryCollectionName
 	}
 
-	client := NewMemoryClient(agent.baseURL, agent.apiKey, agent.httpClient)
+	// When memory backend is "vultr", use the Vultr provider's credentials
+	// rather than the active inference provider's. This allows local inference
+	// providers to use Vultr's vector store for memory.
+	memBaseURL := agent.baseURL
+	memAPIKey := agent.apiKey
+	if cfg.Config.Memory.Backend == "vultr" {
+		if vultrCfg, ok := cfg.Config.Providers["vultr"]; ok {
+			memBaseURL = strings.TrimRight(vultrCfg.BaseURL, "/")
+			if vultrCfg.APIKeyEnv != "" {
+				memAPIKey = strings.TrimSpace(os.Getenv(vultrCfg.APIKeyEnv))
+			}
+		}
+	}
+
+	client := NewMemoryClient(memBaseURL, memAPIKey, agent.httpClient)
 	if err := client.EnsureCollection(ctx, collectionName); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: memory initialization failed, running without memory: %v\n", err)
 		return
