@@ -23,7 +23,7 @@ This project is a lightweight AI coding agent in Go with a terminal REPL loop an
 It is designed around three practical goals:
 
 1. Lightweight operation: runs comfortably on cheap hardware (e.g. VPS with 1 vCPU & 1 GB RAM)
-2. Maximizing value: supports Vultr's inference product by default for $0.20/M tokens of Kimi K2 & GPT OSS 120B
+2. Maximizing value: supports Vultr's inference product by default ~for $0.20/M tokens of Kimi K2 & GPT OSS 120B~ 
 3. Sensible defaults: one env var (VULTR_API_KEY) nets a fully functional CLI agent w/ tool calling & vector-based long-term memory w/ semantic lookup
 
 ## Architecture
