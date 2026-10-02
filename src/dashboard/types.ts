@@ -1,0 +1,118 @@
+/**
+ * What the dashboard API returns. Shared by the server (src/dashboard/) and the web app (web/), which imports these
+ * with `import type` only.
+ *
+ * Endpoints (all JSON unless noted):
+ *   GET /api/overview                                  Overview
+ *   GET /api/conversations/:id                         ConversationView
+ *   GET /api/conversations/:id/workers/:name           WorkerDetail
+ *   GET /api/events                                    text/event-stream of Change, one JSON object per `data:` line
+ */
+
+export type Overview = {
+	front: ModelInfo;
+	worker: ModelInfo;
+	conversations: ConversationSummary[];
+	/** The notes file, verbatim. */
+	notes: string;
+};
+
+export type ModelInfo = { provider: string; model: string; thinkingLevel: string };
+
+export type ConversationSummary = {
+	id: string;
+	/** "discord:dm:<user id>", "terminal". */
+	address: string;
+	/** Human label: "Discord DM", "Terminal". */
+	label: string;
+	busy: boolean;
+	workersRunning: number;
+};
+
+export type ConversationView = {
+	id: string;
+	address: string;
+	label: string;
+	/** What the front model is doing right now. */
+	live: LiveStatus;
+	/** Oldest first. The active transcript; anything compacted away is gone from here. */
+	timeline: TimelineItem[];
+	/** Newest activity first. */
+	workers: WorkerSummary[];
+	/** Soonest first. */
+	followUps: FollowUp[];
+	usage: Usage;
+};
+
+export type LiveStatus =
+	| { state: "idle" }
+	/** A model request is streaming. `text` is the partial reply so far, if any. */
+	| { state: "generating"; since?: number; text?: string }
+	/** The front model's own tools are running (not workers; those are in `workers`). */
+	| { state: "tools"; tools: string[] };
+
+export type TimelineItem =
+	/** Something the person sent. */
+	| { kind: "message"; id: string; at: number; text: string; images: number }
+	/** Something that arrived from inside pclaw rather than from the person. */
+	| { kind: "event"; id: string; at: number; event: "follow-up" | "worker-report"; text: string; worker?: string; ok?: boolean }
+	/** Text the front model wrote. `delivered` is whether it reached the person. */
+	| {
+			kind: "reply";
+			id: string;
+			at: number;
+			text: string;
+			delivered: boolean;
+			/** Why it wasn't delivered: a later reply in the same run replaced it, the model chose NO_REPLY, or it was empty. */
+			held?: "superseded" | "silent";
+			error?: string;
+			model: string;
+			usage: { input: number; output: number; cacheRead: number };
+	  }
+	/** A tool call by the front model and its result. `worker` is set for delegate / message_worker / stop_worker. */
+	| {
+			kind: "tool";
+			id: string;
+			at: number;
+			name: string;
+			args: unknown;
+			/** Undefined while the call is still running. */
+			result?: string;
+			isError?: boolean;
+			worker?: string;
+	  };
+
+export type WorkerStatus = "working" | "idle" | "stopped" | "failed";
+
+export type WorkerSummary = {
+	name: string;
+	status: WorkerStatus;
+	/** The brief pclaw wrote when it started the job. */
+	brief: string;
+	/** When the current or most recent run started. */
+	startedAt?: number;
+	updatedAt: number;
+};
+
+export type WorkerDetail = WorkerSummary & {
+	model: ModelInfo;
+	/** Every turn of the worker's pi session, oldest first. Grows while it works. */
+	transcript: WorkerItem[];
+};
+
+export type WorkerItem =
+	/** A message to the worker from pclaw (a brief, a follow-up, a go-ahead). */
+	| { kind: "from-pclaw"; at: number; text: string }
+	/** Text the worker wrote. The last one in a run is its report. */
+	| { kind: "text"; at: number; text: string }
+	| { kind: "thinking"; at: number; text: string }
+	| { kind: "tool"; at: number; name: string; args: unknown; result?: string; isError?: boolean };
+
+export type FollowUp = { id: string; at: number; note: string; repeat?: "daily" | "weekly" };
+
+export type Usage = { input: number; output: number; cacheRead: number; cost: number };
+
+export type Change =
+	| { scope: "overview" }
+	| { scope: "conversation"; id: string }
+	| { scope: "worker"; conversationId: string; name: string };

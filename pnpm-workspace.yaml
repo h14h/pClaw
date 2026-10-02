@@ -1,7 +1,13 @@
-allowBuilds:
-  '@google/genai': set this to true or false
-  esbuild: set this to true or false
-  protobufjs: set this to true or false
+packages:
+  - web
+
 # Pi 1.0 shipped 2026-10-01; let it through pnpm's default 24h release-age gate.
 minimumReleaseAgeExclude:
   - "@earendil-works/*"
+
+# The last two belong to pi-ai's optional Google provider, which pclaw doesn't use.
+allowBuilds:
+  esbuild: true
+  lightningcss: true
+  "@google/genai": false
+  protobufjs: false

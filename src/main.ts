@@ -11,7 +11,9 @@ import { startDiscord } from "./channels/discord.ts";
 import { chatInTerminal } from "./channels/terminal.ts";
 import { ensureHome, loadConfig, paths, saveConfig } from "./config.ts";
 import { FileCredentialStore } from "./credentials.ts";
+import { startDashboard } from "./dashboard/server.ts";
 import { Notes } from "./extensions/notes.ts";
+import { workerOptions } from "./extensions/workers.ts";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -97,8 +99,11 @@ async function start(): Promise<void> {
 		throw new Error(`Not signed in to ${config.provider}, or the sign-in expired. Run \`pnpm setup\`.`);
 	}
 	ensureHome();
-	const agent = await openAgent(await openNodeSqliteStorage(paths.db), { config, models, notes: new Notes(paths.notes) }, context);
+	const notes = new Notes(paths.notes);
+	const workers = workerOptions(config, paths);
+	const agent = await openAgent(await openNodeSqliteStorage(paths.db), { config, models, notes, workers }, context);
 	const discord = await startDiscord(agent, config, context);
+	const dashboard = await startDashboard({ agent, config, notes, workers, port: config.dashboardPort }, context);
 
 	let stopping = false;
 	const stop = async () => {
@@ -106,6 +111,7 @@ async function start(): Promise<void> {
 		stopping = true;
 		console.log("[pclaw] stopping");
 		await discord.stop();
+		await dashboard.stop();
 		await agent.harness.close(context);
 		process.exit(0);
 	};

@@ -14,7 +14,7 @@ import type { Config } from "../config.ts";
  */
 
 type WorkerStatus = "working" | "idle" | "stopped" | "failed";
-type Worker = { sessionId: string; brief: string; status: WorkerStatus; run?: TaskId; updatedAt: number };
+type Worker = { sessionId: string; brief: string; status: WorkerStatus; run?: TaskId; startedAt?: number; updatedAt: number };
 
 export const Workers = defineDoc<{ workers: Record<string, Worker> }>({
 	kind: "pclaw.workers",
@@ -206,7 +206,8 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 						if (doc.workers[name] !== undefined) return false;
 						const sessionId = randomUUID();
 						const run = await tx.createTask(Run, { name, sessionId, message: brief }, background);
-						doc.workers[name] = { sessionId, brief, status: "working", run, updatedAt: Date.now() };
+						const now = Date.now();
+						doc.workers[name] = { sessionId, brief, status: "working", run, startedAt: now, updatedAt: now };
 						return true;
 					}, context);
 					if (!started) throw new Error(`There's already a worker named ${name}. Use message_worker, or pick a new name.`);
@@ -225,7 +226,7 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 						if (worker.status === "working") return `${name} is still working. Wait for its report, or stop it first.`;
 						worker.run = await tx.createTask(Run, { name, sessionId: worker.sessionId, message }, background);
 						worker.status = "working";
-						worker.updatedAt = Date.now();
+						worker.startedAt = worker.updatedAt = Date.now();
 						return undefined;
 					}, context);
 					if (outcome !== undefined) throw new Error(outcome);

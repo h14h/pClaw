@@ -1,0 +1,278 @@
+import { existsSync, readdirSync, readFileSync, statSync, unwatchFile, watch, watchFile } from "node:fs";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { extname, join, normalize } from "node:path";
+import { fileURLToPath } from "node:url";
+import type { AttachedReplicatedState, Context, JsonValue } from "@earendil-works/chord";
+import {
+	type ConversationId,
+	type ConversationView as DurableView,
+	type DocumentState,
+	LiveDoc,
+	type LiveState,
+	UsageDoc,
+	type UsageState,
+} from "@earendil-works/pi-durable";
+import type { Agent } from "../agent.ts";
+import type { Config } from "../config.ts";
+import { FollowUps } from "../extensions/follow-ups.ts";
+import type { Notes } from "../extensions/notes.ts";
+import { type WorkerOptions, Workers } from "../extensions/workers.ts";
+import type {
+	Change,
+	ConversationSummary,
+	ConversationView,
+	Overview,
+	WorkerDetail,
+	WorkerSummary,
+} from "./types.ts";
+import { buildTimeline, liveStatus, parseWorkerSession, sumUsage } from "./views.ts";
+
+const WEB_DIST = fileURLToPath(new URL("../../web/dist/", import.meta.url));
+const TYPES: Record<string, string> = {
+	".html": "text/html; charset=utf-8",
+	".js": "text/javascript",
+	".css": "text/css",
+	".svg": "image/svg+xml",
+	".png": "image/png",
+	".ico": "image/x-icon",
+	".json": "application/json",
+	".woff2": "font/woff2",
+};
+
+function label(address: string): string {
+	if (address.startsWith("discord:dm:")) return "Discord DM";
+	if (address === "terminal") return "Terminal";
+	return address;
+}
+
+type Watched = {
+	view: AttachedReplicatedState<DurableView>;
+	workers: DocumentState<{ workers: Record<string, JsonValue> }> | undefined;
+	followUps: DocumentState<{ items: Record<string, JsonValue> }> | undefined;
+};
+
+/**
+ * The dashboard: a small read-only HTTP server inside the pclaw process (Pi Durable storage has one owner, so it can't
+ * be a separate process). Serves the built web app, JSON views of each conversation, worker transcripts read from pi's
+ * session files, and a server-sent event stream that says what changed.
+ */
+export async function startDashboard(
+	options: { agent: Agent; config: Config; notes: Notes; workers: WorkerOptions; port: number },
+	context: Context,
+): Promise<{ port: number; stop(): Promise<void> }> {
+	const { agent, config, notes, workers } = options;
+	const { harness } = agent;
+	const watched = new Map<string, Watched>();
+	const clients = new Set<ServerResponse>();
+	const cleanups: (() => void)[] = [];
+
+	// Coalesce bursts (a streaming reply commits every 100 ms) into one event per key.
+	const pending = new Map<string, Change>();
+	let flush: NodeJS.Timeout | undefined;
+	function emit(change: Change) {
+		pending.set(JSON.stringify(change), change);
+		flush ??= setTimeout(() => {
+			flush = undefined;
+			for (const change of pending.values()) {
+				const frame = `data: ${JSON.stringify(change)}\n\n`;
+				for (const client of clients) client.write(frame);
+			}
+			pending.clear();
+		}, 150);
+	}
+
+	async function watchConversation(id: ConversationId): Promise<Watched | undefined> {
+		const known = watched.get(String(id));
+		if (known !== undefined) return known;
+		const conversation = await harness.conversation(id, context);
+		if (conversation === undefined) return undefined;
+		const view = await conversation.viewState(context);
+		const workerDoc = await harness.documentState(Workers, id, context);
+		const followUpDoc = await harness.documentState(FollowUps, id, context);
+		const entry: Watched = { view, workers: workerDoc, followUps: followUpDoc };
+		watched.set(String(id), entry);
+		const changed = async () => {
+			emit({ scope: "conversation", id: String(id) });
+			emit({ scope: "overview" });
+		};
+		cleanups.push(view.subscribe(changed));
+		if (workerDoc !== undefined) cleanups.push(workerDoc.subscribe(changed));
+		if (followUpDoc !== undefined) cleanups.push(followUpDoc.subscribe(changed));
+		return entry;
+	}
+
+	async function conversations(): Promise<[string, ConversationId][]> {
+		const routes = Object.entries(await agent.addresses(context));
+		for (const [, id] of routes) await watchConversation(id);
+		return routes;
+	}
+
+	async function hydrated<T>(state: { value: T | undefined; subscribe(fn: (value: T) => Promise<void>): () => void }): Promise<T> {
+		if (state.value !== undefined) return state.value;
+		return new Promise((resolve) => {
+			const stop = state.subscribe(async (value) => {
+				stop();
+				resolve(value);
+			});
+		});
+	}
+
+	const workerSummaries = async (id: ConversationId): Promise<WorkerSummary[]> => {
+		const doc = await harness.snapshot(Workers, id, context);
+		return Object.entries(doc?.workers ?? {})
+			.map(([name, worker]) => ({
+				name,
+				status: worker.status,
+				brief: worker.brief,
+				...(worker.startedAt === undefined ? {} : { startedAt: worker.startedAt }),
+				updatedAt: worker.updatedAt,
+			}))
+			.sort((a, b) => b.updatedAt - a.updatedAt);
+	};
+
+	async function overview(): Promise<Overview> {
+		const list: ConversationSummary[] = [];
+		for (const [address, id] of await conversations()) {
+			const live = await harness.snapshot(LiveDoc, id, context);
+			list.push({
+				id: String(id),
+				address,
+				label: label(address),
+				busy: live?.run !== undefined,
+				workersRunning: (await workerSummaries(id)).filter((worker) => worker.status === "working").length,
+			});
+		}
+		return {
+			front: { provider: config.provider, model: config.model, thinkingLevel: config.thinkingLevel },
+			worker: { provider: workers.provider, model: workers.model, thinkingLevel: workers.thinkingLevel },
+			conversations: list,
+			notes: notes.read(),
+		};
+	}
+
+	async function conversationView(idText: string): Promise<ConversationView | undefined> {
+		const routes = await conversations();
+		const route = routes.find(([, id]) => String(id) === idText);
+		if (route === undefined) return undefined;
+		const [address, id] = route;
+		const view = await hydrated((await watchConversation(id))!.view);
+		const followUps = await harness.snapshot(FollowUps, id, context);
+		return {
+			id: idText,
+			address,
+			label: label(address),
+			live: liveStatus(view.docs[LiveDoc.definition.kind] as LiveState | undefined),
+			timeline: buildTimeline(view.entries),
+			workers: await workerSummaries(id),
+			followUps: Object.entries(followUps?.items ?? {})
+				.map(([taskId, item]) => ({ id: taskId, at: item.dueAt, note: item.note, ...(item.repeat === undefined ? {} : { repeat: item.repeat }) }))
+				.sort((a, b) => a.at - b.at),
+			usage: sumUsage(view.docs[UsageDoc.definition.kind] as UsageState | undefined),
+		};
+	}
+
+	function sessionFile(sessionId: string): string | undefined {
+		if (!existsSync(workers.sessionDir)) return undefined;
+		const name = readdirSync(workers.sessionDir).find((file) => file.endsWith(`_${sessionId}.jsonl`));
+		return name === undefined ? undefined : join(workers.sessionDir, name);
+	}
+
+	async function workerDetail(idText: string, name: string): Promise<WorkerDetail | undefined> {
+		const route = (await conversations()).find(([, id]) => String(id) === idText);
+		if (route === undefined) return undefined;
+		const id = route[1];
+		const worker = (await harness.snapshot(Workers, id, context))?.workers[name];
+		const summary = (await workerSummaries(id)).find((each) => each.name === name);
+		if (worker === undefined || summary === undefined) return undefined;
+		const file = sessionFile(worker.sessionId);
+		return {
+			...summary,
+			model: { provider: workers.provider, model: workers.model, thinkingLevel: workers.thinkingLevel },
+			transcript: file === undefined ? [] : parseWorkerSession(readFileSync(file, "utf8")),
+		};
+	}
+
+	// pi appends to its session file as the worker goes; each write is a worker change.
+	if (existsSync(workers.sessionDir)) {
+		const watcher = watch(workers.sessionDir, async (_event, file) => {
+			const sessionId = file?.match(/_([0-9a-f-]+)\.jsonl$/)?.[1];
+			if (sessionId === undefined) return;
+			for (const [, id] of await conversations()) {
+				const docs = (await harness.snapshot(Workers, id, context))?.workers ?? {};
+				for (const [name, worker] of Object.entries(docs)) {
+					if (worker.sessionId === sessionId) emit({ scope: "worker", conversationId: String(id), name });
+				}
+			}
+		});
+		cleanups.push(() => watcher.close());
+	}
+	watchFile(notes.file, { interval: 2_000 }, () => emit({ scope: "overview" }));
+	cleanups.push(() => unwatchFile(notes.file));
+
+	function serveStatic(request: IncomingMessage, response: ServerResponse) {
+		if (!existsSync(join(WEB_DIST, "index.html"))) {
+			response.writeHead(503, { "Content-Type": "text/plain" }).end("The dashboard isn't built. Run `pnpm --filter pclaw-web build`.");
+			return;
+		}
+		const path = normalize(decodeURIComponent(new URL(request.url ?? "/", "http://x").pathname)).replace(/^(\.\.[/\\])+/, "");
+		let file = join(WEB_DIST, path);
+		if (!file.startsWith(WEB_DIST) || !existsSync(file) || statSync(file).isDirectory()) file = join(WEB_DIST, "index.html");
+		const immutable = file.includes(`${WEB_DIST}assets/`);
+		response.writeHead(200, {
+			"Content-Type": TYPES[extname(file)] ?? "application/octet-stream",
+			"Cache-Control": immutable ? "public, max-age=31536000, immutable" : "no-cache",
+		});
+		response.end(readFileSync(file));
+	}
+
+	const json = (response: ServerResponse, body: unknown) =>
+		response.writeHead(body === undefined ? 404 : 200, { "Content-Type": "application/json", "Cache-Control": "no-store" }).end(JSON.stringify(body ?? { error: "not found" }));
+
+	const server = createServer(async (request, response) => {
+		try {
+			const path = new URL(request.url ?? "/", "http://x").pathname;
+			if (request.method !== "GET") return void response.writeHead(405).end();
+			if (path === "/api/overview") return json(response, await overview());
+			if (path === "/api/events") {
+				response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
+				response.write(": hello\n\n");
+				clients.add(response);
+				const ping = setInterval(() => response.write(": ping\n\n"), 25_000);
+				request.on("close", () => {
+					clearInterval(ping);
+					clients.delete(response);
+				});
+				return;
+			}
+			const worker = /^\/api\/conversations\/([^/]+)\/workers\/([^/]+)$/.exec(path);
+			if (worker !== null) return json(response, await workerDetail(decodeURIComponent(worker[1]!), decodeURIComponent(worker[2]!)));
+			const conversation = /^\/api\/conversations\/([^/]+)$/.exec(path);
+			if (conversation !== null) return json(response, await conversationView(decodeURIComponent(conversation[1]!)));
+			if (path.startsWith("/api/")) return json(response, undefined);
+			serveStatic(request, response);
+		} catch (error) {
+			console.error("[pclaw] dashboard", error);
+			if (!response.headersSent) response.writeHead(500, { "Content-Type": "text/plain" }).end("dashboard error");
+		}
+	});
+
+	await conversations();
+	await new Promise<void>((resolve, reject) => {
+		server.once("error", reject);
+		server.listen(options.port, "127.0.0.1", () => resolve());
+	});
+	const address = server.address();
+	const port = typeof address === "object" && address !== null ? address.port : options.port;
+	console.log(`[pclaw] dashboard on http://127.0.0.1:${port}`);
+
+	return {
+		port,
+		stop: async () => {
+			clearTimeout(flush);
+			for (const cleanup of cleanups) cleanup();
+			for (const client of clients) client.end();
+			for (const state of watched.values()) state.view.dispose();
+			await new Promise((resolve) => server.close(resolve));
+		},
+	};
+}

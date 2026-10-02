@@ -33,6 +33,8 @@ export type Config = {
 	workerModel: string;
 	workerThinkingLevel: ModelThinkingLevel;
 	workerTimeoutMinutes: number;
+	/** The dashboard listens on 127.0.0.1 only; a proxy puts it on the tailnet. */
+	dashboardPort: number;
 };
 
 type StoredConfig = Partial<Config>;
@@ -48,6 +50,7 @@ export const defaults: Config = {
 	workerModel: "grok-4.7",
 	workerThinkingLevel: "high",
 	workerTimeoutMinutes: 30,
+	dashboardPort: 7421,
 };
 
 function readStored(): StoredConfig {
@@ -67,6 +70,7 @@ export function loadConfig(): Config {
 		timeZone: env.PCLAW_TZ,
 		workerModel: env.PCLAW_WORKER_MODEL,
 		workerThinkingLevel: env.PCLAW_WORKER_THINKING as ModelThinkingLevel | undefined,
+		dashboardPort: env.PCLAW_DASHBOARD_PORT === undefined ? undefined : Number(env.PCLAW_DASHBOARD_PORT),
 	};
 	const defined = Object.fromEntries(Object.entries(fromEnv).filter(([, value]) => value !== undefined));
 	return { ...defaults, ...readStored(), ...defined };
