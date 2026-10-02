@@ -34,6 +34,8 @@ pnpm start
 
 A bot can only receive DMs from people it shares a server with. If it isn't in one yet, `pnpm start` prints an invite link. Add it to a server you're in, then DM it.
 
+To keep it running on a Linux box, `deploy/pclaw.service` is a systemd user service; the install steps are at the top of the file.
+
 To try it without Discord, `pnpm chat` opens a conversation in the terminal. It keeps its own history, so it won't mix with your Discord thread.
 
 ## Settings

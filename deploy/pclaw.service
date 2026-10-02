@@ -1,0 +1,23 @@
+# systemd user service. Install with:
+#   cp deploy/pclaw.service ~/.config/systemd/user/ && systemctl --user daemon-reload
+#   systemctl --user enable --now pclaw
+# Logs: journalctl --user -u pclaw -f
+[Unit]
+Description=pclaw personal assistant
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=%h/code/pclaw
+# mise shims, so node and pi resolve the same way they do in a shell.
+Environment=PATH=%h/.local/share/mise/shims:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.local/share/mise/shims/node src/main.ts start
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target
