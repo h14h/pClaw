@@ -1,6 +1,6 @@
 import { queryOptions, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
-import type { Change, ConversationView, Overview, WorkerDetail } from '../../src/dashboard/types'
+import type { Change, ConversationView, Overview, Settings, WorkerDetail } from '../../src/dashboard/types'
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(path)
@@ -8,9 +8,21 @@ async function get<T>(path: string): Promise<T> {
   return res.json()
 }
 
+/** PUT JSON; a 400's `{ error }` becomes the thrown message. */
+export async function put<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+  if (!res.ok) {
+    const detail = await res.json().catch(() => undefined)
+    throw new Error(detail?.error ?? `${res.status} ${res.statusText}`)
+  }
+  return res.json()
+}
+
 const enc = encodeURIComponent
 
 export const overviewQuery = () => queryOptions({ queryKey: ['overview'], queryFn: () => get<Overview>('/api/overview') })
+
+export const settingsQuery = () => queryOptions({ queryKey: ['settings'], queryFn: () => get<Settings>('/api/settings') })
 
 export const conversationQuery = (id: string) =>
   queryOptions({ queryKey: ['conversation', id], queryFn: () => get<ConversationView>(`/api/conversations/${enc(id)}`) })
@@ -21,6 +33,7 @@ export const workerQuery = (id: string, name: string) =>
 function keyFor(change: Change) {
   switch (change.scope) {
     case 'overview': return ['overview']
+    case 'settings': return ['settings']
     case 'conversation': return ['conversation', change.id]
     case 'worker': return ['worker', change.conversationId, change.name]
   }

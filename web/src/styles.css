@@ -20,6 +20,7 @@
   --line: #e7e7eb;
   --panel: #f4f4f6;
   --you: #edf2fa;
+  --sel: #cfe0f7;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -31,6 +32,7 @@
     --line: #27272c;
     --panel: #1b1b1f;
     --you: #1a2130;
+    --sel: #2a3a58;
   }
 }
 

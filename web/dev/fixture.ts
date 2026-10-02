@@ -3,10 +3,17 @@
 //   PCLAW_FIXTURE=mid    a worker is mid-run
 //   PCLAW_FIXTURE=gen    the front model is mid-reply
 //   PCLAW_FIXTURE=live   plays the scenario forward, one step every couple of seconds, over SSE
-import type { ServerResponse } from 'node:http'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Plugin } from 'vite'
 import type { Change } from '../../src/dashboard/types.ts'
-import { CONVERSATION_ID, GEN, LAST, MID, type Clock, conversation, overview, stepTimes, workerDetail } from './scenario.ts'
+import { CONVERSATION_ID, GEN, LAST, MID, type Clock, conversation, overview, setModel, settings, stepTimes, workerDetail } from './scenario.ts'
+
+const body = (req: IncomingMessage) =>
+	new Promise<string>((resolve) => {
+		let data = ''
+		req.on('data', (chunk) => (data += chunk))
+		req.on('end', () => resolve(data))
+	})
 
 export function fixture(mode: string): Plugin {
 	const live = mode === 'live'
@@ -36,9 +43,27 @@ export function fixture(mode: string): Plugin {
 				}
 				setTimeout(tick, 3000)
 			}
-			server.middlewares.use((req, res, next) => {
+			server.middlewares.use(async (req, res, next) => {
 				const path = req.url?.split('?')[0] ?? ''
 				if (!path.startsWith('/api/')) return next()
+				const json = (status: number, value: unknown) => {
+					res.writeHead(status, { 'content-type': 'application/json' })
+					res.end(JSON.stringify(value))
+				}
+				if (req.method === 'PUT') {
+					const input = JSON.parse(await body(req))
+					if (path === '/api/settings/models') {
+						for (const which of ['front', 'worker'] as const) {
+							const error = input[which] && setModel(which, input[which])
+							if (error) return json(400, { error })
+						}
+						send({ scope: 'overview' })
+					} else if (path === '/api/settings/prompts/front' || path === '/api/settings/prompts/worker') {
+						settings.prompts[path.endsWith('front') ? 'front' : 'worker'].text = String(input.text)
+					} else return json(404, { error: 'not found' })
+					send({ scope: 'settings' })
+					return json(200, settings)
+				}
 				if (path === '/api/events') {
 					res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
 					res.write(': hello\n\n')
@@ -47,13 +72,13 @@ export function fixture(mode: string): Plugin {
 					return
 				}
 				const [, , resource, id, sub, name] = path.split('/')
-				const body =
+				const value =
 					resource === 'overview' ? overview(clock)
+					: resource === 'settings' ? settings
 					: resource === 'conversations' && id === CONVERSATION_ID && !sub ? conversation(clock)
 					: resource === 'conversations' && id === CONVERSATION_ID && sub === 'workers' && name ? workerDetail(clock, name)
 					: undefined
-				res.writeHead(body ? 200 : 404, { 'content-type': 'application/json' })
-				res.end(JSON.stringify(body ?? { error: 'not found' }))
+				json(value ? 200 : 404, value ?? { error: 'not found' })
 			})
 		},
 	}

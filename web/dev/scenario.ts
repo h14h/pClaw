@@ -1,9 +1,12 @@
 // A scripted day with pclaw, used by the dev fixture (see fixture.ts). Offsets are seconds from the start of the
 // scenario; `cutoff` decides how much of it has happened yet, so the same data can play back live.
+import { readFileSync } from 'node:fs'
 import type {
 	ConversationView,
 	FollowUp,
+	ModelInfo,
 	Overview,
+	Settings,
 	TimelineItem,
 	WorkerDetail,
 	WorkerItem,
@@ -147,6 +150,31 @@ const notes = `# Notes
 - Short replies. No bullet lists in chat.
 `
 
+// The real prompt files, read at dev-server start. Saves in the fixture only change memory, never the files.
+const prompt = (name: string) => readFileSync(new URL(`../../src/prompts/${name}.md`, import.meta.url), 'utf8')
+const grokLevels = ['off', 'low', 'medium', 'high']
+export const settings: Settings = {
+	front: { provider: 'xai', model: MODEL, thinkingLevel: 'medium' },
+	worker: { provider: 'xai', model: 'grok-4.7', thinkingLevel: 'high' },
+	models: [
+		{ provider: 'xai', id: 'grok-4.5', name: 'Grok 4.5', thinkingLevels: grokLevels },
+		{ provider: 'xai', id: 'grok-4.5-fast', name: 'Grok 4.5 Fast', thinkingLevels: ['off', 'low'] },
+		{ provider: 'xai', id: 'grok-4.7', name: 'Grok 4.7', thinkingLevels: grokLevels },
+	],
+	prompts: {
+		front: { text: prompt('front'), path: 'src/prompts/front.md', description: 'The whole system prompt for the model that talks to you: how it sounds, and how pclaw works.' },
+		worker: { text: prompt('worker'), path: 'src/prompts/worker.md', description: "Added to the end of pi's default coding-agent prompt for every worker; it doesn't replace it." },
+	},
+}
+
+/** Applies a model change the way the server would, or returns the reason it can't. */
+export function setModel(which: 'front' | 'worker', info: ModelInfo): string | undefined {
+	const option = settings.models.find((m) => m.provider === info.provider && m.id === info.model)
+	if (!option) return `No model ${info.provider}/${info.model}.`
+	if (!option.thinkingLevels.includes(info.thinkingLevel)) return `${option.name} doesn't support "${info.thinkingLevel}" reasoning.`
+	settings[which] = info
+}
+
 export const LAST = steps[steps.length - 1]!.t + 1
 /** Points in the scenario worth freezing at: mid-worker-run, and with the front model mid-reply. */
 export const MID = 705
@@ -165,8 +193,8 @@ function worker(clock: Clock): WorkerSummary | undefined {
 export function overview(clock: Clock): Overview {
 	const w = worker(clock)
 	return {
-		front: { provider: 'xai', model: MODEL, thinkingLevel: 'medium' },
-		worker: { provider: 'xai', model: 'grok-4.7', thinkingLevel: 'high' },
+		front: settings.front,
+		worker: settings.worker,
 		conversations: [{ id: CONVERSATION_ID, address: 'discord:dm:180942', label: 'Discord DM', busy: generating(clock) !== undefined, workersRunning: w?.status === 'working' ? 1 : 0 }],
 		notes: clock.cutoff < 852 ? notes.replace('\n- Building a home NAS; picked the Jonsbo N3.', '') : notes,
 	}
@@ -202,7 +230,7 @@ export function workerDetail(clock: Clock, name: string): WorkerDetail | undefin
 	if (!w || name !== WORKER) return
 	return {
 		...w,
-		model: { provider: 'xai', model: 'grok-4.7', thinkingLevel: 'high' },
+		model: settings.worker,
 		transcript: workerSteps.filter((s) => s.t <= clock.cutoff).map((s) => ({ ...s.item, at: clock.at(s.t) }) as WorkerItem),
 	}
 }

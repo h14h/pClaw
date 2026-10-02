@@ -11,6 +11,7 @@ export function Shell({ children, left, right }: { children: ReactNode; left?: R
         {left}
         <span className="flex-1" />
         {right}
+        <Link to="/settings" className="shrink-0 text-mute hover:text-fg" activeProps={{ className: 'hidden' }}>settings</Link>
       </header>
       {children}
     </div>
