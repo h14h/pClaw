@@ -20,6 +20,7 @@ import {
 import type { Agent } from "../agent.ts";
 import { type Config, saveConfig } from "../config.ts";
 import { deliver, type Outbox } from "../delivery.ts";
+import { Reactions } from "../extensions/reactions.ts";
 import { stamp } from "../time.ts";
 
 const MAX_MESSAGE = 2000;
@@ -109,11 +110,15 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 		intents: [
 			GatewayIntentBits.Guilds,
 			GatewayIntentBits.DirectMessages,
+			GatewayIntentBits.DirectMessageReactions,
 			// Reading server messages needs the privileged Message Content intent, so only ask when channels are configured.
-			...(channels.size > 0 ? [GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] : []),
+			...(channels.size > 0
+				? [GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMessageReactions]
+				: []),
 		],
-		// DM channels are not cached until used; without this, the first DM after a restart is dropped.
-		partials: [Partials.Channel],
+		// Uncached DM channels, and reactions on messages from before a restart, arrive as partials; without these
+		// they're dropped.
+		partials: [Partials.Channel, Partials.Message, Partials.Reaction, Partials.User],
 	});
 
 	const deliveries = new Map<string, { stop(): Promise<void> }>();
@@ -149,10 +154,51 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 		};
 	}
 
+	/**
+	 * Make pclaw's reactions in Discord match the conversation's Reactions doc. Only changes after attaching are applied;
+	 * one sync at a time per conversation, so quick ⏳ -> ✅ changes land in order.
+	 */
+	async function syncReactions(addr: string, conversation: Conversation): Promise<() => void> {
+		const state = await agent.harness.documentState(Reactions, conversation.id, context);
+		if (state === undefined) return () => undefined;
+		let applied: Record<string, string> | undefined;
+		let queue = Promise.resolve();
+		const apply = async (ref: string, emoji: string) => {
+			if (!ref.startsWith("discord:")) return;
+			const channel = await target(addr);
+			if (channel === undefined || !("messages" in channel)) return;
+			const message = await channel.messages.fetch(ref.slice("discord:".length));
+			for (const reaction of message.reactions.cache.values()) {
+				if (reaction.me && reaction.emoji.name !== emoji) await reaction.users.remove(client.user!.id);
+			}
+			if (emoji !== "" && !message.reactions.cache.get(emoji)?.me) await message.react(emoji);
+		};
+		return state.subscribe(async (value) => {
+			const asks = { ...(value?.asks ?? {}) };
+			if (applied === undefined) {
+				applied = asks;
+				return;
+			}
+			const before = applied;
+			applied = asks;
+			for (const [ref, emoji] of Object.entries(asks)) {
+				if (before[ref] === emoji) continue;
+				queue = queue.then(() => apply(ref, emoji)).catch((error: unknown) => console.error(`[pclaw] reaction ${ref}`, error));
+			}
+		});
+	}
+
 	async function attach(addr: string, conversation: Conversation) {
 		if (deliveries.has(addr)) return;
 		deliveries.set(addr, { stop: async () => undefined });
-		deliveries.set(addr, await deliver(agent.harness, conversation.id, outbox(addr, conversation), context));
+		const delivery = await deliver(agent.harness, conversation.id, outbox(addr, conversation), context);
+		const unsync = await syncReactions(addr, conversation);
+		deliveries.set(addr, {
+			stop: async () => {
+				unsync();
+				await delivery.stop();
+			},
+		});
 	}
 
 	/** Where a thread forks from its channel: the entry behind the message it started on, if that's still visible. */
@@ -228,6 +274,30 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 			);
 		} catch (error) {
 			console.error("[pclaw] couldn't handle a Discord message", error);
+		}
+	});
+
+	// The owner's reactions on pclaw's messages reach it as a short input: an acknowledgment, an answer, a go-ahead.
+	client.on(Events.MessageReactionAdd, async (partial, partialUser) => {
+		try {
+			if (partialUser.id !== ownerId) return;
+			const reaction = partial.partial ? await partial.fetch() : partial;
+			const message = reaction.message.partial ? await reaction.message.fetch() : reaction.message;
+			if (message.author.id !== client.user!.id) return;
+			const known = await agent.addresses(context);
+			const addr = Object.keys(known).find((key) =>
+				message.channel.isDMBased() ? key === address.dm(ownerId!) : key === address.channel(message.channelId) || key === address.thread(message.channelId),
+			);
+			if (addr === undefined) return;
+			const conversation = await agent.harness.conversation(known[addr]!, context);
+			const emoji = reaction.emoji.name ?? "?";
+			const content = `[${stamp(Date.now(), config.timeZone)}]\n[reacted ${emoji} to your message from ${stamp(message.createdTimestamp, config.timeZone)}: "${clip(message.content)}"]`;
+			await conversation?.submit(
+				{ type: "input", content, whenBusy: "followUp", requestId: `discord-reaction:${message.id}:${emoji}:${Date.now()}` },
+				context,
+			);
+		} catch (error) {
+			console.error("[pclaw] couldn't handle a reaction", error);
 		}
 	});
 

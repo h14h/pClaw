@@ -12,6 +12,7 @@ import {
 import { type Config, paths } from "./config.ts";
 import { followUpsExtension } from "./extensions/follow-ups.ts";
 import { memoryExtension } from "./extensions/memory.ts";
+import { reactionsExtension } from "./extensions/reactions.ts";
 import { recallExtension } from "./extensions/recall.ts";
 import { type Notes, notesExtension } from "./extensions/notes.ts";
 import { soulExtension } from "./extensions/soul.ts";
@@ -60,6 +61,7 @@ export async function openAgent(
 	const memory = memoryExtension({ notes, models, config, quietMs: options.memoryQuietMs ?? config.memoryQuietMinutes * 60_000 });
 	registry.install(memory.extension);
 	registry.install(recallExtension(current, config.timeZone));
+	registry.install(reactionsExtension(current));
 
 	let agent = { model: { provider: config.provider, modelId: config.model }, thinkingLevel: config.thinkingLevel };
 	const harness = await Harness.open(

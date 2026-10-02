@@ -14,6 +14,7 @@ It's early. Today it can talk, remember, follow up on its own, and hand real wor
 - Remembers things about you in `~/.pclaw/notes.md`. Once a conversation has been quiet for 20 minutes, a background pass reads what was said and updates the notes. You can edit the file and it sees the change on the next message.
 - Schedules its own follow-ups ("how did the interview go?") and reminders you ask for. They survive restarts.
 - Hands research, lookups, and anything with files or many steps to a worker, then tells you what came back.
+- Uses reactions as status: your message gets a badge while a worker is on it (⏳ or a topical emoji) and a closing one when the report is back (✅, 🎉, or something that fits bad news; ⚠️ if the job failed). It can answer "thanks" with just a reaction, and your reactions on its messages reach it as input.
 - Sees images you send it.
 
 ## Setup

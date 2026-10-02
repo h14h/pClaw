@@ -13,6 +13,7 @@ import { type Config, defaults } from "./config.ts";
 import { deliver } from "./delivery.ts";
 import { NotesUpdate } from "./extensions/memory.ts";
 import { Notes } from "./extensions/notes.ts";
+import { Reactions } from "./extensions/reactions.ts";
 import type { WorkerOptions } from "./extensions/workers.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -386,5 +387,62 @@ test("a thread forks its channel's conversation at the message it started on", a
 	assert.match(seen, /walnut N4, \$135/);
 	assert.doesNotMatch(seen, /my ankle/);
 	assert.equal((await agent.addresses(context))["discord:thread:9"], thread.id);
+	await agent.harness.close(context);
+});
+
+test("reactions track a delegated ask: topical badge while working, the model's pick when done", async () => {
+	const { faux, models } = setup();
+	faux.setResponses([
+		fauxAssistantMessage(
+			[fauxText("on it"), fauxToolCall("delegate", { name: "nas", brief: "find a quiet NAS case", emoji: "🖥️" })],
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage(fauxToolCall("react", { emoji: "✅" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage("walnut case is $135"),
+		fauxAssistantMessage(fauxToolCall("react", { emoji: "❤️" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage("NO_REPLY"),
+	]);
+	const agent = await openAgent(
+		await openNodeSqliteStorage(join(dir, "reactions.sqlite")),
+		{ config, models, notes: new Notes(join(dir, "notes-9.md")), workers: await fakeWorkers() },
+		context,
+	);
+	const conversation = await agent.conversationFor("discord:dm:1", context);
+	const { sent, outbox, until } = inbox();
+	const delivery = await deliver(agent.harness, conversation.id, outbox, context);
+	const asks = async () => (await agent.harness.snapshot(Reactions, conversation.id, context))?.asks ?? {};
+
+	await conversation.submit({ type: "input", content: "find me a NAS case", requestId: "discord:100" }, context);
+	await until(1);
+	assert.equal((await asks())["discord:100"], "🖥️");
+	await until(2);
+	assert.equal((await asks())["discord:100"], "✅");
+
+	await (await conversation.submit({ type: "input", content: "thanks!", requestId: "discord:101" }, context)).wait(context);
+	assert.equal((await asks())["discord:101"], "❤️");
+	assert.deepEqual(sent, ["on it", "walnut case is $135"]);
+	await delivery.stop();
+	await agent.harness.close(context);
+});
+
+test("a failed job marks its ask with a warning", async () => {
+	const { faux, models } = setup();
+	faux.setResponses([
+		fauxAssistantMessage([fauxText("on it"), fauxToolCall("delegate", { name: "broken", brief: "x" })], { stopReason: "toolUse" }),
+		fauxAssistantMessage("that one failed, trying another way"),
+	]);
+	const workers = { ...(await fakeWorkers()), command: join(dir, "does-not-exist") };
+	const agent = await openAgent(
+		await openNodeSqliteStorage(join(dir, "reactions-fail.sqlite")),
+		{ config, models, notes: new Notes(join(dir, "notes-10.md")), workers },
+		context,
+	);
+	const conversation = await agent.conversationFor("discord:dm:1", context);
+	const { outbox, until } = inbox();
+	const delivery = await deliver(agent.harness, conversation.id, outbox, context);
+	await conversation.submit({ type: "input", content: "do the thing", requestId: "discord:200" }, context);
+	await until(2);
+	assert.equal((await agent.harness.snapshot(Reactions, conversation.id, context))?.asks["discord:200"], "⚠️");
+	await delivery.stop();
 	await agent.harness.close(context);
 });

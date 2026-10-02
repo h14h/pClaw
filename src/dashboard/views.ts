@@ -6,8 +6,9 @@ import type { LiveStatus, TimelineItem, Usage, WorkerItem } from "./types.ts";
 
 const WORKER_TOOLS = new Set(["delegate", "message_worker", "stop_worker"]);
 const STAMP = /^\[[^\]\n]*\]\n?/;
-const REPORT = /^<worker-report worker="([^"]*)" status="(done|failed)">\n?([\s\S]*?)\n?<\/worker-report>$/;
+const REPORT = /^<worker-report worker="([^"]*)" status="(done|failed)">\n?([\s\S]*?)\n?<\/worker-report>(?:\n\([^\n]*\))?$/;
 const FOLLOW_UP = /^<follow-up>([\s\S]*)<\/follow-up>$/;
+const REACTED = /^\[reacted (\S+) to your message from [^:]*: "([\s\S]*)"\]$/;
 
 const textOf = (content: UserMessage["content"] | ToolResultMessage["content"]): string =>
 	typeof content === "string"
@@ -21,6 +22,8 @@ function userItem(entry: EntryRecord, message: UserMessage): TimelineItem {
 	if (report !== null) {
 		return { kind: "event", id: String(entry.id), at, event: "worker-report", worker: report[1]!, ok: report[2] === "done", text: report[3]!.trim() };
 	}
+	const reacted = REACTED.exec(body);
+	if (reacted !== null) return { kind: "event", id: String(entry.id), at, event: "reaction", emoji: reacted[1]!, text: reacted[2]! };
 	const followUp = FOLLOW_UP.exec(body);
 	if (followUp !== null) return { kind: "event", id: String(entry.id), at, event: "follow-up", text: followUp[1]!.trim() };
 	const images = typeof message.content === "string" ? 0 : message.content.filter((part) => part.type === "image").length;
@@ -32,7 +35,7 @@ function userItem(entry: EntryRecord, message: UserMessage): TimelineItem {
  * delivered, and each tool call joined to its result. Delivery follows `replyCollector` in delivery.ts: within a run,
  * the final reply wins and earlier text is superseded, unless the final reply is empty.
  */
-export function buildTimeline(entries: readonly EntryRecord[], idle = true): TimelineItem[] {
+export function buildTimeline(entries: readonly EntryRecord[], idle = true, reactions: Record<string, string> = {}): TimelineItem[] {
 	const items: TimelineItem[] = [];
 	const tools = new Map<string, Extract<TimelineItem, { kind: "tool" }>>();
 	let interim: Extract<TimelineItem, { kind: "reply" }>[] = [];
@@ -51,7 +54,10 @@ export function buildTimeline(entries: readonly EntryRecord[], idle = true): Tim
 			// The previous run ended without an answer (delegate ends it): what it said along the way went out.
 			for (const held of interim) held.delivered = true;
 			interim = [];
-			items.push(userItem(entry, message));
+			const item = userItem(entry, message);
+			const reaction = reactions[String(entry.id)];
+			if (item.kind === "message" && reaction) item.reaction = reaction;
+			items.push(item);
 		} else if (ToolResultEntry.is(entry) && message.role === "toolResult") {
 			const tool = tools.get(message.toolCallId);
 			if (tool !== undefined) {

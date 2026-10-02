@@ -78,9 +78,12 @@ const steps: Step[] = [
 	{ t: 609, item: { kind: 'reply', id: 'r4', text: 'On it. Give me a few minutes.', delivered: true, model: MODEL, usage: usage(2790, 9, 2500) } },
 	{ t: 790, item: { kind: 'event', id: 'e1', event: 'worker-report', worker: WORKER, ok: true, text: report } },
 	{ t: 798, item: { kind: 'reply', id: 'r5', text: relay, delivered: true, model: MODEL, usage: usage(3410, 96, 2800) } },
-	{ t: 851, item: { kind: 'message', id: 'm4', text: 'nice, the N3 it is. thanks', images: 0 } },
+	{ t: 840, item: { kind: 'event', id: 'e4', event: 'reaction', emoji: '👍', text: "Jonsbo N3, $150 on Amazon. Eight bays so you've got room to grow, mini-ITX, and the quietest of the three in…" } },
+	{ t: 842, item: { kind: 'reply', id: 'r5b', text: 'NO_REPLY', delivered: false, held: 'silent', model: MODEL, usage: usage(3500, 3, 3400) } },
+	{ t: 851, item: { kind: 'message', id: 'm4', text: 'nice, the N3 it is. thanks', images: 0, reaction: '🎉' } },
 	{ t: 852, item: { kind: 'tool', id: 't4', name: 'remember', args: { note: 'Building a home NAS; picked the Jonsbo N3.' }, result: 'Saved.' } },
-	{ t: 856, item: { kind: 'reply', id: 'r6', text: 'Good pick. The links are above if you want to compare later.', delivered: true, model: MODEL, usage: usage(3600, 14, 3400) } },
+	{ t: 853, item: { kind: 'tool', id: 't5', name: 'react', args: { emoji: '🎉' }, result: 'Reacted 🎉.' } },
+	{ t: 856, item: { kind: 'reply', id: 'r6', text: 'NO_REPLY', delivered: false, held: 'silent', model: MODEL, usage: usage(3600, 3, 3500) } },
 	{ t: 856 + 15 * 60, item: { kind: 'event', id: 'e3', event: 'notes', text: '+ Building a home NAS; picked the Jonsbo N3 ($150, Amazon).\n+ Wants a recommendation, not a list, when asked to compare.\n- Shopping for a NAS case.' } },
 	{ t: 15.6 * 3600, item: { kind: 'message', id: 'm5', text: "vet says it's just a stomach bug, she's already eating again", images: 0 } },
 	{ t: 15.6 * 3600 + 6, item: { kind: 'reply', id: 'r7', text: 'Good news. Stomach bugs clear fast once they start eating. Glad it was nothing worse.', delivered: true, model: MODEL, usage: usage(3700, 22, 3600) } },
@@ -239,6 +242,9 @@ export function overview(clock: Clock): Overview {
 	}
 }
 
+/** pclaw's status badge on the NAS ask: waiting, then topical while the worker browses, then done. */
+const badge = (clock: Clock) => (clock.cutoff < 606 ? undefined : clock.cutoff < 701 ? '⏳' : clock.cutoff < WORKER_DONE ? '🖥️' : '✅')
+
 /** The next reply, if the front model would be writing it right now. */
 function generating(clock: Clock) {
 	const next = steps.find((s) => s.t > clock.cutoff)
@@ -263,7 +269,7 @@ export function conversation(clock: Clock, id: string): ConversationView | undef
 		address: 'discord:dm:180942',
 		label: 'Discord DM',
 		live: gen ? { state: 'generating', since: clock.at(clock.cutoff - 2), text: gen.text.slice(0, Math.floor(gen.text.length * 0.6)) } : { state: 'idle' },
-		timeline: steps.filter((s) => s.t <= clock.cutoff).map((s) => ({ ...s.item, at: clock.at(s.t) }) as TimelineItem),
+		timeline: steps.filter((s) => s.t <= clock.cutoff).map((s) => ({ ...s.item, at: clock.at(s.t), ...(s.item.id === 'm3' && { reaction: badge(clock) }) }) as TimelineItem),
 		workers: w ? [w] : [],
 		followUps,
 		usage: { input: 184320, output: 6210, cacheRead: 120400, cost: 0.41 },

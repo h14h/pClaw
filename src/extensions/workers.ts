@@ -5,6 +5,7 @@ import { Type } from "@earendil-works/pi-ai";
 import { defineDoc, defineExtension, defineTask, defineTool, type Harness, type TaskId } from "@earendil-works/pi-durable";
 import type { Config } from "../config.ts";
 import { prompts } from "../prompts.ts";
+import { currentAsk, FAILED, isEmoji, Reactions, setReaction, WORKING } from "./reactions.ts";
 
 /**
  * Workers are pi processes: the default coding-agent prompt and tools, on a slower, smarter model. The front model
@@ -111,11 +112,15 @@ const RESUME =
 	"pclaw restarted while you were working on this, so your last turn was cut off. Check what you'd already done, " +
 	"finish the job, and report as usual. Don't redo anything that already happened.";
 
-export function reportMessage(name: string, result: WorkerResult): string {
-	return `<worker-report worker="${name}" status="${result.ok ? "done" : "failed"}">\n${result.output}\n</worker-report>`;
+export const CLOSE_HINT = "(Their message that asked for this shows its status as a reaction. Use `react` to close it while you reply.)";
+
+export function reportMessage(name: string, result: WorkerResult, hint = false): string {
+	const report = `<worker-report worker="${name}" status="${result.ok ? "done" : "failed"}">\n${result.output}\n</worker-report>`;
+	return hint ? `${report}\n${CLOSE_HINT}` : report;
 }
 
-type RunInput = { name: string; sessionId: string; message: string };
+/** `ask` is the person's message that asked for this run, which carries its status reaction. */
+type RunInput = { name: string; sessionId: string; message: string; ask?: string };
 type RunState = { phase: "run" } | { phase: "report"; ok: boolean; output: string };
 
 export function workersExtension(options: WorkerOptions, harness: { current?: Harness }) {
@@ -138,13 +143,23 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 			},
 			report: async (task, runtime, context) => {
 				const { ok, output } = task.state.checkpoint;
+				const requestId = `worker-report:${task.id}`;
+				const { ask } = task.input;
+				if (ask !== undefined) {
+					// Before the report goes in: its run must find the ask, and the working badge comes off (a failure says so).
+					await runtime.commit(async (tx) => {
+						(await tx.doc(Reactions, runtime.conversationId)).reports[requestId] = ask;
+						await setReaction(tx, runtime.conversationId, ask, ok ? "" : FAILED);
+						return undefined;
+					}, context);
+				}
 				const conversation = await runtime.conversation(runtime.conversationId, context);
 				await conversation?.submit(
 					{
 						type: "input",
-						content: reportMessage(task.input.name, { ok, output }),
+						content: reportMessage(task.input.name, { ok, output }, ask !== undefined),
 						whenBusy: "followUp",
-						requestId: `worker-report:${task.id}`,
+						requestId,
 					},
 					context,
 				);
@@ -161,6 +176,7 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 		},
 		abort: async (task, runtime, context) => {
 			await runtime.commit(async (tx) => {
+				if (task.input.ask !== undefined) await setReaction(tx, runtime.conversationId, task.input.ask, "");
 				const worker = (await tx.doc(Workers, runtime.conversationId)).workers[task.input.name];
 				if (worker !== undefined && worker.run === task.id) {
 					worker.status = "stopped";
@@ -193,22 +209,31 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 						description:
 							"Self-contained brief: the goal and why, relevant facts and preferences, constraints, and what to report back.",
 					}),
+					emoji: Type.Optional(
+						Type.String({
+							description:
+								"A reaction for their message while the job runs: the literal emoji for the topic if there is one (🖥️ for a computer, 🍜 for ramen). Defaults to ⏳.",
+						}),
+					),
 				}),
-				execute: async ({ name, brief }, api, context) => {
+				execute: async ({ name, brief, emoji }, api, context) => {
+					const ask = await currentAsk(harness.current, api, api.conversationId, context);
+					const badge = emoji !== undefined && isEmoji(emoji.trim()) ? emoji.trim() : WORKING;
 					const started = await api.commit(async (tx) => {
+						if (ask !== undefined) await setReaction(tx, api.conversationId, ask, badge);
 						const doc = await tx.doc(Workers, api.conversationId);
 						const existing = doc.workers[name];
 						if (existing !== undefined) {
 							// A job that failed or was stopped can be restarted under its name, in its own session.
 							if (existing.status !== "failed" && existing.status !== "stopped") return false;
-							existing.run = await tx.createTask(Run, { name, sessionId: existing.sessionId, message: brief }, background);
+							existing.run = await tx.createTask(Run, { name, sessionId: existing.sessionId, message: brief, ...(ask === undefined ? {} : { ask }) }, background);
 							existing.status = "working";
 							existing.brief = brief;
 							existing.startedAt = existing.updatedAt = Date.now();
 							return true;
 						}
 						const sessionId = randomUUID();
-						const run = await tx.createTask(Run, { name, sessionId, message: brief }, background);
+						const run = await tx.createTask(Run, { name, sessionId, message: brief, ...(ask === undefined ? {} : { ask }) }, background);
 						const now = Date.now();
 						doc.workers[name] = { sessionId, brief, status: "working", run, startedAt: now, updatedAt: now };
 						return true;
@@ -224,11 +249,13 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 					"Send a follow-up, correction, answer, or go-ahead to a worker you started earlier. It remembers the job.",
 				parameters: Type.Object({ name: Type.String(), message: Type.String() }),
 				execute: async ({ name, message }, api, context) => {
+					const ask = await currentAsk(harness.current, api, api.conversationId, context);
 					const outcome = await api.commit(async (tx) => {
 						const worker = (await tx.doc(Workers, api.conversationId)).workers[name];
 						if (worker === undefined) return `No worker named ${name}.`;
 						if (worker.status === "working") return `${name} is still working. Wait for its report, or stop it first.`;
-						worker.run = await tx.createTask(Run, { name, sessionId: worker.sessionId, message }, background);
+						if (ask !== undefined) await setReaction(tx, api.conversationId, ask, WORKING);
+						worker.run = await tx.createTask(Run, { name, sessionId: worker.sessionId, message, ...(ask === undefined ? {} : { ask }) }, background);
 						worker.status = "working";
 						worker.startedAt = worker.updatedAt = Date.now();
 						return undefined;

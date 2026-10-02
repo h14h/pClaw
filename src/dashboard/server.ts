@@ -18,6 +18,7 @@ import type { Config } from "../config.ts";
 import { FollowUps } from "../extensions/follow-ups.ts";
 import { ConversationInfo, Routes } from "../routes.ts";
 import type { Notes } from "../extensions/notes.ts";
+import { Reactions } from "../extensions/reactions.ts";
 import { type WorkerOptions, Workers } from "../extensions/workers.ts";
 import { prompts } from "../prompts.ts";
 import { SettingsError, settingsApi } from "./settings.ts";
@@ -96,6 +97,7 @@ export async function startDashboard(
 		const view = await conversation.viewState(context);
 		const workerDoc = await harness.documentState(Workers, id, context);
 		const followUpDoc = await harness.documentState(FollowUps, id, context);
+		const reactionsDoc = await harness.documentState(Reactions, id, context);
 		const entry: Watched = { view, workers: workerDoc, followUps: followUpDoc };
 		watched.set(String(id), entry);
 		const changed = async () => {
@@ -105,6 +107,7 @@ export async function startDashboard(
 		cleanups.push(view.subscribe(changed));
 		if (workerDoc !== undefined) cleanups.push(workerDoc.subscribe(changed));
 		if (followUpDoc !== undefined) cleanups.push(followUpDoc.subscribe(changed));
+		if (reactionsDoc !== undefined) cleanups.push(reactionsDoc.subscribe(changed));
 		return entry;
 	}
 
@@ -167,6 +170,19 @@ export async function startDashboard(
 		};
 	}
 
+	/** pclaw's reaction on each of the person's messages, keyed by transcript entry id. */
+	async function reactionsByEntry(id: ConversationId): Promise<Record<string, string>> {
+		const asks = (await harness.snapshot(Reactions, id, context))?.asks ?? {};
+		const conversation = await harness.conversation(id, context);
+		const byEntry: Record<string, string> = {};
+		for (const [ref, emoji] of Object.entries(asks)) {
+			if (emoji === "" || conversation === undefined) continue;
+			const record = await conversation.commit((tx) => tx.submissionByRequest(id, ref), context);
+			if (record !== undefined && "entry" in record && record.entry !== undefined) byEntry[String(record.entry)] = emoji;
+		}
+		return byEntry;
+	}
+
 	async function conversationView(idText: string): Promise<ConversationView | undefined> {
 		const routes = await conversations();
 		const route = routes.find(([, id]) => String(id) === idText);
@@ -180,7 +196,7 @@ export async function startDashboard(
 			address,
 			...(await describe(address, id)),
 			live: liveStatus(live),
-			timeline: buildTimeline(view.entries, live?.run === undefined),
+			timeline: buildTimeline(view.entries, live?.run === undefined, await reactionsByEntry(id)),
 			workers: await workerSummaries(id),
 			followUps: Object.entries(followUps?.items ?? {})
 				.map(([taskId, item]) => ({ id: taskId, at: item.dueAt, note: item.note, ...(item.repeat === undefined ? {} : { repeat: item.repeat }) }))

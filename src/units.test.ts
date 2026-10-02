@@ -7,6 +7,7 @@ import { splitMessage } from "./channels/discord.ts";
 import { replyCollector } from "./delivery.ts";
 import { nextOccurrence } from "./extensions/follow-ups.ts";
 import { Notes } from "./extensions/notes.ts";
+import { isEmoji } from "./extensions/reactions.ts";
 import { search } from "./extensions/recall.ts";
 import { stamp, utcOffset } from "./time.ts";
 
@@ -76,4 +77,9 @@ test("recall ranks messages by matching terms, then recency", () => {
 		[2, 1],
 	);
 	assert.deepEqual(search(messages, "the and of"), []);
+});
+
+test("isEmoji accepts single emoji, including joined and flagged ones, and nothing else", () => {
+	for (const emoji of ["✅", "🖥️", "👍🏽", "❤️", "👨‍👩‍👧", "🇺🇸", "⚠️"]) assert.ok(isEmoji(emoji), emoji);
+	for (const text of [":tada:", "done", "✅ done", ""]) assert.ok(!isEmoji(text), text);
 });

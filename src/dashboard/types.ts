@@ -61,11 +61,23 @@ export type LiveStatus =
 	| { state: "tools"; tools: string[] };
 
 export type TimelineItem =
-	/** Something the person sent. */
-	| { kind: "message"; id: string; at: number; text: string; images: number }
+	/** Something the person sent. `reaction` is pclaw's current reaction on it (its status badge), if any. */
+	| { kind: "message"; id: string; at: number; text: string; images: number; reaction?: string }
 	/** Something that arrived from inside pclaw rather than from the person. */
-	/** `notes`: the background memory pass changed the notes; `text` is one change per line, "+ " added or "- " removed. */
-	| { kind: "event"; id: string; at: number; event: "follow-up" | "worker-report" | "notes"; text: string; worker?: string; ok?: boolean }
+	/**
+	 * `notes`: the background memory pass changed the notes; `text` is one change per line, "+ " added or "- " removed.
+	 * `reaction`: the person reacted `emoji` to one of pclaw's messages; `text` is that message (clipped).
+	 */
+	| {
+			kind: "event";
+			id: string;
+			at: number;
+			event: "follow-up" | "worker-report" | "notes" | "reaction";
+			text: string;
+			worker?: string;
+			ok?: boolean;
+			emoji?: string;
+	  }
 	/** Text the front model wrote. `delivered` is whether it reached the person. */
 	| {
 			kind: "reply";

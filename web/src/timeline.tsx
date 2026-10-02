@@ -8,6 +8,7 @@ import { Clamp, DayBreak, Row, Tag, ToolCall, WorkerState, k, summarize, useStic
 function who(item: TimelineItem) {
   if (item.kind === 'message') return 'you'
   if (item.kind !== 'event') return 'pclaw'
+  if (item.event === 'reaction') return 'you'
   return item.event === 'worker-report' ? (item.worker ?? 'worker') : item.event
 }
 
@@ -59,7 +60,12 @@ function Item({ item, who, worker, conversationId }: { item: TimelineItem; who?:
       return (
         <Row at={item.at} who={who} whoClass="text-sky-700 dark:text-sky-400">
           <Md text={item.text} className="rounded bg-you px-2 py-1" />
-          {item.images > 0 && <div className="mt-0.5 text-[11px] text-faint">{item.images === 1 ? '1 image' : `${item.images} images`}</div>}
+          {(item.reaction || item.images > 0) && (
+            <div className="mt-1 flex items-center gap-2 text-[11px] text-faint">
+              {item.reaction && <span className="rounded-full border border-line bg-panel px-1.5 text-[12px] leading-5" title="pclaw's reaction">{item.reaction}</span>}
+              {item.images > 0 && (item.images === 1 ? '1 image' : `${item.images} images`)}
+            </div>
+          )}
         </Row>
       )
     case 'reply':
@@ -98,6 +104,15 @@ function Item({ item, who, worker, conversationId }: { item: TimelineItem; who?:
         return (
           <Row at={item.at} who={who} whoClass="text-faint">
             <NotesChange text={item.text} />
+          </Row>
+        )
+      }
+      if (item.event === 'reaction') {
+        return (
+          <Row at={item.at} who={who} whoClass="text-sky-700 dark:text-sky-400">
+            <div className="truncate text-[12px] text-faint">
+              reacted <span className="text-[13px]">{item.emoji}</span> to <span className="text-mute">“{item.text}”</span>
+            </div>
           </Row>
         )
       }
