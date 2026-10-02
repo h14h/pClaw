@@ -1,0 +1,92 @@
+import type { Context } from "@earendil-works/chord";
+import type { Models } from "@earendil-works/pi-ai/models";
+import {
+	type Conversation,
+	type ConversationId,
+	createRegistry,
+	defineDoc,
+	Harness,
+	type Storage,
+} from "@earendil-works/pi-durable";
+import { type Config, paths } from "./config.ts";
+import { followUpsExtension } from "./extensions/follow-ups.ts";
+import { type Notes, notesExtension } from "./extensions/notes.ts";
+import { soulExtension } from "./extensions/soul.ts";
+import { prepareWorkspace, type WorkerOptions, workerOptions, workersExtension } from "./extensions/workers.ts";
+
+/**
+ * Which conversation answers which address, e.g. "discord:dm:<user id>". One DM is one conversation today; group
+ * chats and per-channel contexts later get their own addresses and conversations.
+ */
+export const Routes = defineDoc<{ conversations: Record<string, ConversationId> }>({
+	kind: "pclaw.routes",
+	version: 1,
+	scope: "session",
+	initial: () => ({ conversations: {} }),
+});
+
+export type Agent = {
+	harness: Harness;
+	/** The conversation for `address`, created on first use. */
+	conversationFor(address: string, context: Context): Promise<Conversation>;
+	/** Addresses that have a conversation, for reattaching delivery after a restart. */
+	addresses(context: Context): Promise<Record<string, ConversationId>>;
+};
+
+export async function openAgent(
+	storage: Storage,
+	options: { config: Config; models: Models; notes: Notes; workers?: WorkerOptions; now?: () => number },
+	context: Context,
+): Promise<Agent> {
+	const { config, models, notes } = options;
+	const registry = createRegistry();
+	registry.install(soulExtension(config.timeZone));
+	registry.install(notesExtension(notes));
+	registry.install(followUpsExtension(config.timeZone, options.now));
+	const workers = options.workers ?? workerOptions(config, paths);
+	prepareWorkspace(workers);
+	const current: { current?: Harness } = {};
+	registry.install(workersExtension(workers, current));
+
+	const agent = { model: { provider: config.provider, modelId: config.model }, thinkingLevel: config.thinkingLevel };
+	const harness = await Harness.open(
+		storage,
+		{
+			models,
+			registry,
+			settings: { retry: { maxRetries: 3 }, toolExecution: "parallel" },
+			onReport: (error) => console.error("[pclaw]", error),
+			...(options.now === undefined ? {} : { now: options.now }),
+		},
+		context,
+	);
+
+	const configured = new Set<ConversationId>();
+
+	current.current = harness;
+
+	async function conversationFor(address: string, context: Context): Promise<Conversation> {
+		const known = (await harness.snapshot(Routes, context))?.conversations[address];
+		const existing = known === undefined ? undefined : await harness.conversation(known, context);
+		if (existing !== undefined) {
+			// Pick up model changes from config.json once per process.
+			if (!configured.has(existing.id)) {
+				await existing.configure(agent, context);
+				configured.add(existing.id);
+			}
+			return existing;
+		}
+		const created = await harness.createConversation({ ownership: { kind: "ownerless" }, agent }, context);
+		await created.commit(async (tx) => {
+			(await tx.doc(Routes)).conversations[address] = created.id;
+		}, context);
+		return created;
+	}
+
+	async function addresses(context: Context) {
+		return (await harness.snapshot(Routes, context))?.conversations ?? {};
+	}
+
+	harness.resume();
+	return { harness, conversationFor, addresses };
+}

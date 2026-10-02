@@ -1,218 +1,78 @@
-# 𝑝Claw
+# pclaw
 
-> [!CAUTION]
-> USE AT YOUR OWN RISK.
->
-> This is an experimental coding agent created primarily for research purposes. Behavior, tool contracts, and model defaults may change without notice.
->
-> For any bold enough to ignore these warnings, it is strongly recommended you run this in a sandboxed workspace.
->
-> _**Extreme** care should be exercised when managing access rules._
+A small personal assistant you text on Discord. The name is short for pico claw, as in a much smaller [OpenClaw](https://github.com/openclaw/openclaw).
 
-This is yet another ["Claw"](https://xcancel.com/karpathy/status/2024987174077432126) implementation. It was created to fulfill two key purposes:
+It's modeled on [Instinct](https://www.vellum.ai/blog/official-instinct-breakdown): one ongoing conversation with someone who pays attention to how you're doing, remembers what matters, and gets things done. Unlike Instinct, it runs on your machine, keeps its memory in a file you can read, and asks before doing anything on your behalf that's hard to undo.
 
-1. Be a moderately complex project where its author can practice "agentic engineering"
-2. Allow the author to experiment with ideas on what makes for a useful "personal agent"
+It's early. Today it can talk, remember, follow up on its own, and hand real work to a smarter agent. See [docs/roadmap.md](docs/roadmap.md) for what comes next.
 
-Any _actual_ utility or broad appeal that arises out of this project can be treated as a happy little accident 🌲
+## What it does now
 
-## Overview
+- Talks to you in Discord DMs and answers only you. The first person to DM it becomes its owner.
+- Remembers things about you in `~/.pclaw/notes.md`. You can edit that file and it sees the change on the next message.
+- Schedules its own follow-ups ("how did the interview go?") and reminders you ask for. They survive restarts.
+- Hands research, lookups, and anything with files or many steps to a worker, then tells you what came back.
+- Sees images you send it.
 
-This project is a lightweight AI coding agent in Go with a terminal REPL loop and function-calling tools.
+## Setup
 
-It is designed around three practical goals:
+You need Node 24+, pnpm, [pi](https://github.com/earendil-works/pi) (`npm install -g @earendil-works/pi-coding-agent`), a SuperGrok or X Premium subscription, and a Discord account.
 
-1. Lightweight operation: runs comfortably on cheap hardware (e.g. VPS with 1 vCPU & 1 GB RAM)
-2. Maximizing value: supports Vultr's inference product by default ~for $0.20/M tokens of Kimi K2 & GPT OSS 120B~ 
-3. Sensible defaults: one env var (VULTR_API_KEY) nets a fully functional CLI agent w/ tool calling & vector-based long-term memory w/ semantic lookup
-
-## Architecture
-
-```text
-agent/
-├── main.go                    # Agent runtime, inference client, tool definitions
-├── discord.go                 # Discord runtime, command/mention handlers, session manager
-├── memory.go                  # MemoryClient, record tool, auto-recall, configureMemory
-├── prompting.go               # System prompt builder (SectionedPromptBuilder)
-├── main_test.go               # Unit tests for tools + dispatch
-├── discord_test.go            # Unit tests for Discord splitting, sessions, progressive send
-├── memory_test.go             # Unit tests for MemoryClient, record tool, and auto-recall
-├── prompting_test.go          # Unit tests for prompt builder modes and injection
-├── main_integration_test.go   # Live Vultr integration tests
-├── main_delegation_harness_integration_test.go # Delegation policy harness (opt-in E2E)
-├── scripts/
-│   └── run-delegation-harness.sh
-└── specs/
-    └── README.md              # Specs index
+```sh
+git clone https://github.com/h14h/pClaw pclaw && cd pclaw
+pnpm install
+pnpm setup
 ```
 
-### Key Components
+`pnpm setup` signs you in to xAI in the browser and asks for a Discord bot token. The sign-in goes in pi's `~/.pi/agent/auth.json`, so pclaw and its pi workers share it; if pi is already signed in to xAI, there's nothing to do. To get the token, go to the [Discord developer portal](https://discord.com/developers/applications), click New Application, open Bot, click Reset Token, and copy it. Turn off Public Bot on the same page so nobody else can add it.
 
-| Component | Description |
-|-----------|-------------|
-| Agent loop | Reads user input, sends conversation to model, executes requested tools, continues until completion |
-| Inference client | Calls `POST /chat/completions` on Vultr Inference using, by default, `kimi-k2-instruct` (+ delegated `gpt-oss-120b` reasoning tool) |
-| Tool system | Defines tool metadata + JSON schema and executes tool calls from model responses |
-| File tools | `read_file`, `list_files`, `edit_file` for workspace interaction |
-| Reasoning delegation | `delegate_reasoning` dispatches sub-problems to, e.g., `gpt-oss-120b` |
-| Memory tools | `record` and `recall` for durable semantic memory via Vultr vector store (when enabled) |
+Then start it:
 
-## Requirements
-
-- Go 1.24+
-- A Vultr Inference API key
-
-## Configuration
-
-Environment variables:
-
-- `VULTR_API_KEY` (required): API token for Vultr Inference
-- `VULTR_BASE_URL` (optional): API base URL (default: `https://api.vultrinference.com/v1`)
-- `TOOL_EVENT_LOG` (optional): CLI tool lifecycle logging (`off` or `debug`)
-- `SERVER_EVENT_LOG` (optional): server lifecycle logging (`off`, `line`, or `verbose`; `verbose` includes full response/chunk content fields)
-- `DISCORD_BOT_TOKEN` (optional): enables Discord mode when set
-- `DISCORD_APPLICATION_ID` (optional): Discord application ID for slash command registration
-- `DISCORD_GUILD_ID` (optional): registers slash command to one guild for faster propagation
-- `DISCORD_ALLOWED_CHANNEL_IDS` (optional): comma-separated channel allowlist
-- `DISCORD_ALLOWED_USER_IDS` (optional): comma-separated user allowlist
-- `AGENT_NAME` (optional): overrides prompt identity name
-- `AGENT_ROLE_SUMMARY` (optional): overrides prompt role summary sentence
-- `AGENT_PERSONA` (optional): inline persona text for the system prompt
-- `AGENT_PERSONA_FILE` (optional): file path for persona text (takes precedence over `AGENT_PERSONA`)
-- `AGENT_PROMPT_MAX_PERSONA_CHARS` (optional): max persona characters included in prompt (default: `600`)
-- `MEMORY_ENABLED` (optional): set to `false`, `0`, or `no` to disable durable memory (default: enabled)
-- `MEMORY_COLLECTION_NAME` (optional): Vultr vector store collection name (default: `agent-memory`)
-
-Model behavior is fixed (for now):
-
-- Primary model: `kimi-k2-instruct` (max tokens: `4096`)
-- Delegated reasoning model: `gpt-oss-120b` via `delegate_reasoning` tool (max tokens: `1024`)
-- Memory summarization model: `gpt-oss-120b` (max tokens: `256`)
-
-## Building
-
-```bash
-go build ./...
+```sh
+pnpm start
 ```
 
-## Usage
+A bot can only receive DMs from people it shares a server with. If it isn't in one yet, `pnpm start` prints an invite link. Add it to a server you're in, then DM it.
 
-Run the agent:
+To try it without Discord, `pnpm chat` opens a conversation in the terminal. It keeps its own history, so it won't mix with your Discord thread.
 
-```bash
-export VULTR_API_KEY="your-token"
-go run .
+## Settings
+
+`~/.pclaw/config.json` holds the settings. Environment variables override it.
+
+| Setting | Env var | Default |
+|---|---|---|
+| `model` | `PCLAW_MODEL` | `grok-4.5` |
+| `provider` | `PCLAW_PROVIDER` | `xai` |
+| `thinkingLevel` | `PCLAW_THINKING` | `medium` |
+| `workerModel` | `PCLAW_WORKER_MODEL` | `grok-4.7` |
+| `workerThinkingLevel` | `PCLAW_WORKER_THINKING` | `high` |
+| `workerCommand` | | `pi` |
+| `workerTimeoutMinutes` | | `30` |
+| `authFile` | `PI_CODING_AGENT_DIR` moves it | `~/.pi/agent/auth.json` |
+| `timeZone` | `PCLAW_TZ` | the machine's time zone |
+| `discordToken` | `DISCORD_TOKEN` | set by `pnpm setup` |
+| `discordOwnerId` | `PCLAW_DISCORD_OWNER_ID` | set when you first DM it |
+
+`PCLAW_HOME` moves the whole `~/.pclaw` directory.
+
+## How it's built
+
+Two models, split the way [exe.dev's "run fewer agents"](https://blog.exe.dev/etoomanythings) suggests. The one you talk to is fast and conversational: Grok 4.5 on medium, prompted for voice and judgment, with no shell or browser of its own. It answers in seconds and keeps the thread. Anything that takes real work goes to a worker: [pi](https://github.com/earendil-works/pi) with its default coding-agent prompt and tools, running Grok 4.7 on high, in `~/.pclaw/work`. The worker reports back into the conversation and the front model tells you what matters. Each job keeps its pi session, so corrections continue where it left off. Claude Code or Codex can slot in as workers later.
+
+pclaw runs on [Pi Durable](https://earendil.com/posts/pi-durable/), a harness that writes every message, model turn, and tool call to SQLite before acting on it. If the process dies mid-reply, it picks up where it stopped. Follow-ups and worker runs are durable tasks; a worker cut off by a restart resumes its pi session.
+
+- `src/prompts/voice.md` is how pclaw talks, built from real Instinct conversations. `src/prompts/operating.md` is how it works: workers, memory, follow-ups.
+- `src/extensions/` holds the tools, one extension each: notes, follow-ups, workers.
+- `~/.pclaw/work/AGENTS.md` is the workers' standing brief. pclaw writes a default the first time and leaves your edits alone.
+- `src/channels/` connects conversations to Discord and the terminal.
+- `src/delivery.ts` sends replies out in order and remembers what it has sent.
+
+```sh
+pnpm test        # unit tests, plus agent tests against a scripted model
+pnpm typecheck
 ```
 
-Run in Discord mode:
+## License
 
-```bash
-export VULTR_API_KEY="your-token"
-export DISCORD_BOT_TOKEN="your-bot-token"
-# Optional but recommended for reliable command registration:
-export DISCORD_APPLICATION_ID="your-application-id"
-# Optional for fast guild-scoped command registration:
-export DISCORD_GUILD_ID="your-guild-id"
-go run .
-```
-
-Optional base URL override:
-
-```bash
-export VULTR_BASE_URL="https://api.vultrinference.com/v1"
-go run .
-```
-
-Prompt config override example:
-
-```bash
-export AGENT_NAME="OpenClaw-Inspired Operator"
-export AGENT_ROLE_SUMMARY="A decisive software engineering operator that prioritizes correctness and momentum."
-export AGENT_PERSONA_FILE="./persona.txt"
-export AGENT_PROMPT_MAX_PERSONA_CHARS="900"
-go run .
-```
-
-### REPL behavior
-
-- Prompt shows as `You:`
-- Assistant responses print as `Assistant:`
-- Tool execution now emits event-style, human-readable logs (`started`/`succeeded`/`failed`) per call
-- Exit with `Ctrl+C` or EOF (`Ctrl+D`)
-
-### Discord behavior
-
-- When `DISCORD_BOT_TOKEN` is set, startup runs Discord mode instead of terminal REPL mode
-- Registers `/agent` slash command with a required `prompt` argument
-- Supports mention-based chat in channels: `@your-bot <prompt>`
-- Maintains conversation context per `(channel_id, user_id)` session key
-- Streams assistant turn text progressively to Discord as each assistant message is produced in the tool loop
-- Keeps Discord typing indicators alive while progressive responses are still being generated
-- Splits long responses into multiple Discord messages under platform size limits
-- Honors optional `<<MSG_SPLIT>>` markers for logical boundaries and uses balanced fallback splitting to avoid tiny trailing messages
-- Requires bot intents for message events; enable `Message Content Intent` in the Discord Developer Portal
-
-## Testing
-
-Run unit tests:
-
-```bash
-go test ./...
-```
-
-Run only integration tests against real Vultr API:
-
-```bash
-VULTR_API_KEY="your-token" go test -run E2E ./...
-```
-
-Run delegation policy harness (opt-in, live API):
-
-```bash
-VULTR_API_KEY="your-token" RUN_DELEGATION_HARNESS=1 go test -run TestDelegationPolicyHarness_E2E ./...
-```
-
-Or use the on-demand wrapper script with useful stdout reporting:
-
-```bash
-VULTR_API_KEY="your-token" ./scripts/run-delegation-harness.sh
-```
-
-## Specifications
-
-Design docs are indexed in `specs/README.md`.
-
-## Research Interests
-
-This project doubles as a testbed for exploring how persistent memory changes AI agent behavior in long-term social settings. The primary questions under investigation:
-
-### Does persistent memory make a chatbot feel more "personal"?
-
-Deploying the bot into a Discord community with durable semantic memory (via Vultr's vector store) lets it organically accumulate facts about the people it interacts with — preferences, personality traits, communication styles, recurring topics. The open question is whether this accumulation produces a qualitative shift in how the bot is perceived: does it start to feel like it *knows* you, or does performance degrade as memory grows noisy and contradictory?
-
-### Can long-term social exposure produce "cultural intuition"?
-
-Human decision-making in organizations is shaped by hundreds of micro-interactions — hallway conversations, offhand comments, observed reactions. Over time, these interactions build an implicit model of team culture, individual communication styles, and organizational priorities. This allows humans to accurately infer *intent* from imperfect instructions: "clean up the auth code" means something different depending on whether your team values speed or correctness, whether the auth system is politically sensitive, and whether the person asking tends to want small tweaks or deep refactors.
-
-Agents don't have this luxury. They're born fresh and take instructions at face value. The hypothesis here is that an AI agent deployed as a long-term chatbot — absorbing conversational context, recording behavioral patterns, and building implicit models of the people and culture around it — could develop something analogous to this "cultural intuition."
-
-### Can absorbed cultural context steer worker agents?
-
-The end goal isn't just a better chatbot. If persistent social memory can encode cultural norms, team preferences, and individual communication patterns, that knowledge could be extracted and injected into *worker* agents (e.g. coding agents, task runners) as contextual guidance. An agent that knows "this team values working code over perfect architecture" and "the person requesting this prefers small, incremental changes" can make better judgment calls when interpreting ambiguous instructions — without requiring the human to spell out every implicit expectation.
-
-This is the bridge between "chatbot with good memory" and "agent with good judgment."
-
-## Clear TODOs
-
- - [ ] Set up guides for supported inference providers & messaging platforms
- - [ ] Internet connectivity of some kind (e.g. a web search tool call)
- - [ ] Agent self-direction (e.g. a "Heartbeat" cron job that kicks of a scheduled agent loop)
-
-## Potential Future Features
-
-- [ ] Configuring inference providers beyond Vultr (e.g. OpenRouter)
-- [ ] Supporting messaging platforms besides Discord (e.g. Matrix)
-- [ ] A "Work Delegation" tool call that can kick off other agents (e.g. Claude Code) 
-- [ ] Export pipelines (e.g. creating notes/todos in a third-party app)
-- [ ] Import pipelines (e.g. receiving agent tasks through Raycast plugin or Siri or w/e)
-- [ ] Agent "enrichment" activities for creating self-directed memories (e.g. an RSS feed)
+MIT

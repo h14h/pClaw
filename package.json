@@ -1,0 +1,31 @@
+{
+  "name": "pclaw",
+  "version": "0.1.0",
+  "description": "A small personal assistant you text on Discord",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "pclaw": "node src/main.ts",
+    "start": "node src/main.ts start",
+    "setup": "node src/main.ts setup",
+    "chat": "node src/main.ts chat",
+    "test": "node --test 'src/**/*.test.ts'",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "^1.0.0",
+    "@earendil-works/pi-ai": "^1.0.0",
+    "@earendil-works/pi-durable": "^1.0.0",
+    "discord.js": "^14.27.0",
+    "proper-lockfile": "^4.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "@types/proper-lockfile": "^4.1.4",
+    "typescript": "^7.0.2"
+  }
+}
