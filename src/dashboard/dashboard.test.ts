@@ -77,10 +77,9 @@ test("the dashboard API shows the timeline, held replies, workers, and their tra
 	// Registered for its model catalog only; nothing here calls xAI.
 	models.setProvider(xaiProvider());
 	faux.setResponses([
-		fauxAssistantMessage([fauxText("I'll check."), fauxToolCall("delegate", { name: "nas", brief: "find a quiet NAS case" })], {
+		fauxAssistantMessage([fauxText("on it"), fauxToolCall("delegate", { name: "nas", brief: "find a quiet NAS case" })], {
 			stopReason: "toolUse",
 		}),
-		fauxAssistantMessage("on it"),
 		fauxAssistantMessage("Jonsbo N4 looks right, $135"),
 	]);
 	const workers = await fakeWorkers();
@@ -109,9 +108,8 @@ test("the dashboard API shows the timeline, held replies, workers, and their tra
 		const kinds = view.timeline.map((item) => (item.kind === "reply" ? `reply:${item.text}:${item.delivered ? "sent" : item.held}` : item.kind === "event" ? `event:${item.event}` : item.kind === "tool" ? `tool:${item.name}:${item.worker}` : `message:${item.text}`));
 		assert.deepEqual(kinds, [
 			"message:find me a NAS case",
-			"reply:I'll check.:superseded",
-			"tool:delegate:nas",
 			"reply:on it:sent",
+			"tool:delegate:nas",
 			"event:worker-report",
 			"reply:Jonsbo N4 looks right, $135:sent",
 		]);

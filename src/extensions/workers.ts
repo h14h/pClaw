@@ -197,7 +197,16 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 				execute: async ({ name, brief }, api, context) => {
 					const started = await api.commit(async (tx) => {
 						const doc = await tx.doc(Workers, api.conversationId);
-						if (doc.workers[name] !== undefined) return false;
+						const existing = doc.workers[name];
+						if (existing !== undefined) {
+							// A job that failed or was stopped can be restarted under its name, in its own session.
+							if (existing.status !== "failed" && existing.status !== "stopped") return false;
+							existing.run = await tx.createTask(Run, { name, sessionId: existing.sessionId, message: brief }, background);
+							existing.status = "working";
+							existing.brief = brief;
+							existing.startedAt = existing.updatedAt = Date.now();
+							return true;
+						}
 						const sessionId = randomUUID();
 						const run = await tx.createTask(Run, { name, sessionId, message: brief }, background);
 						const now = Date.now();
@@ -205,7 +214,8 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 						return true;
 					}, context);
 					if (!started) throw new Error(`There's already a worker named ${name}. Use message_worker, or pick a new name.`);
-					return text(`${name} is on it.`);
+					// End the turn here: what was written alongside this call is the reply, with no second request.
+					return { ...text(`${name} is on it.`), control: { terminate: true } };
 				},
 			}),
 			defineTool({
@@ -224,7 +234,7 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 						return undefined;
 					}, context);
 					if (outcome !== undefined) throw new Error(outcome);
-					return text(`Sent to ${name}.`);
+					return { ...text(`Sent to ${name}.`), control: { terminate: true } };
 				},
 			}),
 			defineTool({

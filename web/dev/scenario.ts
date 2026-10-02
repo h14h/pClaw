@@ -81,6 +81,7 @@ const steps: Step[] = [
 	{ t: 851, item: { kind: 'message', id: 'm4', text: 'nice, the N3 it is. thanks', images: 0 } },
 	{ t: 852, item: { kind: 'tool', id: 't4', name: 'remember', args: { note: 'Building a home NAS; picked the Jonsbo N3.' }, result: 'Saved.' } },
 	{ t: 856, item: { kind: 'reply', id: 'r6', text: 'Good pick. The links are above if you want to compare later.', delivered: true, model: MODEL, usage: usage(3600, 14, 3400) } },
+	{ t: 856 + 15 * 60, item: { kind: 'event', id: 'e3', event: 'notes', text: '+ Building a home NAS; picked the Jonsbo N3 ($150, Amazon).\n+ Wants a recommendation, not a list, when asked to compare.\n- Shopping for a NAS case.' } },
 	{ t: 15.6 * 3600, item: { kind: 'message', id: 'm5', text: "vet says it's just a stomach bug, she's already eating again", images: 0 } },
 	{ t: 15.6 * 3600 + 6, item: { kind: 'reply', id: 'r7', text: 'Good news. Stomach bugs clear fast once they start eating. Glad it was nothing worse.', delivered: true, model: MODEL, usage: usage(3700, 22, 3600) } },
 	{ t: 16.5 * 3600, item: { kind: 'event', id: 'e2', event: 'follow-up', text: 'ask how the vet went' } },

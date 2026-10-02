@@ -10,6 +10,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { type Config, paths } from "./config.ts";
 import { followUpsExtension } from "./extensions/follow-ups.ts";
+import { memoryExtension } from "./extensions/memory.ts";
 import { type Notes, notesExtension } from "./extensions/notes.ts";
 import { soulExtension } from "./extensions/soul.ts";
 import { Routes } from "./routes.ts";
@@ -27,7 +28,15 @@ export type Agent = {
 
 export async function openAgent(
 	storage: Storage,
-	options: { config: Config; models: Models; notes: Notes; workers?: WorkerOptions; now?: () => number },
+	options: {
+		config: Config;
+		models: Models;
+		notes: Notes;
+		workers?: WorkerOptions;
+		/** How long a conversation stays quiet before the memory pass reads it. */
+		memoryQuietMs?: number;
+		now?: () => number;
+	},
 	context: Context,
 ): Promise<Agent> {
 	const { config, models, notes } = options;
@@ -39,6 +48,8 @@ export async function openAgent(
 	prepareWorkspace(workers);
 	const current: { current?: Harness } = {};
 	registry.install(workersExtension(workers, current));
+	const memory = memoryExtension({ notes, models, config, quietMs: options.memoryQuietMs ?? config.memoryQuietMinutes * 60_000 });
+	registry.install(memory.extension);
 
 	let agent = { model: { provider: config.provider, modelId: config.model }, thinkingLevel: config.thinkingLevel };
 	const harness = await Harness.open(
@@ -64,6 +75,7 @@ export async function openAgent(
 			// Pick up model changes from config.json once per process.
 			if (!configured.has(existing.id)) {
 				await existing.configure(agent, context);
+				await memory.ensureKeeper(harness, existing.id, context);
 				configured.add(existing.id);
 			}
 			return existing;
@@ -72,6 +84,8 @@ export async function openAgent(
 		await created.commit(async (tx) => {
 			(await tx.doc(Routes)).conversations[address] = created.id;
 		}, context);
+		await memory.ensureKeeper(harness, created.id, context);
+		configured.add(created.id);
 		return created;
 	}
 

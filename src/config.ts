@@ -35,6 +35,8 @@ export type Config = {
 	workerTimeoutMinutes: number;
 	/** The dashboard listens on 127.0.0.1 only; a proxy puts it on the tailnet. */
 	dashboardPort: number;
+	/** How long a conversation stays quiet before the memory pass updates the notes from it. */
+	memoryQuietMinutes: number;
 };
 
 type StoredConfig = Partial<Config>;
@@ -51,6 +53,7 @@ export const defaults: Config = {
 	workerThinkingLevel: "high",
 	workerTimeoutMinutes: 30,
 	dashboardPort: 7421,
+	memoryQuietMinutes: 20,
 };
 
 function readStored(): StoredConfig {

@@ -163,12 +163,13 @@ export async function startDashboard(
 		const [address, id] = route;
 		const view = await hydrated((await watchConversation(id))!.view);
 		const followUps = await harness.snapshot(FollowUps, id, context);
+		const live = view.docs[LiveDoc.definition.kind] as LiveState | undefined;
 		return {
 			id: idText,
 			address,
 			label: label(address),
-			live: liveStatus(view.docs[LiveDoc.definition.kind] as LiveState | undefined),
-			timeline: buildTimeline(view.entries),
+			live: liveStatus(live),
+			timeline: buildTimeline(view.entries, live?.run === undefined),
 			workers: await workerSummaries(id),
 			followUps: Object.entries(followUps?.items ?? {})
 				.map(([taskId, item]) => ({ id: taskId, at: item.dueAt, note: item.note, ...(item.repeat === undefined ? {} : { repeat: item.repeat }) }))

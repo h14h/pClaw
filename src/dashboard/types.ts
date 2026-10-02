@@ -59,7 +59,8 @@ export type TimelineItem =
 	/** Something the person sent. */
 	| { kind: "message"; id: string; at: number; text: string; images: number }
 	/** Something that arrived from inside pclaw rather than from the person. */
-	| { kind: "event"; id: string; at: number; event: "follow-up" | "worker-report"; text: string; worker?: string; ok?: boolean }
+	/** `notes`: the background memory pass changed the notes; `text` is one change per line, "+ " added or "- " removed. */
+	| { kind: "event"; id: string; at: number; event: "follow-up" | "worker-report" | "notes"; text: string; worker?: string; ok?: boolean }
 	/** Text the front model wrote. `delivered` is whether it reached the person. */
 	| {
 			kind: "reply";

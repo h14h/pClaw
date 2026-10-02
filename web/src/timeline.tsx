@@ -5,7 +5,11 @@ import { Md } from './md'
 import { day, dayKey } from './time'
 import { Clamp, DayBreak, Row, Tag, ToolCall, WorkerState, k, summarize, useStickToBottom } from './ui'
 
-const who = (item: TimelineItem) => (item.kind === 'message' ? 'you' : item.kind === 'event' ? (item.worker ?? 'follow-up') : 'pclaw')
+function who(item: TimelineItem) {
+  if (item.kind === 'message') return 'you'
+  if (item.kind !== 'event') return 'pclaw'
+  return item.event === 'worker-report' ? (item.worker ?? 'worker') : item.event
+}
 
 export function Timeline({ items, workers, conversationId }: { items: TimelineItem[]; workers: WorkerSummary[]; conversationId: string }) {
   const ref = useStickToBottom<HTMLDivElement>()
@@ -69,6 +73,13 @@ function Item({ item, who, worker, conversationId }: { item: TimelineItem; who?:
         </Row>
       )
     case 'event':
+      if (item.event === 'notes') {
+        return (
+          <Row at={item.at} who={who} whoClass="text-faint">
+            <NotesChange text={item.text} />
+          </Row>
+        )
+      }
       return (
         <Row at={item.at} who={who} whoClass="text-mute">
           <div className="border-l-2 border-line pl-2">
@@ -83,6 +94,28 @@ function Item({ item, who, worker, conversationId }: { item: TimelineItem; who?:
         </Row>
       )
   }
+}
+
+/** The memory pass's edits to the notes file: bookkeeping, so one faint line until opened. */
+function NotesChange({ text }: { text: string }) {
+  const [open, setOpen] = useState(false)
+  const lines = text.split('\n').filter((l) => l.trim())
+  const added = lines.filter((l) => l.startsWith('+')).length
+  const removed = lines.filter((l) => l.startsWith('-')).length
+  const summary = [added && `+${added}`, removed && `−${removed}`].filter(Boolean).join(' ') || 'no changes'
+  return (
+    <div className="text-[12px] text-faint">
+      <button type="button" onClick={() => setOpen(!open)} className="flex items-baseline gap-2">
+        <span className="w-2 shrink-0">{open ? '▾' : '▸'}</span>
+        <span className="font-mono">{summary}</span>
+      </button>
+      {open && (
+        <div className="mt-0.5 ml-4 space-y-0.5 font-mono">
+          {lines.map((l, i) => <div key={i} className={l.startsWith('-') ? 'line-through' : 'text-mute'}>{l}</div>)}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function Reply({ item }: { item: Extract<TimelineItem, { kind: 'reply' }> }) {

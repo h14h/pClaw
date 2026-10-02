@@ -22,6 +22,16 @@ export class Notes {
 		writePrivate(this.file, current === "" || current.endsWith("\n") ? current + line : `${current}\n${line}`);
 	}
 
+	/** Remove the note that matches `note` exactly (with or without its "- "). Returns whether one was removed. */
+	removeExact(note: string): boolean {
+		const target = note.replace(/^-\s*/, "").trim();
+		const lines = this.read().split("\n");
+		const kept = lines.filter((line) => line.replace(/^-\s*/, "").trim() !== target);
+		if (target === "" || kept.length === lines.length) return false;
+		writePrivate(this.file, kept.join("\n"));
+		return true;
+	}
+
 	/** Remove every line containing `text` (case-insensitive). Returns the removed lines. */
 	remove(text: string): string[] {
 		const needle = text.trim().toLowerCase();

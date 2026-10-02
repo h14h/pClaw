@@ -7,6 +7,7 @@ import {
 	type EntryId,
 	type EntryRecord,
 	type Harness,
+	UserEntry,
 	watchEvents,
 } from "@earendil-works/pi-durable";
 
@@ -53,20 +54,26 @@ export function readReply(entry: EntryRecord): Reply | undefined {
 
 /**
  * Collapses one run into one message. Models often say something before a tool call ("I'll check") and again after it
- * ("checking now"); only the answer goes out. Interim text is the fallback when the answer is empty.
+ * ("checking now"); only the answer goes out. Interim text goes out instead when the answer is empty, or when the run
+ * ends without one (`delegate` ends the run as soon as the worker starts, so the line written with the call is the
+ * reply).
  */
 export function replyCollector() {
 	let interim: string[] = [];
-	return (reply: Reply): string | undefined => {
+	const flush = (): string | undefined => {
+		const held = interim;
+		interim = [];
+		return held.length === 0 ? undefined : held.join("\n\n");
+	};
+	const take = (reply: Reply): string | undefined => {
 		if (reply.kind === "interim") {
 			if (reply.text !== "") interim.push(reply.text);
 			return undefined;
 		}
-		const held = interim;
-		interim = [];
-		if (reply.silent) return undefined;
-		return reply.text ?? (held.length === 0 ? undefined : held.join("\n\n"));
+		const held = flush();
+		return reply.silent ? undefined : (reply.text ?? held);
 	};
+	return { take, flush };
 }
 
 /**
@@ -85,23 +92,28 @@ export async function deliver(
 
 	let queue = Promise.resolve();
 	let lastQueued: EntryId | undefined;
-	const collect = replyCollector();
+	const collector = replyCollector();
+	const send = async (text: string | undefined) => {
+		if (text === undefined) return;
+		try {
+			await outbox.send(text);
+		} catch (error) {
+			console.error("[pclaw] delivery failed", error);
+		}
+	};
 	const sendInOrder = (entry: EntryRecord) => {
 		lastQueued = entry.id;
 		queue = queue.then(async () => {
 			const reply = readReply(entry);
-			const text = reply === undefined ? undefined : collect(reply);
-			if (text !== undefined) {
-				try {
-					await outbox.send(text);
-				} catch (error) {
-					console.error("[pclaw] delivery failed", error);
-				}
-			}
+			await send(reply === undefined ? undefined : collector.take(reply));
 			await conversation.commit(async (tx) => {
 				(await tx.doc(Delivered, conversationId)).last = entry.id;
 			}, context);
 		});
+	};
+	/** A run ended (or a new one began) with text still held: send it. */
+	const flushInOrder = () => {
+		queue = queue.then(() => send(collector.flush()));
 	};
 
 	const stream = await watchEvents(harness, conversationId, context);
@@ -109,7 +121,10 @@ export async function deliver(
 		// A cursor that compaction has hidden counts as caught up; resending the visible transcript would be worse.
 		const index = last === undefined ? -1 : entries.findIndex((entry) => entry.id === last);
 		const start = index === -1 ? entries.length : index + 1;
-		for (const entry of entries.slice(start)) if (AssistantEntry.is(entry)) sendInOrder(entry);
+		for (const entry of entries.slice(start)) {
+			if (AssistantEntry.is(entry)) sendInOrder(entry);
+			else if (UserEntry.is(entry)) flushInOrder();
+		}
 		if (last === undefined && entries.length > 0) {
 			const end = entries[entries.length - 1]!.id;
 			lastQueued = end;
@@ -129,7 +144,10 @@ export async function deliver(
 			// A consumer that fell far behind gets a fresh snapshot instead of the missed events.
 			if (event.type === "snapshot") catchUp(event.entries, lastQueued);
 			else if (event.type === "run_start") outbox.working(true);
-			else if (event.type === "run_end") outbox.working(false);
+			else if (event.type === "run_end") {
+				outbox.working(false);
+				flushInOrder();
+			}
 			else if (event.type === "message_end" && AssistantEntry.is(event.entry)) sendInOrder(event.entry);
 		}
 	});

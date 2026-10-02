@@ -47,7 +47,7 @@ test("notes add and forget lines", async () => {
 });
 
 test("one run becomes one message: the answer wins over text said around tool calls", () => {
-	const collect = replyCollector();
+	const { take: collect, flush } = replyCollector();
 	assert.equal(collect({ kind: "interim", text: "I'll check." }), undefined);
 	assert.equal(collect({ kind: "final", text: "checking now.", silent: false }), "checking now.");
 	// With no answer, the interim text goes out instead of nothing.
@@ -57,4 +57,8 @@ test("one run becomes one message: the answer wins over text said around tool ca
 	collect({ kind: "interim", text: "hm" });
 	assert.equal(collect({ kind: "final", silent: true }), undefined);
 	assert.equal(collect({ kind: "final", text: "fresh run", silent: false }), "fresh run");
+	// A run that ends right after a tool call (delegate) sends what was written with the call.
+	collect({ kind: "interim", text: "on it, back in a few" });
+	assert.equal(flush(), "on it, back in a few");
+	assert.equal(flush(), undefined);
 });

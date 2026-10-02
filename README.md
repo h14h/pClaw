@@ -9,7 +9,7 @@ It's early. Today it can talk, remember, follow up on its own, and hand real wor
 ## What it does now
 
 - Talks to you in Discord DMs and answers only you. The first person to DM it becomes its owner.
-- Remembers things about you in `~/.pclaw/notes.md`. You can edit that file and it sees the change on the next message.
+- Remembers things about you in `~/.pclaw/notes.md`. Once a conversation has been quiet for 20 minutes, a background pass reads what was said and updates the notes. You can edit the file and it sees the change on the next message.
 - Schedules its own follow-ups ("how did the interview go?") and reminders you ask for. They survive restarts.
 - Hands research, lookups, and anything with files or many steps to a worker, then tells you what came back.
 - Sees images you send it.
@@ -53,6 +53,7 @@ To try it without Discord, `pnpm chat` opens a conversation in the terminal. It 
 | `workerThinkingLevel` | `PCLAW_WORKER_THINKING` | `high` |
 | `workerCommand` | | `pi` |
 | `workerTimeoutMinutes` | | `30` |
+| `memoryQuietMinutes` | | `20` |
 | `dashboardPort` | `PCLAW_DASHBOARD_PORT` | `7421` |
 | `authFile` | `PI_CODING_AGENT_DIR` moves it | `~/.pi/agent/auth.json` |
 | `timeZone` | `PCLAW_TZ` | the machine's time zone |

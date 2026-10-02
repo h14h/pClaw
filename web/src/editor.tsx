@@ -17,8 +17,8 @@ const markdown = new Language(defineLanguageFacet(), parser, [], 'markdown')
 // Highest precedence, listed before vim(): at equal precedence the earlier extension's styles win, and the vim
 // extension's own highest-precedence theme paints the cursor pink.
 const theme = Prec.highest(EditorView.theme({
-  '&': { fontSize: '14px', color: 'var(--fg)', backgroundColor: 'var(--bg)', maxHeight: '70vh' },
-  '.cm-scroller': { overflow: 'auto', fontFamily: 'var(--font-sans)', lineHeight: '1.6' },
+  '&': { fontSize: '13px', color: 'var(--fg)', backgroundColor: 'var(--bg)', maxHeight: '70vh' },
+  '.cm-scroller': { overflow: 'auto', fontFamily: 'var(--font-mono)', lineHeight: '1.6' },
   '.cm-content': { padding: '10px 0', caretColor: 'var(--fg)' },
   '.cm-line': { padding: '0 14px' },
   '&.cm-focused': { outline: 'none' },
@@ -28,18 +28,19 @@ const theme = Prec.highest(EditorView.theme({
   '&:not(.cm-focused) .cm-fat-cursor': { backgroundColor: 'transparent', outline: 'solid 1px var(--mute)' },
   '.cm-vim-panel': { fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--mute)', backgroundColor: 'var(--panel)', borderTop: '1px solid var(--line)', padding: '2px 8px' },
   '.cm-vim-panel input': { color: 'var(--fg)', background: 'none', border: 'none', outline: 'none', font: 'inherit' },
-  '.cm-panels': { backgroundColor: 'transparent', color: 'inherit' },
+  '.cm-panels, .cm-panels.cm-panels-bottom': { backgroundColor: 'transparent', color: 'inherit', borderTop: 'none' },
 }))
 
+// GitHub's Primer markdown colors (light and dark via the --syn-* variables), kept to the few marks prose uses.
 const highlight = HighlightStyle.define([
-  { tag: tags.heading, fontWeight: '600' },
+  { tag: tags.heading, color: 'var(--syn-heading)', fontWeight: '600' },
   { tag: tags.strong, fontWeight: '600' },
   { tag: tags.emphasis, fontStyle: 'italic' },
-  { tag: tags.link, textDecoration: 'underline', textDecorationColor: 'var(--faint)', textUnderlineOffset: '2px' },
-  { tag: tags.url, color: 'var(--mute)' },
-  { tag: tags.monospace, fontFamily: 'var(--font-mono)', fontSize: '0.9em', backgroundColor: 'var(--panel)' },
+  { tag: tags.link, color: 'var(--syn-link)', textDecoration: 'underline', textUnderlineOffset: '2px' },
+  { tag: tags.url, color: 'var(--syn-url)' },
+  { tag: tags.monospace, backgroundColor: 'var(--panel)', borderRadius: '3px' },
   { tag: tags.quote, color: 'var(--mute)' },
-  { tag: [tags.processingInstruction, tags.contentSeparator, tags.labelName, tags.comment], color: 'var(--faint)' },
+  { tag: [tags.processingInstruction, tags.contentSeparator, tags.labelName, tags.comment], color: 'var(--syn-mark)' },
 ])
 
 /**

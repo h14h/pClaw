@@ -1,6 +1,7 @@
 import type { AssistantMessage, Message, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 import { AssistantEntry, type EntryRecord, type LiveState, ToolResultEntry, UserEntry } from "@earendil-works/pi-durable";
 import { SILENT } from "../delivery.ts";
+import { NotesUpdate } from "../extensions/memory.ts";
 import type { LiveStatus, TimelineItem, Usage, WorkerItem } from "./types.ts";
 
 const WORKER_TOOLS = new Set(["delegate", "message_worker", "stop_worker"]);
@@ -31,16 +32,25 @@ function userItem(entry: EntryRecord, message: UserMessage): TimelineItem {
  * delivered, and each tool call joined to its result. Delivery follows `replyCollector` in delivery.ts: within a run,
  * the final reply wins and earlier text is superseded, unless the final reply is empty.
  */
-export function buildTimeline(entries: readonly EntryRecord[]): TimelineItem[] {
+export function buildTimeline(entries: readonly EntryRecord[], idle = true): TimelineItem[] {
 	const items: TimelineItem[] = [];
 	const tools = new Map<string, Extract<TimelineItem, { kind: "tool" }>>();
 	let interim: Extract<TimelineItem, { kind: "reply" }>[] = [];
 
 	for (const entry of entries) {
+		if (NotesUpdate.is(entry)) {
+			const { added, removed, at } = entry.data as { added: string[]; removed: string[]; at: number };
+			const text = [...added.map((note) => `+ ${note}`), ...removed.map((note) => `- ${note}`)].join("\n");
+			items.push({ kind: "event", id: String(entry.id), at, event: "notes", text });
+			continue;
+		}
 		const message = entry.model?.[0] as Message | undefined;
 		if (message === undefined) continue;
 
 		if (UserEntry.is(entry) && message.role === "user") {
+			// The previous run ended without an answer (delegate ends it): what it said along the way went out.
+			for (const held of interim) held.delivered = true;
+			interim = [];
 			items.push(userItem(entry, message));
 		} else if (ToolResultEntry.is(entry) && message.role === "toolResult") {
 			const tool = tools.get(message.toolCallId);
@@ -106,6 +116,7 @@ export function buildTimeline(entries: readonly EntryRecord[]): TimelineItem[] {
 			}
 		}
 	}
+	if (idle) for (const held of interim) held.delivered = true;
 	return items;
 }
 

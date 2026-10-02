@@ -20,8 +20,11 @@ export const prompts = {
 
 export type PromptName = keyof typeof prompts;
 
-export function readPrompt(name: PromptName): string {
-	return readFileSync(prompts[name].file, "utf8");
+/** The memory pass's instructions. Not editable from the dashboard yet. */
+const memoryPrompt = fileURLToPath(new URL("./prompts/memory.md", import.meta.url));
+
+export function readPrompt(name: PromptName | "memory"): string {
+	return readFileSync(name === "memory" ? memoryPrompt : prompts[name].file, "utf8");
 }
 
 export function writePrompt(name: PromptName, text: string): void {

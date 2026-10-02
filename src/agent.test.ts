@@ -11,6 +11,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { openAgent } from "./agent.ts";
 import { type Config, defaults } from "./config.ts";
 import { deliver } from "./delivery.ts";
+import { NotesUpdate } from "./extensions/memory.ts";
 import { Notes } from "./extensions/notes.ts";
 import type { WorkerOptions } from "./extensions/workers.ts";
 
@@ -198,18 +199,17 @@ test("delegate runs a worker, its report comes back, and message_worker reuses i
 	const reports: string[] = [];
 	const lastMessage = (request: ModelContext) => JSON.stringify(request.messages.at(-1));
 	faux.setResponses([
-		fauxAssistantMessage(fauxToolCall("delegate", { name: "nas", brief: "find a walnut NAS case under $200" }), {
+		// delegate ends the turn, so the line written with the call is the reply.
+		fauxAssistantMessage([fauxText("on it"), fauxToolCall("delegate", { name: "nas", brief: "find a walnut NAS case under $200" })], {
 			stopReason: "toolUse",
 		}),
-		fauxAssistantMessage("on it"),
 		(request) => {
 			reports.push(lastMessage(request));
 			return fauxAssistantMessage("walnut case is $135 and ships free");
 		},
-		fauxAssistantMessage(fauxToolCall("message_worker", { name: "nas", message: "check it fits 4 drives" }), {
+		fauxAssistantMessage([fauxText("asking"), fauxToolCall("message_worker", { name: "nas", message: "check it fits 4 drives" })], {
 			stopReason: "toolUse",
 		}),
-		fauxAssistantMessage("asking"),
 		(request) => {
 			reports.push(lastMessage(request));
 			return fauxAssistantMessage("yep, it fits");
@@ -262,8 +262,9 @@ case "$last" in *restarted*) echo "resumed and finished";; *) sleep 30; echo "fi
 	{
 		const { faux, models } = setup();
 		faux.setResponses([
-			fauxAssistantMessage(fauxToolCall("delegate", { name: "slow", brief: "take your time" }), { stopReason: "toolUse" }),
-			fauxAssistantMessage("on it"),
+			fauxAssistantMessage([fauxText("on it"), fauxToolCall("delegate", { name: "slow", brief: "take your time" })], {
+				stopReason: "toolUse",
+			}),
 		]);
 		const agent = await openAgent(await openNodeSqliteStorage(file), { config, models, notes, workers }, context);
 		const conversation = await agent.conversationFor("test:dm", context);
@@ -324,5 +325,36 @@ test("the formatting guide follows the app the conversation is on", async () => 
 	assert.match(JSON.stringify(requests[0]), /Formatting for Discord/);
 	assert.doesNotMatch(JSON.stringify(requests[0]), /Formatting for the terminal/);
 	assert.match(JSON.stringify(requests[1]), /Formatting for the terminal/);
+	await agent.harness.close(context);
+});
+
+test("the memory pass updates the notes once the conversation goes quiet", async () => {
+	const { faux, models } = setup();
+	const notes = new Notes(join(dir, "notes-7.md"));
+	notes.add("Likes oat milk");
+	let memoryInput = "";
+	faux.setResponses([
+		fauxAssistantMessage("hope it goes smoothly"),
+		(request) => {
+			memoryInput = JSON.stringify(request);
+			return fauxAssistantMessage(
+				'```json\n{"add": ["Sister Maya has surgery Tue 2026-10-06"], "remove": ["Likes oat milk"]}\n```',
+			);
+		},
+	]);
+	const agent = await openAgent(
+		await openNodeSqliteStorage(join(dir, "memory.sqlite")),
+		{ config, models, notes, workers: await fakeWorkers(), memoryQuietMs: 300 },
+		context,
+	);
+	const conversation = await agent.conversationFor("test:dm", context);
+	await (await conversation.submit({ type: "input", content: "[Fri]\nmy sister maya has surgery tuesday" }, context)).wait(context);
+	for (let i = 0; i < 50 && !notes.read().includes("Maya"); i++) await new Promise((resolve) => setTimeout(resolve, 100));
+
+	assert.equal(notes.read(), "- Sister Maya has surgery Tue 2026-10-06\n");
+	assert.match(memoryInput, /them: \[Fri\]\\nmy sister maya has surgery tuesday/);
+	assert.match(memoryInput, /pclaw: hope it goes smoothly/);
+	const { entries } = await conversation.context(context);
+	assert.ok(entries.some((entry) => NotesUpdate.is(entry)));
 	await agent.harness.close(context);
 });
