@@ -241,3 +241,88 @@ test("delegate runs a worker, its report comes back, and message_worker reuses i
 	await delivery.stop();
 	await agent.harness.close(context);
 });
+
+test("a worker cut off by a restart resumes its session instead of reporting failure", async () => {
+	const file = join(dir, "resume.sqlite");
+	const log = join(dir, "resume-calls.log");
+	const command = join(dir, "slow-pi.sh");
+	// Logs each message; the first run takes long enough to be interrupted.
+	await writeFile(
+		command,
+		`#!/bin/sh
+for last; do :; done
+echo "$last" | tr '\\n' ' ' >> "${log}"; echo >> "${log}"
+case "$last" in *restarted*) echo "resumed and finished";; *) sleep 30; echo "first run finished";; esac
+`,
+	);
+	await chmod(command, 0o755);
+	const workers = { ...(await fakeWorkers()), command };
+	const notes = new Notes(join(dir, "notes-5.md"));
+
+	{
+		const { faux, models } = setup();
+		faux.setResponses([
+			fauxAssistantMessage(fauxToolCall("delegate", { name: "slow", brief: "take your time" }), { stopReason: "toolUse" }),
+			fauxAssistantMessage("on it"),
+		]);
+		const agent = await openAgent(await openNodeSqliteStorage(file), { config, models, notes, workers }, context);
+		const conversation = await agent.conversationFor("test:dm", context);
+		const { outbox, until } = inbox();
+		const delivery = await deliver(agent.harness, conversation.id, outbox, context);
+		await conversation.submit({ type: "input", content: "do the slow thing" }, context);
+		await until(1);
+		// Let the worker start, then shut down mid-run like a service restart.
+		for (let i = 0; i < 50 && !(await readFile(log, "utf8").catch(() => "")).includes("take your time"); i++) {
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		}
+		await delivery.stop();
+		await agent.harness.close(context);
+	}
+
+	{
+		const { faux, models } = setup();
+		const reports: string[] = [];
+		faux.setResponses([
+			(request) => {
+				reports.push(JSON.stringify(request.messages.at(-1)));
+				return fauxAssistantMessage("all done");
+			},
+		]);
+		const agent = await openAgent(await openNodeSqliteStorage(file), { config, models, notes, workers }, context);
+		const conversation = await agent.conversationFor("test:dm", context);
+		const { sent, outbox, until } = inbox();
+		const delivery = await deliver(agent.harness, conversation.id, outbox, context);
+		await until(1, 15_000);
+		assert.deepEqual(sent, ["all done"]);
+		assert.match(reports[0]!, /status=\\"done\\"/);
+		assert.match(reports[0]!, /resumed and finished/);
+		const calls = (await readFile(log, "utf8")).trim().split("\n");
+		assert.equal(calls.length, 2);
+		assert.match(calls[1]!, /pclaw restarted while you were working/);
+		await delivery.stop();
+		await agent.harness.close(context);
+	}
+});
+
+test("the formatting guide follows the app the conversation is on", async () => {
+	const { faux, models } = setup();
+	const requests: ModelContext[] = [];
+	const record = (request: ModelContext) => {
+		requests.push(request);
+		return fauxAssistantMessage("hi");
+	};
+	faux.setResponses([record, record]);
+	const agent = await openAgent(
+		await openNodeSqliteStorage(join(dir, "formatting.sqlite")),
+		{ config, models, notes: new Notes(join(dir, "notes-6.md")), workers: await fakeWorkers() },
+		context,
+	);
+	for (const address of ["discord:dm:1", "terminal"]) {
+		const conversation = await agent.conversationFor(address, context);
+		await (await conversation.submit({ type: "input", content: "hey" }, context)).wait(context);
+	}
+	assert.match(JSON.stringify(requests[0]), /Formatting for Discord/);
+	assert.doesNotMatch(JSON.stringify(requests[0]), /Formatting for the terminal/);
+	assert.match(JSON.stringify(requests[1]), /Formatting for the terminal/);
+	await agent.harness.close(context);
+});

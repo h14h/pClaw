@@ -94,7 +94,11 @@ export function runWorker(options: WorkerOptions, sessionId: string, message: st
 		child.on("close", (code) => {
 			if (signal?.aborted || timeout.aborted) return;
 			if (code === 0) resolve({ ok: true, output: clip(stdout.trim()) || "(the worker finished without saying anything)" });
-			else resolve({ ok: false, output: clip(`exit ${code}\n${stderr.trim() || stdout.trim()}`) });
+			else {
+				// pi prints startup warnings to stderr; they're noise in a failure report.
+				const errors = stderr.split("\n").filter((line) => line.trim() !== "" && !line.startsWith("Warning:")).join("\n");
+				resolve({ ok: false, output: clip(`exit ${code}\n${errors || stdout.trim()}`) });
+			}
 		});
 	});
 }

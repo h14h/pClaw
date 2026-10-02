@@ -1,4 +1,4 @@
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 /**
@@ -29,4 +29,14 @@ export function writePrompt(name: PromptName, text: string): void {
 	const temp = `${file}.${process.pid}.tmp`;
 	writeFileSync(temp, text.endsWith("\n") ? text : `${text}\n`);
 	renameSync(temp, file);
+}
+
+/**
+ * How to format messages for one app: src/prompts/formatting/<channel>.md. Picked by where the conversation lives, so
+ * Telegram or WhatsApp get their own file when they're added.
+ */
+export function readFormatting(channel: string): string | undefined {
+	if (!/^[a-z0-9-]+$/.test(channel)) return undefined;
+	const file = fileURLToPath(new URL(`./prompts/formatting/${channel}.md`, import.meta.url));
+	return existsSync(file) ? readFileSync(file, "utf8").trim() : undefined;
 }

@@ -67,7 +67,7 @@ Two models, split the way [exe.dev's "run fewer agents"](https://blog.exe.dev/et
 
 pclaw runs on [Pi Durable](https://earendil.com/posts/pi-durable/), a harness that writes every message, model turn, and tool call to SQLite before acting on it. If the process dies mid-reply, it picks up where it stopped. Follow-ups and worker runs are durable tasks; a worker cut off by a restart resumes its pi session.
 
-- `src/prompts/front.md` is the front model's system prompt: how pclaw talks (built from real Instinct conversations) and how it works. `src/prompts/worker.md` is added to pi's default prompt for every worker. Both are read on every request, so edits apply right away; the dashboard's settings page edits them too.
+- `src/prompts/front.md` is the front model's system prompt: how pclaw talks (built from real Instinct conversations) and how it works. `src/prompts/worker.md` is added to pi's default prompt for every worker. Both are read on every request, so edits apply right away; the dashboard's settings page edits them too. `src/prompts/formatting/<app>.md` says what text formatting renders in each app (Discord, the terminal); the front model gets the one for the app the conversation is on.
 - `src/extensions/` holds the tools, one extension each: notes, follow-ups, workers.
 - `src/channels/` connects conversations to Discord and the terminal.
 - `src/delivery.ts` sends replies out in order and remembers what it has sent.

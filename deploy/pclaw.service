@@ -17,6 +17,9 @@ ExecStart=%h/.local/share/mise/shims/node src/main.ts start
 Restart=always
 RestartSec=5
 KillSignal=SIGTERM
+# Signal only pclaw on stop. It pauses running pi workers itself so they resume after the restart; the default
+# (signal the whole group) kills them first and they report as failed.
+KillMode=mixed
 TimeoutStopSec=30
 
 [Install]

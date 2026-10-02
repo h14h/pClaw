@@ -5,7 +5,6 @@ import {
 	type Conversation,
 	type ConversationId,
 	createRegistry,
-	defineDoc,
 	Harness,
 	type Storage,
 } from "@earendil-works/pi-durable";
@@ -13,18 +12,8 @@ import { type Config, paths } from "./config.ts";
 import { followUpsExtension } from "./extensions/follow-ups.ts";
 import { type Notes, notesExtension } from "./extensions/notes.ts";
 import { soulExtension } from "./extensions/soul.ts";
+import { Routes } from "./routes.ts";
 import { prepareWorkspace, type WorkerOptions, workerOptions, workersExtension } from "./extensions/workers.ts";
-
-/**
- * Which conversation answers which address, e.g. "discord:dm:<user id>". One DM is one conversation today; group
- * chats and per-channel contexts later get their own addresses and conversations.
- */
-export const Routes = defineDoc<{ conversations: Record<string, ConversationId> }>({
-	kind: "pclaw.routes",
-	version: 1,
-	scope: "session",
-	initial: () => ({ conversations: {} }),
-});
 
 export type Agent = {
 	harness: Harness;
