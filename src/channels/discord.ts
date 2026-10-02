@@ -1,7 +1,22 @@
 import type { Context } from "@earendil-works/chord";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
-import type { UserInput } from "@earendil-works/pi-durable";
-import { Client, Events, GatewayIntentBits, type Message, Partials } from "discord.js";
+import {
+	type Conversation,
+	type ConversationId,
+	defineDoc,
+	type EntryId,
+	type UserInput,
+} from "@earendil-works/pi-durable";
+import {
+	type AnyThreadChannel,
+	ChannelType,
+	Client,
+	Events,
+	GatewayIntentBits,
+	type Message,
+	Partials,
+	type SendableChannels,
+} from "discord.js";
 import type { Agent } from "../agent.ts";
 import { type Config, saveConfig } from "../config.ts";
 import { deliver, type Outbox } from "../delivery.ts";
@@ -10,8 +25,29 @@ import { stamp } from "../time.ts";
 const MAX_MESSAGE = 2000;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const TYPING_REFRESH_MS = 8_000;
+const QUOTE_LIMIT = 800;
 
-const dmAddress = (userId: string) => `discord:dm:${userId}`;
+/**
+ * How pclaw maps Discord onto Pi Durable conversations:
+ *   discord:dm:<user>        a DM: one long conversation
+ *   discord:channel:<id>     a server channel on the allowlist: one long conversation
+ *   discord:thread:<id>      a thread in such a channel: a fork of the channel's conversation at the message the thread
+ *                            started from, so it knows everything up to that point and then goes its own way
+ * A reply to an earlier message quotes it into the new message, which brings it back even after it's been summarized.
+ */
+const address = {
+	dm: (userId: string) => `discord:dm:${userId}`,
+	channel: (channelId: string) => `discord:channel:${channelId}`,
+	thread: (threadId: string) => `discord:thread:${threadId}`,
+};
+
+/** Which transcript entry each message pclaw sent came from, so a thread started on it can fork at that point. */
+const SentMessages = defineDoc<{ messages: Record<string, { conversation: ConversationId; entry: EntryId }> }>({
+	kind: "pclaw.discord-sent",
+	version: 1,
+	scope: "session",
+	initial: () => ({ messages: {} }),
+});
 
 /** Split text into Discord-sized messages, preferring paragraph, then line, then word breaks. */
 export function splitMessage(text: string, limit = MAX_MESSAGE): string[] {
@@ -30,7 +66,9 @@ export function splitMessage(text: string, limit = MAX_MESSAGE): string[] {
 	return chunks;
 }
 
-async function toInput(message: Message, timeZone: string): Promise<UserInput> {
+const clip = (text: string) => (text.length > QUOTE_LIMIT ? `${text.slice(0, QUOTE_LIMIT)}…` : text);
+
+async function toInput(message: Message, timeZone: string, context: string[]): Promise<UserInput> {
 	const parts: (TextContent | ImageContent)[] = [];
 	const notes: string[] = [];
 	for (const attachment of message.attachments.values()) {
@@ -45,66 +83,147 @@ async function toInput(message: Message, timeZone: string): Promise<UserInput> {
 		}
 		notes.push(`[attached ${attachment.name} (${type || "unknown type"}, ${attachment.size} bytes), which I can't open yet]`);
 	}
-	const text = [`[${stamp(message.createdTimestamp, timeZone)}]`, message.content, ...notes].filter(Boolean).join("\n");
+	const text = [`[${stamp(message.createdTimestamp, timeZone)}]`, ...context, message.content, ...notes].filter(Boolean).join("\n");
 	return parts.length === 0 ? text : [{ type: "text", text }, ...parts];
 }
 
+/** "[replying to your message from Fri 2026-10-02 13:10: "..."]" when the message is a reply. */
+async function replyContext(message: Message, botId: string, timeZone: string): Promise<string[]> {
+	if (message.reference?.messageId === undefined) return [];
+	const quoted = await message.fetchReference().catch(() => undefined);
+	if (quoted === undefined || quoted.content.trim() === "") return [];
+	const whose = quoted.author.id === botId ? "your" : "their own";
+	return [`[replying to ${whose} message from ${stamp(quoted.createdTimestamp, timeZone)}: "${clip(quoted.content.trim())}"]`];
+}
+
 /**
- * pclaw on Discord. Answers DMs from its owner only; the first person to DM it becomes the owner when none is
- * configured. Guild channels are ignored for now.
+ * pclaw on Discord. Answers only its owner: in DMs, and in the server channels listed in `discordChannels` and their
+ * threads. The first person to DM it becomes the owner when none is configured.
  */
 export async function startDiscord(agent: Agent, config: Config, context: Context): Promise<{ stop(): Promise<void> }> {
 	if (config.discordToken === undefined) throw new Error("No Discord token. Run `pnpm setup`.");
 	let ownerId = config.discordOwnerId;
+	const channels = new Set(config.discordChannels);
 
 	const client = new Client({
-		intents: [GatewayIntentBits.Guilds, GatewayIntentBits.DirectMessages],
+		intents: [
+			GatewayIntentBits.Guilds,
+			GatewayIntentBits.DirectMessages,
+			// Reading server messages needs the privileged Message Content intent, so only ask when channels are configured.
+			...(channels.size > 0 ? [GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] : []),
+		],
 		// DM channels are not cached until used; without this, the first DM after a restart is dropped.
 		partials: [Partials.Channel],
 	});
 
 	const deliveries = new Map<string, { stop(): Promise<void> }>();
 
-	function dmOutbox(userId: string): Outbox {
+	async function target(addr: string): Promise<SendableChannels | undefined> {
+		const [, kind, id] = addr.split(":");
+		if (kind === "dm") return (await client.users.fetch(id!)).createDM();
+		const channel = await client.channels.fetch(id!).catch(() => null);
+		return channel?.isSendable() ? channel : undefined;
+	}
+
+	function outbox(addr: string, conversation: Conversation): Outbox {
 		let typing: NodeJS.Timeout | undefined;
-		const channel = async () => (await client.users.fetch(userId)).createDM();
 		return {
-			async send(text) {
-				const dm = await channel();
-				for (const chunk of splitMessage(text)) await dm.send(chunk);
+			async send(text, entry) {
+				const channel = await target(addr);
+				if (channel === undefined) throw new Error(`Can't reach ${addr}`);
+				const sent: string[] = [];
+				for (const chunk of splitMessage(text)) sent.push((await channel.send(chunk)).id);
+				await conversation.commit(async (tx) => {
+					const doc = await tx.doc(SentMessages);
+					for (const id of sent) doc.messages[id] = { conversation: conversation.id, entry };
+				}, context);
 			},
 			working(busy) {
 				clearInterval(typing);
 				typing = undefined;
 				if (!busy) return;
-				const ping = () => void channel().then((dm) => dm.sendTyping()).catch(() => undefined);
+				const ping = () => void target(addr).then((channel) => channel?.sendTyping()).catch(() => undefined);
 				ping();
 				typing = setInterval(ping, TYPING_REFRESH_MS);
 			},
 		};
 	}
 
-	async function attach(userId: string) {
-		const address = dmAddress(userId);
-		if (deliveries.has(address)) return;
-		const conversation = await agent.conversationFor(address, context);
-		deliveries.set(address, await deliver(agent.harness, conversation.id, dmOutbox(userId), context));
+	async function attach(addr: string, conversation: Conversation) {
+		if (deliveries.has(addr)) return;
+		deliveries.set(addr, { stop: async () => undefined });
+		deliveries.set(addr, await deliver(agent.harness, conversation.id, outbox(addr, conversation), context));
+	}
+
+	/** Where a thread forks from its channel: the entry behind the message it started on, if that's still visible. */
+	async function forkPoint(thread: AnyThreadChannel, parent: Conversation): Promise<{ at?: EntryId; quote?: string }> {
+		const visible = (await parent.context(context)).entries;
+		const isVisible = (id: EntryId | undefined) => id !== undefined && visible.some((entry) => entry.id === id);
+		const sent = (await agent.harness.snapshot(SentMessages, context))?.messages[thread.id];
+		const asked = await parent.commit((tx) => tx.submissionByRequest(parent.id, `discord:${thread.id}`), context);
+		const candidate =
+			sent?.conversation === parent.id ? sent.entry : asked !== undefined && "answer" in asked && asked.answer !== undefined ? asked.answer : asked?.entry;
+		if (isVisible(candidate)) return { at: candidate! };
+		// Started on a message pclaw can't place (too old, or from before pclaw): fork at the latest and quote it.
+		const starter = await thread.fetchStarterMessage().catch(() => null);
+		const latest = visible.at(-1)?.id;
+		return {
+			...(latest === undefined ? {} : { at: latest }),
+			...(starter?.content ? { quote: `[this thread started from a message from ${stamp(starter.createdTimestamp, config.timeZone)}: "${clip(starter.content)}"]` } : {}),
+		};
+	}
+
+	async function conversationFor(message: Message): Promise<{ addr: string; conversation: Conversation; extra: string[] } | undefined> {
+		const channel = message.channel;
+		if (channel.isDMBased()) {
+			const addr = address.dm(message.author.id);
+			const conversation = await agent.conversationFor(addr, context);
+			await agent.describe(conversation.id, { label: "Discord DM" }, context);
+			return { addr, conversation, extra: [] };
+		}
+		if (channel.isThread() && channel.parentId !== null && channels.has(channel.parentId)) {
+			const addr = address.thread(channel.id);
+			const known = (await agent.addresses(context))[addr];
+			if (known !== undefined) return { addr, conversation: (await agent.harness.conversation(known, context))!, extra: [] };
+			const parent = await agent.conversationFor(address.channel(channel.parentId), context);
+			const { at, quote } = await forkPoint(channel, parent);
+			const conversation =
+				at === undefined
+					? await agent.conversationFor(addr, context)
+					: await agent.forkFor(addr, parent, at, { label: channel.name }, context);
+			await agent.describe(conversation.id, { label: channel.name, parent: parent.id }, context);
+			return { addr, conversation, extra: quote === undefined ? [] : [quote] };
+		}
+		if (channel.type === ChannelType.GuildText && channels.has(channel.id)) {
+			const addr = address.channel(channel.id);
+			const conversation = await agent.conversationFor(addr, context);
+			await agent.describe(conversation.id, { label: `#${channel.name}` }, context);
+			return { addr, conversation, extra: [] };
+		}
+		return undefined;
 	}
 
 	client.on(Events.MessageCreate, async (message) => {
 		try {
-			if (message.author.bot || !message.channel.isDMBased()) return;
-			if (ownerId === undefined) {
+			if (message.author.bot) return;
+			if (ownerId === undefined && message.channel.isDMBased()) {
 				ownerId = message.author.id;
 				saveConfig({ discordOwnerId: ownerId });
 				console.log(`[pclaw] paired with ${message.author.tag} (${ownerId})`);
 			}
 			if (message.author.id !== ownerId) return;
-			await attach(ownerId);
-			const conversation = await agent.conversationFor(dmAddress(ownerId), context);
+			const route = await conversationFor(message);
+			if (route === undefined) return;
+			await attach(route.addr, route.conversation);
+			const extra = [...route.extra, ...(await replyContext(message, client.user!.id, config.timeZone))];
 			// Messages sent while pclaw is working join the current run at its next step, like a person cutting in.
-			await conversation.submit(
-				{ type: "input", content: await toInput(message, config.timeZone), whenBusy: "steer", requestId: `discord:${message.id}` },
+			await route.conversation.submit(
+				{
+					type: "input",
+					content: await toInput(message, config.timeZone, extra),
+					whenBusy: "steer",
+					requestId: `discord:${message.id}`,
+				},
 				context,
 			);
 		} catch (error) {
@@ -120,8 +239,13 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 					`  https://discord.com/oauth2/authorize?client_id=${ready.application.id}&scope=bot&permissions=0`,
 			);
 		}
-		if (ownerId !== undefined) await attach(ownerId);
-		else console.log("[pclaw] Waiting for a DM. The first person to message it becomes its owner.");
+		// Reattach every Discord conversation, so replies written while pclaw was down go out now.
+		for (const [addr, id] of Object.entries(await agent.addresses(context))) {
+			if (!addr.startsWith("discord:")) continue;
+			const conversation = await agent.harness.conversation(id, context);
+			if (conversation !== undefined) await attach(addr, conversation).catch((error: unknown) => console.error(`[pclaw] ${addr}`, error));
+		}
+		if (ownerId === undefined) console.log("[pclaw] Waiting for a DM. The first person to message it becomes its owner.");
 	});
 
 	await client.login(config.discordToken);

@@ -13,7 +13,8 @@ import {
 
 /** Where a conversation's replies go: a Discord DM, a terminal. */
 export type Outbox = {
-	send(text: string): Promise<void>;
+	/** `entry` is the transcript entry the text came from, so a channel can map its messages back to it. */
+	send(text: string, entry: EntryId): Promise<void>;
 	/** Called with true when the agent starts working on something and false when it's done. */
 	working(busy: boolean): void;
 };
@@ -93,10 +94,11 @@ export async function deliver(
 	let queue = Promise.resolve();
 	let lastQueued: EntryId | undefined;
 	const collector = replyCollector();
-	const send = async (text: string | undefined) => {
-		if (text === undefined) return;
+	let heldEntry: EntryId | undefined;
+	const send = async (text: string | undefined, entry: EntryId | undefined) => {
+		if (text === undefined || entry === undefined) return;
 		try {
-			await outbox.send(text);
+			await outbox.send(text, entry);
 		} catch (error) {
 			console.error("[pclaw] delivery failed", error);
 		}
@@ -105,7 +107,8 @@ export async function deliver(
 		lastQueued = entry.id;
 		queue = queue.then(async () => {
 			const reply = readReply(entry);
-			await send(reply === undefined ? undefined : collector.take(reply));
+			if (reply?.kind === "interim" && reply.text !== "") heldEntry = entry.id;
+			await send(reply === undefined ? undefined : collector.take(reply), reply?.kind === "final" && reply.text === undefined ? heldEntry : entry.id);
 			await conversation.commit(async (tx) => {
 				(await tx.doc(Delivered, conversationId)).last = entry.id;
 			}, context);
@@ -113,7 +116,7 @@ export async function deliver(
 	};
 	/** A run ended (or a new one began) with text still held: send it. */
 	const flushInOrder = () => {
-		queue = queue.then(() => send(collector.flush()));
+		queue = queue.then(() => send(collector.flush(), heldEntry));
 	};
 
 	const stream = await watchEvents(harness, conversationId, context);

@@ -8,7 +8,9 @@ It's early. Today it can talk, remember, follow up on its own, and hand real wor
 
 ## What it does now
 
-- Talks to you in Discord DMs and answers only you. The first person to DM it becomes its owner.
+- Talks to you in Discord DMs, and in server channels you list in `discordChannels`. It answers only you; the first person to DM it becomes its owner.
+- Threads in those channels branch the conversation: a thread starts from the channel's history up to the message it was started on, then goes its own way. Replying to an older message quotes it back into the conversation.
+- Keeps context small: once a conversation's prompt passes 60K tokens, older messages are summarized and the last ~16K tokens stay word for word. A `recall` tool searches everything said before, summarized or not.
 - Remembers things about you in `~/.pclaw/notes.md`. Once a conversation has been quiet for 20 minutes, a background pass reads what was said and updates the notes. You can edit the file and it sees the change on the next message.
 - Schedules its own follow-ups ("how did the interview go?") and reminders you ask for. They survive restarts.
 - Hands research, lookups, and anything with files or many steps to a worker, then tells you what came back.
@@ -54,6 +56,9 @@ To try it without Discord, `pnpm chat` opens a conversation in the terminal. It 
 | `workerCommand` | | `pi` |
 | `workerTimeoutMinutes` | | `30` |
 | `memoryQuietMinutes` | | `20` |
+| `summarizeAtTokens` | | `60000` |
+| `keepRecentTokens` | | `16000` |
+| `discordChannels` | | `[]` (DMs only) |
 | `dashboardPort` | `PCLAW_DASHBOARD_PORT` | `7421` |
 | `authFile` | `PI_CODING_AGENT_DIR` moves it | `~/.pi/agent/auth.json` |
 | `timeZone` | `PCLAW_TZ` | the machine's time zone |

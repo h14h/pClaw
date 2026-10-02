@@ -7,6 +7,7 @@ import { splitMessage } from "./channels/discord.ts";
 import { replyCollector } from "./delivery.ts";
 import { nextOccurrence } from "./extensions/follow-ups.ts";
 import { Notes } from "./extensions/notes.ts";
+import { search } from "./extensions/recall.ts";
 import { stamp, utcOffset } from "./time.ts";
 
 test("stamp gives weekday, local time, zone, and offset", () => {
@@ -61,4 +62,18 @@ test("one run becomes one message: the answer wins over text said around tool ca
 	collect({ kind: "interim", text: "on it, back in a few" });
 	assert.equal(flush(), "on it, back in a few");
 	assert.equal(flush(), undefined);
+});
+
+test("recall ranks messages by matching terms, then recency", () => {
+	const messages = [
+		{ who: "them" as const, at: 1, text: "I want a quiet case for a home NAS, 4-6 drives" },
+		{ who: "pclaw" as const, at: 2, text: "Jonsbo N3 is the quiet NAS case pick, walnut is the N4" },
+		{ who: "them" as const, at: 3, text: "my ankle hurts after sitting" },
+	];
+	const hits = search(messages, "walnut NAS case");
+	assert.deepEqual(
+		hits.map((hit) => hit.at),
+		[2, 1],
+	);
+	assert.deepEqual(search(messages, "the and of"), []);
 });

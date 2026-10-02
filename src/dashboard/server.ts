@@ -16,6 +16,7 @@ import type { Models } from "@earendil-works/pi-ai/models";
 import type { Agent } from "../agent.ts";
 import type { Config } from "../config.ts";
 import { FollowUps } from "../extensions/follow-ups.ts";
+import { ConversationInfo, Routes } from "../routes.ts";
 import type { Notes } from "../extensions/notes.ts";
 import { type WorkerOptions, Workers } from "../extensions/workers.ts";
 import { prompts } from "../prompts.ts";
@@ -44,7 +45,7 @@ const TYPES: Record<string, string> = {
 	".woff2": "font/woff2",
 };
 
-function label(address: string): string {
+function fallbackLabel(address: string): string {
 	if (address.startsWith("discord:dm:")) return "Discord DM";
 	if (address === "terminal") return "Terminal";
 	return address;
@@ -136,14 +137,24 @@ export async function startDashboard(
 			.sort((a, b) => b.updatedAt - a.updatedAt);
 	};
 
+	async function describe(address: string, id: ConversationId): Promise<{ label: string; parentId?: string; forkedAt?: string }> {
+		const info = (await harness.snapshot(ConversationInfo, context))?.conversations[String(id)];
+		return {
+			label: info?.label ?? fallbackLabel(address),
+			...(info?.parent === undefined ? {} : { parentId: String(info.parent) }),
+			...(info?.forkedAt === undefined ? {} : { forkedAt: String(info.forkedAt) }),
+		};
+	}
+
 	async function overview(): Promise<Overview> {
 		const list: ConversationSummary[] = [];
 		for (const [address, id] of await conversations()) {
 			const live = await harness.snapshot(LiveDoc, id, context);
+			const { forkedAt: _forkedAt, ...described } = await describe(address, id);
 			list.push({
 				id: String(id),
 				address,
-				label: label(address),
+				...described,
 				busy: live?.run !== undefined,
 				workersRunning: (await workerSummaries(id)).filter((worker) => worker.status === "working").length,
 			});
@@ -167,7 +178,7 @@ export async function startDashboard(
 		return {
 			id: idText,
 			address,
-			label: label(address),
+			...(await describe(address, id)),
 			live: liveStatus(live),
 			timeline: buildTimeline(view.entries, live?.run === undefined),
 			workers: await workerSummaries(id),
@@ -302,6 +313,12 @@ export async function startDashboard(
 	});
 
 	await conversations();
+	// New conversations (a thread's first message) show up in the overview at once.
+	const routesState = await harness.documentState(Routes, context);
+	const infoState = await harness.documentState(ConversationInfo, context);
+	const conversationsChanged = async () => emit({ scope: "overview" });
+	if (routesState !== undefined) cleanups.push(routesState.subscribe(conversationsChanged));
+	if (infoState !== undefined) cleanups.push(infoState.subscribe(conversationsChanged));
 	await new Promise<void>((resolve, reject) => {
 		server.once("error", reject);
 		server.listen(options.port, "127.0.0.1", () => resolve());

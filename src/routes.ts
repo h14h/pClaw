@@ -1,5 +1,5 @@
 import type { Context } from "@earendil-works/chord";
-import { type ConversationId, defineDoc, type DocumentReader } from "@earendil-works/pi-durable";
+import { type ConversationId, defineDoc, type DocumentReader, type EntryId } from "@earendil-works/pi-durable";
 
 /**
  * Which conversation answers which address, e.g. "discord:dm:<user id>". One DM is one conversation today; group
@@ -18,3 +18,13 @@ export async function channelOf(read: DocumentReader, conversationId: Conversati
 	const address = Object.keys(routes).find((key) => routes[key] === conversationId);
 	return address?.split(":")[0];
 }
+
+/** How a conversation shows up in the dashboard, and where it forked from. Set by the channel that created it. */
+export const ConversationInfo = defineDoc<{
+	conversations: Record<string, { label: string; parent?: ConversationId; forkedAt?: EntryId }>;
+}>({
+	kind: "pclaw.conversation-info",
+	version: 1,
+	scope: "session",
+	initial: () => ({ conversations: {} }),
+});

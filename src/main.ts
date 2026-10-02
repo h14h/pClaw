@@ -10,6 +10,7 @@ import { openAgent } from "./agent.ts";
 import { startDiscord } from "./channels/discord.ts";
 import { chatInTerminal } from "./channels/terminal.ts";
 import { ensureHome, loadConfig, paths, saveConfig } from "./config.ts";
+import { startContextKeeper } from "./context-keeper.ts";
 import { FileCredentialStore } from "./credentials.ts";
 import { startDashboard } from "./dashboard/server.ts";
 import { Notes } from "./extensions/notes.ts";
@@ -104,12 +105,14 @@ async function start(): Promise<void> {
 	const agent = await openAgent(await openNodeSqliteStorage(paths.db), { config, models, notes, workers }, context);
 	const discord = await startDiscord(agent, config, context);
 	const dashboard = await startDashboard({ agent, config, models, notes, workers, port: config.dashboardPort }, context);
+	const contextKeeper = startContextKeeper(agent, config.summarizeAtTokens, context);
 
 	let stopping = false;
 	const stop = async () => {
 		if (stopping) return;
 		stopping = true;
 		console.log("[pclaw] stopping");
+		contextKeeper.stop();
 		await discord.stop();
 		await dashboard.stop();
 		await agent.harness.close(context);

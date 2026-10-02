@@ -20,6 +20,8 @@ export type Config = {
 	discordToken?: string;
 	/** The one Discord user pclaw answers. Set by pairing on the first DM when absent. */
 	discordOwnerId?: string;
+	/** Server channels pclaw answers in (besides DMs). Threads in them become forks of the channel's conversation. */
+	discordChannels: string[];
 	/** The model you talk to: fast, tuned for conversation, hands real work to workers. */
 	provider: string;
 	model: string;
@@ -37,11 +39,16 @@ export type Config = {
 	dashboardPort: number;
 	/** How long a conversation stays quiet before the memory pass updates the notes from it. */
 	memoryQuietMinutes: number;
+	/** Summarize older messages once a request's prompt passes this many tokens. */
+	summarizeAtTokens: number;
+	/** Roughly how many tokens of the most recent conversation stay word for word after a summary. */
+	keepRecentTokens: number;
 };
 
 type StoredConfig = Partial<Config>;
 
 export const defaults: Config = {
+	discordChannels: [],
 	provider: "xai",
 	model: "grok-4.5",
 	thinkingLevel: "medium",
@@ -54,6 +61,8 @@ export const defaults: Config = {
 	workerTimeoutMinutes: 30,
 	dashboardPort: 7421,
 	memoryQuietMinutes: 20,
+	summarizeAtTokens: 60_000,
+	keepRecentTokens: 16_000,
 };
 
 function readStored(): StoredConfig {

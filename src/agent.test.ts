@@ -358,3 +358,33 @@ test("the memory pass updates the notes once the conversation goes quiet", async
 	assert.ok(entries.some((entry) => NotesUpdate.is(entry)));
 	await agent.harness.close(context);
 });
+
+test("a thread forks its channel's conversation at the message it started on", async () => {
+	const { faux, models } = setup();
+	const requests: ModelContext[] = [];
+	const record = (text: string) => (request: ModelContext) => {
+		requests.push(request);
+		return fauxAssistantMessage(text);
+	};
+	faux.setResponses([record("walnut N4, $135"), record("ankle stuff"), record("the N4 fits 6 drives")]);
+	const agent = await openAgent(
+		await openNodeSqliteStorage(join(dir, "fork.sqlite")),
+		{ config, models, notes: new Notes(join(dir, "notes-8.md")), workers: await fakeWorkers() },
+		context,
+	);
+	const channel = await agent.conversationFor("discord:channel:1", context);
+	const nas = await (await channel.submit({ type: "input", content: "which NAS case?" }, context)).wait(context);
+	const forkAt = nas.status === "done" && nas.type === "input" ? nas.answer : undefined;
+	assert.ok(forkAt !== undefined);
+	await (await channel.submit({ type: "input", content: "different topic: my ankle" }, context)).wait(context);
+
+	const thread = await agent.forkFor("discord:thread:9", channel, forkAt, { label: "nas build" }, context);
+	await (await thread.submit({ type: "input", content: "how many drives does it fit?" }, context)).wait(context);
+
+	const seen = JSON.stringify(requests[2]);
+	assert.match(seen, /which NAS case\?/);
+	assert.match(seen, /walnut N4, \$135/);
+	assert.doesNotMatch(seen, /my ankle/);
+	assert.equal((await agent.addresses(context))["discord:thread:9"], thread.id);
+	await agent.harness.close(context);
+});

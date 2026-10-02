@@ -7,6 +7,7 @@ Decide what from this stretch is worth knowing weeks or months from now:
 - ongoing projects, plans, purchases, and decisions, with dates when timing matters
 - health, home, work, and money facts they'd expect a good assistant to remember
 - facts about their setup (devices, accounts, where things run)
+- open commitments: things pclaw offered or agreed to do, and decisions or tasks they said they'd get to, with when. Remove them once they're done or dropped.
 
 Skip small talk, one-off questions they won't come back to, anything already in the notes, and anything they asked not to keep. When a note is now wrong or out of date, remove it, and add the corrected version if there is one.
 

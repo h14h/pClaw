@@ -20,11 +20,14 @@ export const prompts = {
 
 export type PromptName = keyof typeof prompts;
 
-/** The memory pass's instructions. Not editable from the dashboard yet. */
-const memoryPrompt = fileURLToPath(new URL("./prompts/memory.md", import.meta.url));
+/** Instructions for internal passes: the notes pass and summarizing. Not editable from the dashboard yet. */
+const internal = {
+	memory: fileURLToPath(new URL("./prompts/memory.md", import.meta.url)),
+	compaction: fileURLToPath(new URL("./prompts/compaction.md", import.meta.url)),
+};
 
-export function readPrompt(name: PromptName | "memory"): string {
-	return readFileSync(name === "memory" ? memoryPrompt : prompts[name].file, "utf8");
+export function readPrompt(name: PromptName | keyof typeof internal): string {
+	return readFileSync(name in internal ? internal[name as keyof typeof internal] : prompts[name as PromptName].file, "utf8");
 }
 
 export function writePrompt(name: PromptName, text: string): void {

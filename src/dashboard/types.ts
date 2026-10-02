@@ -27,8 +27,10 @@ export type ConversationSummary = {
 	id: string;
 	/** "discord:dm:<user id>", "terminal". */
 	address: string;
-	/** Human label: "Discord DM", "Terminal". */
+	/** Human label: "Discord DM", "#general", a thread's name, "Terminal". */
 	label: string;
+	/** For a thread: the conversation it forked from, at the message the thread started on. */
+	parentId?: string;
 	busy: boolean;
 	workersRunning: number;
 };
@@ -37,6 +39,9 @@ export type ConversationView = {
 	id: string;
 	address: string;
 	label: string;
+	parentId?: string;
+	/** For a thread: id of the last timeline item it shares with its parent. Its own messages start after it. */
+	forkedAt?: string;
 	/** What the front model is doing right now. */
 	live: LiveStatus;
 	/** Oldest first. The active transcript; anything compacted away is gone from here. */

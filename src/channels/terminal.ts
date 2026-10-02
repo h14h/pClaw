@@ -12,7 +12,7 @@ export async function chatInTerminal(agent: Agent, config: Config, context: Cont
 		agent.harness,
 		conversation.id,
 		{
-			async send(text) {
+			async send(text, _entry) {
 				process.stdout.write(`\npclaw: ${text}\n\n> `);
 			},
 			working() {},
