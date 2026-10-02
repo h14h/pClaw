@@ -95,6 +95,12 @@ export async function startDashboard(
 		const conversation = await harness.conversation(id, context);
 		if (conversation === undefined) return undefined;
 		const view = await conversation.viewState(context);
+		// documentState() only attaches to documents that exist; create empty ones so later changes are seen.
+		await conversation.commit(async (tx) => {
+			await tx.doc(Workers, id);
+			await tx.doc(FollowUps, id);
+			await tx.doc(Reactions, id);
+		}, context);
 		const workerDoc = await harness.documentState(Workers, id, context);
 		const followUpDoc = await harness.documentState(FollowUps, id, context);
 		const reactionsDoc = await harness.documentState(Reactions, id, context);

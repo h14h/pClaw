@@ -27,6 +27,7 @@ const MAX_MESSAGE = 2000;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const TYPING_REFRESH_MS = 8_000;
 const QUOTE_LIMIT = 800;
+const RESYNC_ON_ATTACH = 10;
 
 /**
  * How pclaw maps Discord onto Pi Durable conversations:
@@ -159,6 +160,8 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 	 * one sync at a time per conversation, so quick ⏳ -> ✅ changes land in order.
 	 */
 	async function syncReactions(addr: string, conversation: Conversation): Promise<() => void> {
+		// documentState() only attaches to a document that exists, and a conversation has none until its first reaction.
+		await conversation.commit((tx) => tx.doc(Reactions, conversation.id), context);
 		const state = await agent.harness.documentState(Reactions, conversation.id, context);
 		if (state === undefined) return () => undefined;
 		let applied: Record<string, string> | undefined;
@@ -176,8 +179,11 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 		return state.subscribe(async (value) => {
 			const asks = { ...(value?.asks ?? {}) };
 			if (applied === undefined) {
-				applied = asks;
-				return;
+				// On attach, bring the most recent asks up to date (a change may have landed while pclaw was down);
+				// older ones are assumed applied, so a restart doesn't refetch every message ever reacted to.
+				const recent = Object.entries(asks).slice(-RESYNC_ON_ATTACH);
+				applied = Object.fromEntries(Object.entries(asks).slice(0, -RESYNC_ON_ATTACH));
+				for (const [ref, emoji] of recent) applied[ref] = `${emoji}\u0000stale`;
 			}
 			const before = applied;
 			applied = asks;
