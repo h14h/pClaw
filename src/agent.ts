@@ -12,6 +12,7 @@ import {
 import { type Config, paths } from "./config.ts";
 import { followUpsExtension } from "./extensions/follow-ups.ts";
 import { memoryExtension } from "./extensions/memory.ts";
+import { quickSearchExtension } from "./extensions/quick-search.ts";
 import { reactionsExtension } from "./extensions/reactions.ts";
 import { recallExtension } from "./extensions/recall.ts";
 import { type Notes, notesExtension } from "./extensions/notes.ts";
@@ -62,6 +63,7 @@ export async function openAgent(
 	registry.install(memory.extension);
 	registry.install(recallExtension(current, config.timeZone));
 	registry.install(reactionsExtension(current));
+	registry.install(quickSearchExtension());
 
 	let agent = { model: { provider: config.provider, modelId: config.model }, thinkingLevel: config.thinkingLevel };
 	const harness = await Harness.open(

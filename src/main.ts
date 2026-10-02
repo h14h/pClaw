@@ -80,6 +80,12 @@ async function setup(): Promise<void> {
 		console.log(`Workers will use pi ${worker.stdout.trim()} with ${config.workerModel} (${config.workerThinkingLevel}).`);
 	}
 
+	if (config.tavilyApiKey === undefined) {
+		console.log("\nWeb search uses Tavily (free tier at https://app.tavily.com). Paste an API key, or press enter to skip.");
+		const key = await ask("Tavily API key: ");
+		if (key !== "") saveConfig({ tavilyApiKey: key });
+	}
+
 	if (config.discordToken === undefined) {
 		console.log(
 			"\nCreate a Discord bot at https://discord.com/developers/applications:\n" +
@@ -100,6 +106,9 @@ async function start(): Promise<void> {
 		throw new Error(`Not signed in to ${config.provider}, or the sign-in expired. Run \`pnpm setup\`.`);
 	}
 	ensureHome();
+	// Search (src/search.ts) reads the key from the environment, in this process and in the pi workers it starts.
+	if (config.tavilyApiKey !== undefined) process.env.TAVILY_API_KEY = config.tavilyApiKey;
+	else console.log("[pclaw] No Tavily key: quick_search and worker search will fail. Run `pnpm setup`.");
 	const notes = new Notes(paths.notes);
 	const workers = workerOptions(config, paths);
 	const agent = await openAgent(await openNodeSqliteStorage(paths.db), { config, models, notes, workers }, context);
@@ -126,6 +135,7 @@ async function chat(): Promise<void> {
 	const config = loadConfig();
 	const models = createPclawModels();
 	ensureHome();
+	if (config.tavilyApiKey !== undefined) process.env.TAVILY_API_KEY = config.tavilyApiKey;
 	const agent = await openAgent(await openNodeSqliteStorage(paths.chatDb), { config, models, notes: new Notes(paths.notes) }, context);
 	await chatInTerminal(agent, config, context);
 	await agent.harness.close(context);

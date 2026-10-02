@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { Type } from "@earendil-works/pi-ai";
 import { defineDoc, defineExtension, defineTask, defineTool, type Harness, type TaskId } from "@earendil-works/pi-durable";
 import type { Config } from "../config.ts";
@@ -15,7 +16,15 @@ import { currentAsk, FAILED, isEmoji, Reactions, setReaction, WORKING } from "./
  */
 
 type WorkerStatus = "working" | "idle" | "stopped" | "failed";
-type Worker = { sessionId: string; brief: string; status: WorkerStatus; run?: TaskId; startedAt?: number; updatedAt: number };
+type Worker = {
+	sessionId: string;
+	brief: string;
+	depth?: Depth;
+	status: WorkerStatus;
+	run?: TaskId;
+	startedAt?: number;
+	updatedAt: number;
+};
 
 export const Workers = defineDoc<{ workers: Record<string, Worker> }>({
 	kind: "pclaw.workers",
@@ -37,7 +46,13 @@ export type WorkerOptions = {
 	sessionDir: string;
 	/** Appended to pi's default system prompt. */
 	promptFile: string;
+	/** pclaw's pi extension for workers (search, read_page). */
+	toolsFile: string;
+	/** Reasoning for quick jobs; deep jobs use `thinkingLevel`. */
+	quickThinkingLevel: string;
 };
+
+export type Depth = "quick" | "deep";
 
 export function workerOptions(config: Config, paths: { work: string; workerSessions: string }): WorkerOptions {
 	return {
@@ -49,6 +64,8 @@ export function workerOptions(config: Config, paths: { work: string; workerSessi
 		cwd: paths.work,
 		sessionDir: paths.workerSessions,
 		promptFile: prompts.worker.file,
+		toolsFile: fileURLToPath(new URL("../worker-tools.ts", import.meta.url)),
+		quickThinkingLevel: config.workerQuickThinkingLevel,
 	};
 }
 
@@ -62,15 +79,24 @@ export function prepareWorkspace(options: WorkerOptions): void {
 export type WorkerResult = { ok: boolean; output: string };
 
 /** Run one pi turn in the worker's session and return its final answer. Rejects only when `signal` aborts it. */
-export function runWorker(options: WorkerOptions, sessionId: string, message: string, signal?: AbortSignal): Promise<WorkerResult> {
+export function runWorker(
+	options: WorkerOptions,
+	sessionId: string,
+	message: string,
+	signal?: AbortSignal,
+	depth: Depth = "deep",
+): Promise<WorkerResult> {
 	const args = [
 		"-p",
 		"--provider", options.provider,
 		"--model", options.model,
-		"--thinking", options.thinkingLevel,
+		"--thinking", depth === "quick" ? options.quickThinkingLevel : options.thinkingLevel,
 		"--session-dir", options.sessionDir,
 		"--session-id", sessionId,
 		"--append-system-prompt", options.promptFile,
+		// pclaw's own tools, not the owner's personal pi setup: no other extensions, skills, or AGENTS.md files.
+		"--no-extensions", "--extension", options.toolsFile,
+		"--no-skills", "--no-context-files", "--no-prompt-templates", "--no-themes",
 		// Trust project-local files in the workspace without an interactive prompt.
 		"--approve",
 		// pi reads a leading @ as a file to attach.
@@ -108,6 +134,12 @@ function clip(text: string): string {
 	return text.length > REPORT_LIMIT ? `${text.slice(0, REPORT_LIMIT)}\n[report cut off at ${REPORT_LIMIT} characters]` : text;
 }
 
+/** Put in front of a quick job's brief. Speed comes from scope, never from skipping the checking. */
+export const QUICK_NOTE =
+	"This is a quick job: aim to finish in about a minute with a few good sources. Confirm the facts the answer rests " +
+	"on, and if confirming more would take much longer, stop and report what you've confirmed, marking anything you " +
+	"haven't. Don't guess to fill gaps.";
+
 const RESUME =
 	"pclaw restarted while you were working on this, so your last turn was cut off. Check what you'd already done, " +
 	"finish the job, and report as usual. Don't redo anything that already happened.";
@@ -120,7 +152,7 @@ export function reportMessage(name: string, result: WorkerResult, hint = false):
 }
 
 /** `ask` is the person's message that asked for this run, which carries its status reaction. */
-type RunInput = { name: string; sessionId: string; message: string; ask?: string };
+type RunInput = { name: string; sessionId: string; message: string; ask?: string; depth?: Depth };
 type RunState = { phase: "run" } | { phase: "report"; ok: boolean; output: string };
 
 export function workersExtension(options: WorkerOptions, harness: { current?: Harness }) {
@@ -133,11 +165,13 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 				// A memo outlives a crash: if it's already set, pi was cut off mid-run and resumes its own session.
 				const resumed = (await runtime.memo<boolean>("started", context)) === true;
 				if (!resumed) await runtime.memo("started", true, context);
+				const message = task.input.depth === "quick" ? `${QUICK_NOTE}\n\n${task.input.message}` : task.input.message;
 				const result = await runWorker(
 					options,
 					task.input.sessionId,
-					resumed ? RESUME : task.input.message,
+					resumed ? RESUME : message,
 					context.abortSignal,
+					task.input.depth,
 				);
 				await runtime.commit(() => ({ status: "running", checkpoint: { phase: "report", ...result } }), context);
 			},
@@ -209,6 +243,12 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 						description:
 							"Self-contained brief: the goal and why, relevant facts and preferences, constraints, and what to report back.",
 					}),
+					depth: Type.Optional(
+						Type.Union([Type.Literal("quick"), Type.Literal("deep")], {
+							description:
+								"quick (default): a lookup or simple comparison, a few searches, done in a minute or two. deep: real research where getting it right takes many sources and careful checking.",
+						}),
+					),
 					emoji: Type.Optional(
 						Type.String({
 							description:
@@ -216,7 +256,7 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 						}),
 					),
 				}),
-				execute: async ({ name, brief, emoji }, api, context) => {
+				execute: async ({ name, brief, emoji, depth = "quick" }, api, context) => {
 					const ask = await currentAsk(harness.current, api, api.conversationId, context);
 					const badge = emoji !== undefined && isEmoji(emoji.trim()) ? emoji.trim() : WORKING;
 					const started = await api.commit(async (tx) => {
@@ -226,16 +266,17 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 						if (existing !== undefined) {
 							// A job that failed or was stopped can be restarted under its name, in its own session.
 							if (existing.status !== "failed" && existing.status !== "stopped") return false;
-							existing.run = await tx.createTask(Run, { name, sessionId: existing.sessionId, message: brief, ...(ask === undefined ? {} : { ask }) }, background);
+							existing.run = await tx.createTask(Run, { name, sessionId: existing.sessionId, message: brief, depth, ...(ask === undefined ? {} : { ask }) }, background);
 							existing.status = "working";
 							existing.brief = brief;
+						existing.depth = depth;
 							existing.startedAt = existing.updatedAt = Date.now();
 							return true;
 						}
 						const sessionId = randomUUID();
-						const run = await tx.createTask(Run, { name, sessionId, message: brief, ...(ask === undefined ? {} : { ask }) }, background);
+						const run = await tx.createTask(Run, { name, sessionId, message: brief, depth, ...(ask === undefined ? {} : { ask }) }, background);
 						const now = Date.now();
-						doc.workers[name] = { sessionId, brief, status: "working", run, startedAt: now, updatedAt: now };
+						doc.workers[name] = { sessionId, brief, depth, status: "working", run, startedAt: now, updatedAt: now };
 						return true;
 					}, context);
 					if (!started) throw new Error(`There's already a worker named ${name}. Use message_worker, or pick a new name.`);
@@ -255,7 +296,7 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 						if (worker === undefined) return `No worker named ${name}.`;
 						if (worker.status === "working") return `${name} is still working. Wait for its report, or stop it first.`;
 						if (ask !== undefined) await setReaction(tx, api.conversationId, ask, WORKING);
-						worker.run = await tx.createTask(Run, { name, sessionId: worker.sessionId, message, ...(ask === undefined ? {} : { ask }) }, background);
+						worker.run = await tx.createTask(Run, { name, sessionId: worker.sessionId, message, depth: worker.depth ?? "deep", ...(ask === undefined ? {} : { ask }) }, background);
 						worker.status = "working";
 						worker.startedAt = worker.updatedAt = Date.now();
 						return undefined;

@@ -53,6 +53,8 @@ echo "walnut case is \\$135, ships free"
 		cwd: join(dir, "work"),
 		sessionDir: join(dir, "worker-sessions"),
 		promptFile: join(dir, "worker.md"),
+		toolsFile: join(dir, "worker-tools.ts"),
+		quickThinkingLevel: "medium",
 	};
 }
 

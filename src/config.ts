@@ -34,7 +34,11 @@ export type Config = {
 	workerProvider: string;
 	workerModel: string;
 	workerThinkingLevel: ModelThinkingLevel;
+	/** Reasoning for jobs the front model marks quick; deep jobs use workerThinkingLevel. */
+	workerQuickThinkingLevel: ModelThinkingLevel;
 	workerTimeoutMinutes: number;
+	/** Web search for quick_search and workers (Tavily). TAVILY_API_KEY in the environment works too. */
+	tavilyApiKey?: string;
 	/** The dashboard listens on 127.0.0.1 only; a proxy puts it on the tailnet. */
 	dashboardPort: number;
 	/** How long a conversation stays quiet before the memory pass updates the notes from it. */
@@ -58,6 +62,7 @@ export const defaults: Config = {
 	workerProvider: "xai",
 	workerModel: "grok-4.7",
 	workerThinkingLevel: "high",
+	workerQuickThinkingLevel: "medium",
 	workerTimeoutMinutes: 30,
 	dashboardPort: 7421,
 	memoryQuietMinutes: 20,
@@ -83,6 +88,7 @@ export function loadConfig(): Config {
 		workerModel: env.PCLAW_WORKER_MODEL,
 		workerThinkingLevel: env.PCLAW_WORKER_THINKING as ModelThinkingLevel | undefined,
 		dashboardPort: env.PCLAW_DASHBOARD_PORT === undefined ? undefined : Number(env.PCLAW_DASHBOARD_PORT),
+		tavilyApiKey: env.TAVILY_API_KEY,
 	};
 	const defined = Object.fromEntries(Object.entries(fromEnv).filter(([, value]) => value !== undefined));
 	return { ...defaults, ...readStored(), ...defined };

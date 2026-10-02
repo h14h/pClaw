@@ -13,13 +13,14 @@ It's early. Today it can talk, remember, follow up on its own, and hand real wor
 - Keeps context small: once a conversation's prompt passes 60K tokens, older messages are summarized and the last ~16K tokens stay word for word. A `recall` tool searches everything said before, summarized or not.
 - Remembers things about you in `~/.pclaw/notes.md`. Once a conversation has been quiet for 20 minutes, a background pass reads what was said and updates the notes. You can edit the file and it sees the change on the next message.
 - Schedules its own follow-ups ("how did the interview go?") and reminders you ask for. They survive restarts.
-- Hands research, lookups, and anything with files or many steps to a worker, then tells you what came back.
+- Answers one-lookup questions (hours, a time, a price) itself with a quick web search, in a few seconds.
+- Hands research, comparisons, and anything with files or many steps to a worker, then tells you what came back. Quick jobs run with less reasoning than deep ones.
 - Uses reactions as status: your message gets a badge while a worker is on it (⏳ or a topical emoji) and a closing one when the report is back (✅, 🎉, or something that fits bad news; ⚠️ if the job failed). It can answer "thanks" with just a reaction, and your reactions on its messages reach it as input.
 - Sees images you send it.
 
 ## Setup
 
-You need Node 24+, pnpm, [pi](https://github.com/earendil-works/pi) (`npm install -g @earendil-works/pi-coding-agent`), a SuperGrok or X Premium subscription, and a Discord account.
+You need Node 24+, pnpm, [pi](https://github.com/earendil-works/pi) (`npm install -g @earendil-works/pi-coding-agent`), a SuperGrok or X Premium subscription, a [Tavily](https://app.tavily.com) API key for web search (the free tier is plenty), and a Discord account.
 
 ```sh
 git clone https://github.com/h14h/pClaw pclaw && cd pclaw
@@ -53,7 +54,9 @@ To try it without Discord, `pnpm chat` opens a conversation in the terminal. It 
 | `provider` | `PCLAW_PROVIDER` | `xai` |
 | `thinkingLevel` | `PCLAW_THINKING` | `medium` |
 | `workerModel` | `PCLAW_WORKER_MODEL` | `grok-4.7` |
-| `workerThinkingLevel` | `PCLAW_WORKER_THINKING` | `high` |
+| `workerThinkingLevel` | `PCLAW_WORKER_THINKING` | `high` (deep jobs) |
+| `workerQuickThinkingLevel` | | `medium` (quick jobs) |
+| `tavilyApiKey` | `TAVILY_API_KEY` | set by `pnpm setup` |
 | `workerCommand` | | `pi` |
 | `workerTimeoutMinutes` | | `30` |
 | `memoryQuietMinutes` | | `20` |
@@ -70,7 +73,7 @@ To try it without Discord, `pnpm chat` opens a conversation in the terminal. It 
 
 ## How it's built
 
-Two models, split the way [exe.dev's "run fewer agents"](https://blog.exe.dev/etoomanythings) suggests. The one you talk to is fast and conversational: Grok 4.5 on medium, prompted for voice and judgment, with no shell or browser of its own. It answers in seconds and keeps the thread. Anything that takes real work goes to a worker: [pi](https://github.com/earendil-works/pi) with its default coding-agent prompt and tools, running Grok 4.7 on high, in `~/.pclaw/work`. The worker reports back into the conversation and the front model tells you what matters. Each job keeps its pi session, so corrections continue where it left off. Claude Code or Codex can slot in as workers later.
+Two models, split the way [exe.dev's "run fewer agents"](https://blog.exe.dev/etoomanythings) suggests. The one you talk to is fast and conversational: Grok 4.5 on medium, prompted for voice and judgment, with no shell or browser of its own. It answers in seconds and keeps the thread. Anything that takes real work goes to a worker: [pi](https://github.com/earendil-works/pi) with its default coding-agent prompt and tools plus pclaw's own search and page reader (`src/worker-tools.ts`), running Grok 4.7, in `~/.pclaw/work`. Workers don't load your personal pi extensions, skills, or AGENTS.md files. The worker reports back into the conversation and the front model tells you what matters. Each job keeps its pi session, so corrections continue where it left off. Claude Code or Codex can slot in as workers later.
 
 pclaw runs on [Pi Durable](https://earendil.com/posts/pi-durable/), a harness that writes every message, model turn, and tool call to SQLite before acting on it. If the process dies mid-reply, it picks up where it stopped. Follow-ups and worker runs are durable tasks; a worker cut off by a restart resumes its pi session.
 
