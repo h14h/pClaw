@@ -1,20 +1,15 @@
-import { readFileSync } from "node:fs";
 import { defineExtension, section } from "@earendil-works/pi-durable";
-
-const prompt = (name: string) => readFileSync(new URL(`../prompts/${name}.md`, import.meta.url), "utf8").trim();
-const voice = prompt("voice");
-const operating = prompt("operating");
+import { readPrompt } from "../prompts.ts";
 
 /**
- * The front model's prompt: the voice (how it talks, tuned against real Instinct conversations) and how pclaw works
- * (workers, memory, follow-ups). Static, so it stays in the provider's prompt cache.
+ * The front model's system prompt: src/prompts/front.md, plus the time zone. Rendered before every request, so edits
+ * apply right away; Pi Durable only resends a section when it changes, which keeps the prompt cache warm otherwise.
  */
 export function soulExtension(timeZone: string) {
 	return defineExtension({
 		name: "pclaw.soul",
 		sections: [
-			section("voice", () => voice, { tag: false }),
-			section("operating", () => operating, { tag: false }),
+			section("front", () => readPrompt("front").trim(), { tag: false }),
 			section("time-zone", () => `They live in the ${timeZone} time zone unless they say otherwise.`),
 		],
 	});

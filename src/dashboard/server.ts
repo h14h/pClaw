@@ -12,16 +12,21 @@ import {
 	UsageDoc,
 	type UsageState,
 } from "@earendil-works/pi-durable";
+import type { Models } from "@earendil-works/pi-ai/models";
 import type { Agent } from "../agent.ts";
 import type { Config } from "../config.ts";
 import { FollowUps } from "../extensions/follow-ups.ts";
 import type { Notes } from "../extensions/notes.ts";
 import { type WorkerOptions, Workers } from "../extensions/workers.ts";
+import { prompts } from "../prompts.ts";
+import { SettingsError, settingsApi } from "./settings.ts";
 import type {
 	Change,
 	ConversationSummary,
 	ConversationView,
+	ModelsUpdate,
 	Overview,
+	Settings,
 	WorkerDetail,
 	WorkerSummary,
 } from "./types.ts";
@@ -57,10 +62,11 @@ type Watched = {
  * session files, and a server-sent event stream that says what changed.
  */
 export async function startDashboard(
-	options: { agent: Agent; config: Config; notes: Notes; workers: WorkerOptions; port: number },
+	options: { agent: Agent; config: Config; models: Models; notes: Notes; workers: WorkerOptions; port: number },
 	context: Context,
 ): Promise<{ port: number; stop(): Promise<void> }> {
 	const { agent, config, notes, workers } = options;
+	const settings = settingsApi(options);
 	const { harness } = agent;
 	const watched = new Map<string, Watched>();
 	const clients = new Set<ServerResponse>();
@@ -208,6 +214,42 @@ export async function startDashboard(
 	}
 	watchFile(notes.file, { interval: 2_000 }, () => emit({ scope: "overview" }));
 	cleanups.push(() => unwatchFile(notes.file));
+	// Prompts can also be edited outside the dashboard.
+	for (const { file } of Object.values(prompts)) {
+		watchFile(file, { interval: 2_000 }, () => emit({ scope: "settings" }));
+		cleanups.push(() => unwatchFile(file));
+	}
+
+	/** Writes only from the dashboard's own pages: JSON bodies (no simple cross-site form posts) from the same origin. */
+	async function readJson(request: IncomingMessage): Promise<unknown> {
+		if (!(request.headers["content-type"] ?? "").startsWith("application/json")) throw new SettingsError("Send JSON.");
+		const origin = request.headers.origin;
+		if (origin !== undefined && new URL(origin).host !== request.headers.host) throw new SettingsError("Cross-origin write refused.");
+		let body = "";
+		for await (const chunk of request) {
+			body += chunk;
+			if (body.length > 1_000_000) throw new SettingsError("Too large.");
+		}
+		return JSON.parse(body);
+	}
+
+	async function write(request: IncomingMessage, response: ServerResponse, path: string): Promise<boolean> {
+		if (request.method !== "PUT") return false;
+		try {
+			let result: Settings | undefined;
+			const prompt = /^\/api\/settings\/prompts\/([^/]+)$/.exec(path);
+			if (path === "/api/settings/models") result = await settings.updateModels((await readJson(request)) as ModelsUpdate, context);
+			else if (prompt !== null) result = settings.savePrompt(prompt[1]!, ((await readJson(request)) as { text?: unknown }).text);
+			else return false;
+			emit({ scope: "settings" });
+			emit({ scope: "overview" });
+			json(response, result);
+		} catch (error) {
+			if (!(error instanceof SettingsError) && !(error instanceof SyntaxError)) throw error;
+			response.writeHead(400, { "Content-Type": "application/json" }).end(JSON.stringify({ error: error.message }));
+		}
+		return true;
+	}
 
 	function serveStatic(request: IncomingMessage, response: ServerResponse) {
 		if (!existsSync(join(WEB_DIST, "index.html"))) {
@@ -231,8 +273,10 @@ export async function startDashboard(
 	const server = createServer(async (request, response) => {
 		try {
 			const path = new URL(request.url ?? "/", "http://x").pathname;
+			if (await write(request, response, path)) return;
 			if (request.method !== "GET") return void response.writeHead(405).end();
 			if (path === "/api/overview") return json(response, await overview());
+			if (path === "/api/settings") return json(response, settings.get());
 			if (path === "/api/events") {
 				response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
 				response.write(": hello\n\n");

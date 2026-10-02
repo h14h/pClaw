@@ -11,7 +11,7 @@ export const paths = {
 	db: join(home, "pclaw.sqlite"),
 	chatDb: join(home, "chat.sqlite"),
 	notes: join(home, "notes.md"),
-	/** Where workers run. Its AGENTS.md is the workers' standing brief. */
+	/** Where workers run and leave files. */
 	work: join(home, "work"),
 	workerSessions: join(home, "worker-sessions"),
 };

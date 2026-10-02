@@ -50,6 +50,7 @@ echo "walnut case is \\$135, ships free"
 		timeoutMs: 10_000,
 		cwd: join(dir, "work"),
 		sessionDir: join(dir, "worker-sessions"),
+		promptFile: join(dir, "worker.md"),
 	};
 }
 

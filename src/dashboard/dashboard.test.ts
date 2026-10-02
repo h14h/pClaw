@@ -6,13 +6,14 @@ import { after, before, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import { xaiProvider } from "@earendil-works/pi-ai/providers/xai";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { openAgent } from "../agent.ts";
 import { type Config, defaults } from "../config.ts";
 import { Notes } from "../extensions/notes.ts";
 import type { WorkerOptions } from "../extensions/workers.ts";
 import { startDashboard } from "./server.ts";
-import type { ConversationView, Overview, WorkerDetail } from "./types.ts";
+import type { ConversationView, Overview, Settings, WorkerDetail } from "./types.ts";
 import { parseWorkerSession } from "./views.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -51,7 +52,7 @@ echo "Jonsbo N4, \\$135"
 `,
 	);
 	await chmod(command, 0o755);
-	return { command, provider: "xai", model: "grok-4.7", thinkingLevel: "high", timeoutMs: 10_000, cwd: join(dir, "work"), sessionDir };
+	return { command, provider: "xai", model: "grok-4.7", thinkingLevel: "high", timeoutMs: 10_000, cwd: join(dir, "work"), sessionDir, promptFile: join(dir, "worker.md") };
 }
 
 test("parseWorkerSession joins tool calls to results and strips the pclaw prefix", () => {
@@ -73,6 +74,8 @@ test("the dashboard API shows the timeline, held replies, workers, and their tra
 	const faux = fauxProvider();
 	const models = createModels();
 	models.setProvider(faux.provider);
+	// Registered for its model catalog only; nothing here calls xAI.
+	models.setProvider(xaiProvider());
 	faux.setResponses([
 		fauxAssistantMessage([fauxText("I'll check."), fauxToolCall("delegate", { name: "nas", brief: "find a quiet NAS case" })], {
 			stopReason: "toolUse",
@@ -87,39 +90,58 @@ test("the dashboard API shows the timeline, held replies, workers, and their tra
 		context,
 	);
 	const conversation = await agent.conversationFor("discord:dm:1", context);
-	const dashboard = await startDashboard({ agent, config, notes: new Notes(join(dir, "notes.md")), workers, port: 0 }, context);
-	const { port } = dashboard;
-	const get = async <T>(path: string): Promise<T> => (await fetch(`http://127.0.0.1:${port}${path}`)).json() as Promise<T>;
+	const dashboard = await startDashboard({ agent, config, models, notes: new Notes(join(dir, "notes.md")), workers, port: 0 }, context);
+	try {
+		const { port } = dashboard;
+		const get = async <T>(path: string): Promise<T> => (await fetch(`http://127.0.0.1:${port}${path}`)).json() as Promise<T>;
 
-	await conversation.submit({ type: "input", content: "[stamp]\nfind me a NAS case" }, context);
-	// Wait for the worker's report to be answered.
-	for (let i = 0; i < 100; i++) {
+		await conversation.submit({ type: "input", content: "[stamp]\nfind me a NAS case" }, context);
+		// Wait for the worker's report to be answered.
+		for (let i = 0; i < 100; i++) {
+			const view = await get<ConversationView>(`/api/conversations/${conversation.id}`);
+			if (view.timeline.some((item) => item.kind === "reply" && item.text.startsWith("Jonsbo"))) break;
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		}
+
+		const overview = await get<Overview>("/api/overview");
+		assert.equal(overview.conversations[0]?.label, "Discord DM");
 		const view = await get<ConversationView>(`/api/conversations/${conversation.id}`);
-		if (view.timeline.some((item) => item.kind === "reply" && item.text.startsWith("Jonsbo"))) break;
-		await new Promise((resolve) => setTimeout(resolve, 100));
+		const kinds = view.timeline.map((item) => (item.kind === "reply" ? `reply:${item.text}:${item.delivered ? "sent" : item.held}` : item.kind === "event" ? `event:${item.event}` : item.kind === "tool" ? `tool:${item.name}:${item.worker}` : `message:${item.text}`));
+		assert.deepEqual(kinds, [
+			"message:find me a NAS case",
+			"reply:I'll check.:superseded",
+			"tool:delegate:nas",
+			"reply:on it:sent",
+			"event:worker-report",
+			"reply:Jonsbo N4 looks right, $135:sent",
+		]);
+		assert.equal(view.workers[0]?.name, "nas");
+		assert.equal(view.live.state, "idle");
+
+		const detail = await get<WorkerDetail>(`/api/conversations/${conversation.id}/workers/nas`);
+		assert.deepEqual(
+			detail.transcript.map((item) => item.kind),
+			["from-pclaw", "thinking", "tool", "text"],
+		);
+
+		// Settings: read, change the worker model, reject a bad level and a cross-origin write, save a prompt unchanged.
+		const settings = await get<Settings>("/api/settings");
+		assert.equal(settings.worker.model, "grok-4.7");
+		assert.ok(settings.models.some((model) => model.id === "grok-4.5" && model.thinkingLevels.includes("medium")));
+		assert.match(settings.prompts.front.text, /You're pclaw/);
+		const put = (path: string, body: unknown, headers: Record<string, string> = {}) =>
+			fetch(`http://127.0.0.1:${port}${path}`, { method: "PUT", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
+		const changed = await put("/api/settings/models", { worker: { provider: "xai", model: "grok-4.5", thinkingLevel: "low" } });
+		assert.equal(((await changed.json()) as Settings).worker.model, "grok-4.5");
+		assert.equal(workers.model, "grok-4.5");
+		const bad = await put("/api/settings/models", { worker: { provider: "xai", model: "grok-4.5", thinkingLevel: "ludicrous" } });
+		assert.equal(bad.status, 400);
+		const crossSite = await put("/api/settings/prompts/worker", { text: "x" }, { Origin: "https://evil.example" });
+		assert.equal(crossSite.status, 400);
+		const saved = await put("/api/settings/prompts/worker", { text: settings.prompts.worker.text });
+		assert.equal(saved.status, 200);
+	} finally {
+		await dashboard.stop();
+		await agent.harness.close(context);
 	}
-
-	const overview = await get<Overview>("/api/overview");
-	assert.equal(overview.conversations[0]?.label, "Discord DM");
-	const view = await get<ConversationView>(`/api/conversations/${conversation.id}`);
-	const kinds = view.timeline.map((item) => (item.kind === "reply" ? `reply:${item.text}:${item.delivered ? "sent" : item.held}` : item.kind === "event" ? `event:${item.event}` : item.kind === "tool" ? `tool:${item.name}:${item.worker}` : `message:${item.text}`));
-	assert.deepEqual(kinds, [
-		"message:find me a NAS case",
-		"reply:I'll check.:superseded",
-		"tool:delegate:nas",
-		"reply:on it:sent",
-		"event:worker-report",
-		"reply:Jonsbo N4 looks right, $135:sent",
-	]);
-	assert.equal(view.workers[0]?.name, "nas");
-	assert.equal(view.live.state, "idle");
-
-	const detail = await get<WorkerDetail>(`/api/conversations/${conversation.id}/workers/nas`);
-	assert.deepEqual(
-		detail.transcript.map((item) => item.kind),
-		["from-pclaw", "thinking", "tool", "text"],
-	);
-
-	await dashboard.stop();
-	await agent.harness.close(context);
 });

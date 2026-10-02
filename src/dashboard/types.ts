@@ -7,6 +7,10 @@
  *   GET /api/conversations/:id                         ConversationView
  *   GET /api/conversations/:id/workers/:name           WorkerDetail
  *   GET /api/events                                    text/event-stream of Change, one JSON object per `data:` line
+ *   GET /api/settings                                  Settings
+ *   PUT /api/settings/models   body ModelsUpdate       Settings (400 { error } when a model or level isn't valid)
+ *   PUT /api/settings/prompts/:which   body { text }   Settings; :which is "front" or "worker"
+ * Writes need `Content-Type: application/json`. Changes apply to the next model request; nothing restarts.
  */
 
 export type Overview = {
@@ -112,7 +116,28 @@ export type FollowUp = { id: string; at: number; note: string; repeat?: "daily" 
 
 export type Usage = { input: number; output: number; cacheRead: number; cost: number };
 
+export type Settings = {
+	front: ModelInfo;
+	worker: ModelInfo;
+	/** Models that can be picked, with the reasoning levels each supports ("off" first, strongest last). */
+	models: ModelOption[];
+	prompts: { front: PromptFile; worker: PromptFile };
+};
+
+export type ModelOption = { provider: string; id: string; name: string; thinkingLevels: string[] };
+
+export type PromptFile = {
+	text: string;
+	/** Where it lives, relative to the repo: src/prompts/front.md. Edits here are edits to that file. */
+	path: string;
+	/** One line on what it's for, to show next to the editor. */
+	description: string;
+};
+
+export type ModelsUpdate = { front?: ModelInfo; worker?: ModelInfo };
+
 export type Change =
 	| { scope: "overview" }
+	| { scope: "settings" }
 	| { scope: "conversation"; id: string }
 	| { scope: "worker"; conversationId: string; name: string };

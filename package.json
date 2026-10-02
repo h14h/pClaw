@@ -13,7 +13,7 @@
     "start": "node src/main.ts start",
     "setup": "node src/main.ts setup",
     "chat": "node src/main.ts chat",
-    "test": "node --test 'src/**/*.test.ts'",
+    "test": "PCLAW_HOME=$(mktemp -d) node --test 'src/**/*.test.ts'",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

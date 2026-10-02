@@ -1,4 +1,5 @@
 import type { Context } from "@earendil-works/chord";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { Models } from "@earendil-works/pi-ai/models";
 import {
 	type Conversation,
@@ -31,6 +32,8 @@ export type Agent = {
 	conversationFor(address: string, context: Context): Promise<Conversation>;
 	/** Addresses that have a conversation, for reattaching delivery after a restart. */
 	addresses(context: Context): Promise<Record<string, ConversationId>>;
+	/** Switch every conversation to another front model, from the next request on. */
+	setModel(choice: { provider: string; model: string; thinkingLevel: ModelThinkingLevel }, context: Context): Promise<void>;
 };
 
 export async function openAgent(
@@ -48,7 +51,7 @@ export async function openAgent(
 	const current: { current?: Harness } = {};
 	registry.install(workersExtension(workers, current));
 
-	const agent = { model: { provider: config.provider, modelId: config.model }, thinkingLevel: config.thinkingLevel };
+	let agent = { model: { provider: config.provider, modelId: config.model }, thinkingLevel: config.thinkingLevel };
 	const harness = await Harness.open(
 		storage,
 		{
@@ -87,6 +90,14 @@ export async function openAgent(
 		return (await harness.snapshot(Routes, context))?.conversations ?? {};
 	}
 
+	async function setModel(choice: { provider: string; model: string; thinkingLevel: ModelThinkingLevel }, context: Context) {
+		agent = { model: { provider: choice.provider, modelId: choice.model }, thinkingLevel: choice.thinkingLevel };
+		for (const id of Object.values(await addresses(context))) {
+			await (await harness.conversation(id, context))?.configure(agent, context);
+			configured.add(id);
+		}
+	}
+
 	harness.resume();
-	return { harness, conversationFor, addresses };
+	return { harness, conversationFor, addresses, setModel };
 }

@@ -103,7 +103,7 @@ async function start(): Promise<void> {
 	const workers = workerOptions(config, paths);
 	const agent = await openAgent(await openNodeSqliteStorage(paths.db), { config, models, notes, workers }, context);
 	const discord = await startDiscord(agent, config, context);
-	const dashboard = await startDashboard({ agent, config, notes, workers, port: config.dashboardPort }, context);
+	const dashboard = await startDashboard({ agent, config, models, notes, workers, port: config.dashboardPort }, context);
 
 	let stopping = false;
 	const stop = async () => {
