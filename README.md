@@ -34,6 +34,8 @@ pnpm start
 
 A bot can only receive DMs from people it shares a server with. If it isn't in one yet, `pnpm start` prints an invite link. Add it to a server you're in, then DM it.
 
+While it runs, pclaw serves a dashboard on `127.0.0.1:7421` (`dashboardPort`): the conversation including what Discord doesn't show (tool calls, held replies, worker reports), running workers, and each worker's full transcript, all updating live. Put it behind a private proxy to reach it from other devices; it has no login of its own.
+
 To keep it running on a Linux box, `deploy/pclaw.service` is a systemd user service; the install steps are at the top of the file.
 
 To try it without Discord, `pnpm chat` opens a conversation in the terminal. It keeps its own history, so it won't mix with your Discord thread.
@@ -51,6 +53,7 @@ To try it without Discord, `pnpm chat` opens a conversation in the terminal. It 
 | `workerThinkingLevel` | `PCLAW_WORKER_THINKING` | `high` |
 | `workerCommand` | | `pi` |
 | `workerTimeoutMinutes` | | `30` |
+| `dashboardPort` | `PCLAW_DASHBOARD_PORT` | `7421` |
 | `authFile` | `PI_CODING_AGENT_DIR` moves it | `~/.pi/agent/auth.json` |
 | `timeZone` | `PCLAW_TZ` | the machine's time zone |
 | `discordToken` | `DISCORD_TOKEN` | set by `pnpm setup` |
@@ -69,6 +72,7 @@ pclaw runs on [Pi Durable](https://earendil.com/posts/pi-durable/), a harness th
 - `~/.pclaw/work/AGENTS.md` is the workers' standing brief. pclaw writes a default the first time and leaves your edits alone.
 - `src/channels/` connects conversations to Discord and the terminal.
 - `src/delivery.ts` sends replies out in order and remembers what it has sent.
+- `src/dashboard/` is the dashboard's API; `web/` is its UI (Vite, React, Tailwind, TanStack Router and Query). Build it with `pnpm --filter pclaw-web build`; pclaw serves `web/dist`. `PCLAW_FIXTURE=live pnpm --filter pclaw-web dev` runs the UI against a scripted conversation, no pclaw needed.
 
 ```sh
 pnpm test        # unit tests, plus agent tests against a scripted model

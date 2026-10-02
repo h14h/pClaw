@@ -8,3 +8,4 @@
 - `src/prompts/voice.md` is the owner's voice prompt, tuned against real Instinct conversations. Don't edit it without being asked. `src/prompts/operating.md` covers how pclaw works; keep it short and plain.
 - The front model (talks to the person) stays fast and tool-light. Real work goes through `delegate` to workers (pi subprocesses, `src/extensions/workers.ts`).
 - Agent tests use pi-ai's faux provider and a fake pi script (`src/agent.test.ts`). Don't spend real model calls in tests.
+- The dashboard UI is `web/` (Vite + React + Tailwind + TanStack Router + Query). Its API shapes live in `src/dashboard/types.ts`; the web app imports them with `import type`. Keep it quiet and dense: Henry asked for no extraneous UI. After UI changes, `pnpm --filter pclaw-web build` makes them live; no restart needed.
