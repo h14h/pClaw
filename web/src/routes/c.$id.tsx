@@ -1,7 +1,7 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { useState, type ReactNode } from 'react'
-import type { ConversationView, LiveStatus, Overview, WorkerSummary } from '../../../src/dashboard/types'
+import type { ConversationSummary, ConversationView, LiveStatus, Overview, WorkerSummary } from '../../../src/dashboard/types'
 import { conversationQuery, overviewQuery } from '../api'
 import { Timeline } from '../timeline'
 import { clock, day } from '../time'
@@ -18,16 +18,19 @@ function Conversation() {
   const { data: c } = useSuspenseQuery(conversationQuery(id))
   const { data: overview } = useSuspenseQuery(overviewQuery())
   const [showAside, setShowAside] = useState(false)
-  const others = overview.conversations.filter((o) => o.id !== id)
+  const parent = c.parentId ? overview.conversations.find((o) => o.id === c.parentId) : undefined
   return (
     <Shell
       left={
         <>
+          {parent && (
+            <>
+              <span className="text-faint">/</span>
+              <Link to="/c/$id" params={{ id: parent.id }} className="truncate text-mute hover:text-fg">{parent.label}</Link>
+            </>
+          )}
           <span className="text-faint">/</span>
           <span className="truncate">{c.label}</span>
-          {others.map((o) => (
-            <Link key={o.id} to="/c/$id" params={{ id: o.id }} className="text-mute hover:text-fg">{o.label}</Link>
-          ))}
         </>
       }
       right={
@@ -38,7 +41,7 @@ function Conversation() {
     >
       <div className="flex min-h-0 flex-1">
         <main className={`min-h-0 flex-1 flex-col ${showAside ? 'hidden lg:flex' : 'flex'}`}>
-          <Timeline items={c.timeline} workers={c.workers} conversationId={id} />
+          <Timeline items={c.timeline} workers={c.workers} conversationId={id} fork={c.parentId ? { at: c.forkedAt, parentId: c.parentId, parentLabel: parent?.label ?? 'its channel' } : undefined} />
           <Now live={c.live} workers={c.workers} conversationId={id} />
         </main>
         <Aside c={c} overview={overview} className={showAside ? 'flex' : 'hidden lg:flex'} />
@@ -87,6 +90,11 @@ function Aside({ c, overview, className }: { c: ConversationView; overview: Over
   const notes = overview.notes.trim()
   return (
     <aside className={`${className} w-full shrink-0 flex-col gap-5 overflow-y-auto border-line px-3 py-3 text-[13px] lg:w-72 lg:border-l`}>
+      {overview.conversations.length > 1 && (
+        <Section title="Conversations">
+          <Conversations all={overview.conversations} current={c.id} />
+        </Section>
+      )}
       <Section title="Workers">
         {c.workers.length === 0 && <p className="text-faint">none yet</p>}
         {c.workers.map((w) => (
@@ -116,6 +124,29 @@ function Aside({ c, overview, className }: { c: ConversationView; overview: Over
       </div>
     </aside>
   )
+}
+
+/** The DM and channels, with threads indented under their channel. Threads whose channel is unknown sit at the top level. */
+function Conversations({ all, current }: { all: ConversationSummary[]; current: string }) {
+  const ids = new Set(all.map((c) => c.id))
+  const roots = all.filter((c) => !c.parentId || !ids.has(c.parentId))
+  const row = (c: ConversationSummary, nested: boolean) => (
+    <Link
+      key={c.id}
+      to="/c/$id"
+      params={{ id: c.id }}
+      className={`flex items-baseline gap-2 py-0.5 hover:underline ${nested ? 'pl-4' : ''} ${c.id === current ? 'font-medium' : 'text-mute'}`}
+    >
+      <span className="truncate">{c.label}</span>
+      {(c.busy || c.workersRunning > 0) && (
+        <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-mute">
+          <Dot status="working" />
+          {c.busy ? 'writing' : `${c.workersRunning} working`}
+        </span>
+      )}
+    </Link>
+  )
+  return <>{roots.map((r) => [row(r, false), ...all.filter((c) => c.parentId === r.id).map((t) => row(t, true))])}</>
 }
 
 function Section({ title, children }: { title: string; children: ReactNode }) {

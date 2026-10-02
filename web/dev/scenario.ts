@@ -176,6 +176,40 @@ export function setModel(which: 'front' | 'worker', info: ModelInfo): string | u
 	settings[which] = info
 }
 
+// A server channel and a thread forked from it. Static (always fully visible); ids are numeric entry ids like the
+// real ones, and the thread shares the channel's first four entries.
+export const CHANNEL_ID = 'discord-ch-general'
+export const THREAD_ID = 'discord-th-nas-build'
+const channelSteps: Step[] = [
+	{ t: 17 * 3600, item: { kind: 'message', id: '401', text: 'anyone here printed a fan shroud before? thinking about one for the NAS', images: 0 } },
+	{ t: 17 * 3600 + 5, item: { kind: 'reply', id: '402', text: "Not printed one, but the N3 has a few on Printables already. Want me to pull the ones that fit?", delivered: true, model: MODEL, usage: usage(1800, 30, 1500) } },
+	{ t: 17 * 3600 + 90, item: { kind: 'message', id: '405', text: "let's take the NAS build into a thread so this channel stays usable", images: 0 } },
+	{ t: 17 * 3600 + 93, item: { kind: 'reply', id: '406', text: 'Good call. Open it and I\'ll follow you in.', delivered: true, model: MODEL, usage: usage(1900, 12, 1800) } },
+	{ t: 18.2 * 3600, item: { kind: 'message', id: '430', text: 'unrelated: is the printer firmware update safe to apply?', images: 0 } },
+	{ t: 18.2 * 3600 + 6, item: { kind: 'reply', id: '431', text: "Safe, but do it from a USB stick rather than over Wi-Fi; the last one bricked a few units that dropped mid-flash.", delivered: true, model: MODEL, usage: usage(2100, 36, 1900) } },
+]
+const threadSteps: Step[] = [
+	...channelSteps.slice(0, 4),
+	{ t: 17 * 3600 + 200, item: { kind: 'message', id: '410', text: 'parts so far: N3, i3-12100, 32GB, 4x 8TB WD Red Plus. missing a PSU and a boot drive', images: 1 } },
+	{ t: 17 * 3600 + 204, item: { kind: 'reply', id: '411', text: "That's a solid, quiet set. For the PSU you need SFX in the N3; a Corsair SF450 is the usual pick. Boot drive: any 500GB NVMe, it barely matters for a NAS.", delivered: true, model: MODEL, usage: usage(2300, 60, 2000) } },
+	{ t: 17 * 3600 + 260, item: { kind: 'message', id: '414', text: 'add the SF450 to the list and check if it is actually in stock anywhere', images: 0 } },
+	{ t: 17 * 3600 + 261, item: { kind: 'tool', id: 'call-414-1', name: 'remember', args: { note: 'NAS build thread: parts list; PSU Corsair SF450.' }, result: 'Saved.' } },
+]
+
+function simple(id: string, address: string, label: string, list: Step[], clock: Clock, extra: Partial<ConversationView> = {}): ConversationView {
+	return {
+		id,
+		address,
+		label,
+		live: { state: 'idle' },
+		timeline: list.map((s) => ({ ...s.item, at: clock.base + s.t * 1000 }) as TimelineItem),
+		workers: [],
+		followUps: [],
+		usage: { input: 12000, output: 400, cacheRead: 9000, cost: 0.03 },
+		...extra,
+	}
+}
+
 export const LAST = steps[steps.length - 1]!.t + 1
 /** Points in the scenario worth freezing at: mid-worker-run, and with the front model mid-reply. */
 export const MID = 705
@@ -196,7 +230,11 @@ export function overview(clock: Clock): Overview {
 	return {
 		front: settings.front,
 		worker: settings.worker,
-		conversations: [{ id: CONVERSATION_ID, address: 'discord:dm:180942', label: 'Discord DM', busy: generating(clock) !== undefined, workersRunning: w?.status === 'working' ? 1 : 0 }],
+		conversations: [
+			{ id: CONVERSATION_ID, address: 'discord:dm:180942', label: 'Discord DM', busy: generating(clock) !== undefined, workersRunning: w?.status === 'working' ? 1 : 0 },
+			{ id: CHANNEL_ID, address: 'discord:channel:5501', label: '#general', busy: false, workersRunning: 0 },
+			{ id: THREAD_ID, address: 'discord:thread:5502', label: 'nas build', parentId: CHANNEL_ID, busy: true, workersRunning: 0 },
+		],
 		notes: clock.cutoff < 852 ? notes.replace('\n- Building a home NAS; picked the Jonsbo N3.', '') : notes,
 	}
 }
@@ -207,7 +245,13 @@ function generating(clock: Clock) {
 	if (next?.item.kind === 'reply' && next.t - clock.cutoff < 10) return next.item
 }
 
-export function conversation(clock: Clock): ConversationView {
+export function conversation(clock: Clock, id: string): ConversationView | undefined {
+	if (id === CHANNEL_ID) return simple(id, 'discord:channel:5501', '#general', channelSteps, clock)
+	if (id === THREAD_ID) {
+		const live = { state: 'generating' as const, since: Date.now() - 4000, text: 'In stock at Newegg and B&H today; Amazon lists it but ships in' }
+		return simple(id, 'discord:thread:5502', 'nas build', threadSteps, clock, { parentId: CHANNEL_ID, forkedAt: '406', live })
+	}
+	if (id !== CONVERSATION_ID) return
 	const w = worker(clock)
 	const gen = generating(clock)
 	const followUps: FollowUp[] = []

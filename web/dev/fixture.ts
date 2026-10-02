@@ -75,7 +75,7 @@ export function fixture(mode: string): Plugin {
 				const value =
 					resource === 'overview' ? overview(clock)
 					: resource === 'settings' ? settings
-					: resource === 'conversations' && id === CONVERSATION_ID && !sub ? conversation(clock)
+					: resource === 'conversations' && id && !sub ? conversation(clock, id)
 					: resource === 'conversations' && id === CONVERSATION_ID && sub === 'workers' && name ? workerDetail(clock, name)
 					: undefined
 				json(value ? 200 : 404, value ?? { error: 'not found' })

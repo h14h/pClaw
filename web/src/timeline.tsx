@@ -11,9 +11,14 @@ function who(item: TimelineItem) {
   return item.event === 'worker-report' ? (item.worker ?? 'worker') : item.event
 }
 
-export function Timeline({ items, workers, conversationId }: { items: TimelineItem[]; workers: WorkerSummary[]; conversationId: string }) {
+type Fork = { at?: string; parentId: string; parentLabel: string }
+
+export function Timeline({ items, workers, conversationId, fork }: { items: TimelineItem[]; workers: WorkerSummary[]; conversationId: string; fork?: Fork }) {
   const ref = useStickToBottom<HTMLDivElement>()
   const byName = new Map(workers.map((w) => [w.name, w]))
+  // A thread's own part starts after the last entry it shares with its channel. Tool rows carry call ids rather
+  // than entry ids, so they go with whatever non-tool row precedes them.
+  const forkIndex = fork ? items.reduce((last, i, n) => (i.kind !== 'tool' && Number(i.id) <= Number(fork.at) ? n + 1 : last), 0) : -1
   return (
     <div ref={ref} className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto max-w-3xl px-2 py-2 sm:px-3">
@@ -22,12 +27,28 @@ export function Timeline({ items, workers, conversationId }: { items: TimelineIt
           const prev = items[i - 1]
           return (
             <div key={item.id}>
+              {fork && i === forkIndex && <ForkBreak fork={fork} />}
               {(!prev || dayKey(prev.at) !== dayKey(item.at)) && <DayBreak label={day(item.at)} />}
               <Item item={item} who={!prev || who(prev) !== who(item) ? who(item) : undefined} worker={item.kind === 'tool' && item.worker ? byName.get(item.worker) : undefined} conversationId={conversationId} />
             </div>
           )
         })}
+        {fork && forkIndex === items.length && <ForkBreak fork={fork} />}
       </div>
+    </div>
+  )
+}
+
+function ForkBreak({ fork }: { fork: Fork }) {
+  return (
+    <div className="my-2 flex items-center gap-3 text-[11px] text-faint">
+      <hr className="flex-1 border-line" />
+      <span>
+        forked from{' '}
+        <Link to="/c/$id" params={{ id: fork.parentId }} className="text-mute underline decoration-faint underline-offset-2 hover:text-fg">{fork.parentLabel}</Link>
+        {fork.at && ' · the thread starts here'}
+      </span>
+      <hr className="flex-1 border-line" />
     </div>
   )
 }
