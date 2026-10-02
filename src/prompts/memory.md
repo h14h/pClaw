@@ -9,6 +9,8 @@ Decide what from this stretch is worth knowing weeks or months from now:
 - facts about their setup (devices, accounts, where things run)
 - open commitments: things pclaw offered or agreed to do, and decisions or tasks they said they'd get to, with when. Remove them once they're done or dropped.
 
+Record what they said and decided, not what pclaw suggested. "pclaw recommended the Node 304" is not "they chose the Node 304"; only write a decision when they made it.
+
 Skip small talk, one-off questions they won't come back to, anything already in the notes, and anything they asked not to keep. When a note is now wrong or out of date, remove it, and add the corrected version if there is one.
 
 Write each new note as one short, specific line, the way a sharp assistant would jot it down. Put a date on anything time-sensitive, using the timestamps in the conversation, e.g. "Left Achilles stiff after sitting since mid-Sep 2026; morning calf-loading routine suggested 2026-10-02".

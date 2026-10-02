@@ -231,6 +231,13 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 		}
 	});
 
+	// Join threads as they open in pclaw's channels, so their messages reliably reach it.
+	client.on(Events.ThreadCreate, async (thread) => {
+		if (thread.parentId !== null && channels.has(thread.parentId) && !thread.joined) {
+			await thread.join().catch((error: unknown) => console.error("[pclaw] couldn't join a thread", error));
+		}
+	});
+
 	client.once(Events.ClientReady, async (ready) => {
 		console.log(`[pclaw] on Discord as ${ready.user.tag}`);
 		if (ready.guilds.cache.size === 0) {

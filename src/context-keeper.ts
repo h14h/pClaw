@@ -21,7 +21,7 @@ async function promptTokens(agent: Agent, id: ConversationId, context: Context):
  * model's full context window, far past where replies get slow and the middle of the thread gets lost; long-term
  * facts live in the notes, so the word-for-word part can stay short.
  */
-export function startContextKeeper(agent: Agent, thresholdTokens: number, context: Context): { stop(): void } {
+export function startContextKeeper(agent: Agent, thresholdTokens: number, context: Context, everyMs = CHECK_MS): { stop(): void } {
 	const pending = new Set<string>();
 	const check = async () => {
 		for (const id of Object.values(await agent.addresses(context))) {
