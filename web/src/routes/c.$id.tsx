@@ -4,7 +4,7 @@ import { useState, type ReactNode } from 'react'
 import type { ConversationSummary, ConversationView, LiveStatus, Overview, WorkerSummary } from '../../../src/dashboard/types'
 import { conversationQuery, overviewQuery } from '../api'
 import { Timeline } from '../timeline'
-import { clock, day } from '../time'
+import { ago, clock, day } from '../time'
 import { Dot, Elapsed, Shell, WorkerState, k } from '../ui'
 
 export const Route = createFileRoute('/c/$id')({
@@ -117,6 +117,7 @@ function Aside({ c, overview, className }: { c: ConversationView; overview: Over
       <Section title="Notes">
         {notes ? <pre className="whitespace-pre-wrap font-mono text-[12px] leading-[1.4] text-mute">{notes}</pre> : <p className="text-faint">empty</p>}
       </Section>
+      {overview.pageReads.failing.length > 0 && <PageReads reads={overview.pageReads} />}
       <div className="mt-auto space-y-0.5 pt-4 text-[11px] text-faint">
         <div>front {overview.front.model} · {overview.front.thinkingLevel}</div>
         <div>workers {overview.worker.model} · {overview.worker.thinkingLevel}</div>
@@ -147,6 +148,21 @@ function Conversations({ all, current }: { all: ConversationSummary[]; current: 
     </Link>
   )
   return <>{roots.map((r) => [row(r, false), ...all.filter((c) => c.parentId === r.id).map((t) => row(t, true))])}</>
+}
+
+/** Sites whose pages workers couldn't read. Only shown when something failed; the error is on hover. */
+function PageReads({ reads }: { reads: Overview['pageReads'] }) {
+  const failed = reads.failing.reduce((n, f) => n + f.failures, 0)
+  return (
+    <Section title={`Page reads · ${failed} of ${reads.total} failed`}>
+      {reads.failing.map((f) => (
+        <div key={f.host} title={f.lastError} className="flex items-baseline gap-2 py-0.5 text-[12px]">
+          <span className="truncate font-mono text-mute">{f.host}</span>
+          <span className="shrink-0 text-faint">×{f.failures} · {ago(f.lastAt)}</span>
+        </div>
+      ))}
+    </Section>
+  )
 }
 
 function Section({ title, children }: { title: string; children: ReactNode }) {

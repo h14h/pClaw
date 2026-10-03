@@ -239,6 +239,13 @@ export function overview(clock: Clock): Overview {
 			{ id: THREAD_ID, address: 'discord:thread:5502', label: 'nas build', parentId: CHANNEL_ID, busy: true, workersRunning: 0 },
 		],
 		notes: clock.cutoff < 852 ? notes.replace('\n- Building a home NAS; picked the Jonsbo N3.', '') : notes,
+		pageReads: {
+			total: 41,
+			failing: [
+				{ host: 'www.amazon.com', failures: 2, lastAt: clock.at(739), lastError: '503 Service Unavailable: request blocked by bot protection' },
+				{ host: 'reddit.com', failures: 1, lastAt: clock.base - 2 * 3600 * 1000, lastError: 'timed out after 30s' },
+			],
+		},
 	}
 }
 
