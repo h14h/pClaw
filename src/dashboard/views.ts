@@ -194,3 +194,35 @@ export function parseWorkerSession(jsonl: string): WorkerItem[] {
 	}
 	return items;
 }
+
+/** read_page calls in one worker session file, and the ones that failed. */
+export function pageReadsIn(jsonl: string): { total: number; failures: { host: string; at: number; error: string }[] } {
+	const urls = new Map<string, string>();
+	const failures: { host: string; at: number; error: string }[] = [];
+	let total = 0;
+	for (const line of jsonl.split("\n")) {
+		let record: { type?: string; timestamp?: string; message?: Message };
+		try {
+			record = JSON.parse(line);
+		} catch {
+			continue;
+		}
+		const message = record.message;
+		if (record.type !== "message" || message === undefined) continue;
+		if (message.role === "assistant") {
+			for (const part of message.content) {
+				if (part.type === "toolCall" && part.name === "read_page" && typeof part.arguments.url === "string") urls.set(part.id, part.arguments.url);
+			}
+		} else if (message.role === "toolResult" && message.toolName === "read_page") {
+			total++;
+			const url = urls.get(message.toolCallId);
+			if (!message.isError || url === undefined) continue;
+			let host = url;
+			try {
+				host = new URL(url).hostname.replace(/^www\./, "");
+			} catch {}
+			failures.push({ host, at: record.timestamp === undefined ? 0 : Date.parse(record.timestamp), error: textOf(message.content).slice(0, 200) });
+		}
+	}
+	return { total, failures };
+}

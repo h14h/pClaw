@@ -28,11 +28,12 @@ import type {
 	ConversationView,
 	ModelsUpdate,
 	Overview,
+	PageReadFailure,
 	Settings,
 	WorkerDetail,
 	WorkerSummary,
 } from "./types.ts";
-import { buildTimeline, liveStatus, parseWorkerSession, sumUsage } from "./views.ts";
+import { buildTimeline, liveStatus, pageReadsIn, parseWorkerSession, sumUsage } from "./views.ts";
 
 const WEB_DIST = fileURLToPath(new URL("../../web/dist/", import.meta.url));
 const TYPES: Record<string, string> = {
@@ -155,6 +156,32 @@ export async function startDashboard(
 		};
 	}
 
+	// Page-read stats from the workers' session files, recomputed only for files that changed.
+	const readStats = new Map<string, { mtime: number; stats: ReturnType<typeof pageReadsIn> }>();
+	function pageReads(): Overview["pageReads"] {
+		if (!existsSync(workers.sessionDir)) return { total: 0, failing: [] };
+		let total = 0;
+		const byHost = new Map<string, PageReadFailure>();
+		for (const name of readdirSync(workers.sessionDir)) {
+			if (!name.endsWith(".jsonl")) continue;
+			const file = join(workers.sessionDir, name);
+			const mtime = statSync(file).mtimeMs;
+			let cached = readStats.get(file);
+			if (cached?.mtime !== mtime) {
+				cached = { mtime, stats: pageReadsIn(readFileSync(file, "utf8")) };
+				readStats.set(file, cached);
+			}
+			total += cached.stats.total;
+			for (const failure of cached.stats.failures) {
+				const entry = byHost.get(failure.host) ?? { host: failure.host, failures: 0, lastAt: 0, lastError: "" };
+				entry.failures++;
+				if (failure.at >= entry.lastAt) Object.assign(entry, { lastAt: failure.at, lastError: failure.error });
+				byHost.set(failure.host, entry);
+			}
+		}
+		return { total, failing: [...byHost.values()].sort((a, b) => b.failures - a.failures || b.lastAt - a.lastAt) };
+	}
+
 	async function overview(): Promise<Overview> {
 		const list: ConversationSummary[] = [];
 		for (const [address, id] of await conversations()) {
@@ -173,6 +200,7 @@ export async function startDashboard(
 			worker: { provider: workers.provider, model: workers.model, thinkingLevel: workers.thinkingLevel },
 			conversations: list,
 			notes: notes.read(),
+			pageReads: pageReads(),
 		};
 	}
 

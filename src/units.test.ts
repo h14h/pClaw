@@ -9,6 +9,7 @@ import { nextOccurrence } from "./extensions/follow-ups.ts";
 import { Notes } from "./extensions/notes.ts";
 import { isEmoji } from "./extensions/reactions.ts";
 import { search } from "./extensions/recall.ts";
+import { findInPage, pageWindow } from "./search.ts";
 import { stamp, utcOffset } from "./time.ts";
 
 test("stamp gives weekday, local time, zone, and offset", () => {
@@ -82,4 +83,17 @@ test("recall ranks messages by matching terms, then recency", () => {
 test("isEmoji accepts single emoji, including joined and flagged ones, and nothing else", () => {
 	for (const emoji of ["✅", "🖥️", "👍🏽", "❤️", "👨‍👩‍👧", "🇺🇸", "⚠️"]) assert.ok(isEmoji(emoji), emoji);
 	for (const text of [":tada:", "done", "✅ done", ""]) assert.ok(!isEmoji(text), text);
+});
+
+test("read_page pages through long text and finds passages by keyword", () => {
+	const page = Array.from({ length: 400 }, (_, i) => (i === 300 ? "The Node 304 ships with three Silent Series R2 fans." : `Filler paragraph ${i} about cases.`)).join("\n\n");
+	const first = pageWindow(page);
+	assert.ok(first.length < 8_200);
+	assert.match(first, /\[characters 0–8000 of \d+\. Next: offset=8000/);
+	assert.match(pageWindow(page, 8_000), /^.*Filler paragraph/s);
+	const found = findInPage(page, "Silent Series fans");
+	assert.match(found, /^\d+ of \d+ matching passages, best first:/);
+	assert.match(found.split("---")[0]!, /three Silent Series R2 fans/);
+	assert.match(findInPage(page, "zeppelin"), /Nothing on the page mentions zeppelin/);
+	assert.equal(pageWindow("short page"), "short page");
 });

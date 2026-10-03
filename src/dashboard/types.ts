@@ -19,7 +19,11 @@ export type Overview = {
 	conversations: ConversationSummary[];
 	/** The notes file, verbatim. */
 	notes: string;
+	/** Workers' read_page calls across all jobs: how many, and the sites that failed (most failures first). */
+	pageReads: { total: number; failing: PageReadFailure[] };
 };
+
+export type PageReadFailure = { host: string; failures: number; lastAt: number; lastError: string };
 
 export type ModelInfo = { provider: string; model: string; thinkingLevel: string };
 

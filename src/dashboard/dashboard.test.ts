@@ -14,7 +14,7 @@ import { Notes } from "../extensions/notes.ts";
 import type { WorkerOptions } from "../extensions/workers.ts";
 import { startDashboard } from "./server.ts";
 import type { ConversationView, Overview, Settings, WorkerDetail } from "./types.ts";
-import { parseWorkerSession } from "./views.ts";
+import { pageReadsIn, parseWorkerSession } from "./views.ts";
 
 const context = BACKGROUND_CONTEXT;
 const config: Config = { ...defaults, provider: "faux", model: "faux-1", thinkingLevel: "off", timeZone: "UTC" };
@@ -142,4 +142,16 @@ test("the dashboard API shows the timeline, held replies, workers, and their tra
 		await dashboard.stop();
 		await agent.harness.close(context);
 	}
+});
+
+test("pageReadsIn counts read_page calls and groups failures by site", () => {
+	const lines = [
+		'{"type":"message","timestamp":"2026-10-02T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"a","name":"read_page","arguments":{"url":"https://www.reddit.com/r/x"}},{"type":"toolCall","id":"b","name":"read_page","arguments":{"url":"https://example.com/ok"}}]}}',
+		'{"type":"message","timestamp":"2026-10-02T00:00:02.000Z","message":{"role":"toolResult","toolCallId":"a","toolName":"read_page","content":[{"type":"text","text":"Couldn\'t read https://www.reddit.com/r/x: Failed to fetch url."}],"isError":true}}',
+		'{"type":"message","timestamp":"2026-10-02T00:00:03.000Z","message":{"role":"toolResult","toolCallId":"b","toolName":"read_page","content":[{"type":"text","text":"page"}],"isError":false}}',
+	].join("\n");
+	assert.deepEqual(pageReadsIn(lines), {
+		total: 2,
+		failures: [{ host: "reddit.com", at: Date.parse("2026-10-02T00:00:02.000Z"), error: "Couldn't read https://www.reddit.com/r/x: Failed to fetch url." }],
+	});
 });

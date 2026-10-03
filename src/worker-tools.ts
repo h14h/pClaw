@@ -3,7 +3,7 @@
  * which run every search through a Grok request and send one question to several search tools at once.
  */
 import { Type } from "@earendil-works/pi-ai";
-import { formatSearch, readPage, search } from "./search.ts";
+import { findInPage, formatSearch, pageWindow, readPage, search } from "./search.ts";
 
 type Text = { content: { type: "text"; text: string }[]; details: Record<string, never> };
 const text = (value: string): Text => ({ content: [{ type: "text", text: value }], details: {} });
@@ -34,15 +34,30 @@ export default function (pi: ToolApi) {
 			return text(formatSearch(params.query, await search(params.query, { maxResults, ...(signal ? { signal } : {}) })));
 		},
 	});
+	// Pages read in this job, so paging through one or searching it again doesn't refetch it.
+	const pages = new Map<string, Promise<string>>();
 	pi.registerTool({
 		name: "read_page",
 		label: "Read page",
 		description:
-			"Read a web page as text (clipped to 8,000 characters). Use it to confirm a fact, price, or date at its source. " +
-			"For pages that need a login or a lot of JavaScript, try bash with curl.",
-		parameters: Type.Object({ url: Type.String() }),
-		async execute(_id, params: { url: string }, signal) {
-			return text(await readPage(params.url, signal));
+			"Read a web page as text, 8,000 characters at a time. Use it to confirm a fact, price, or date at its source. " +
+			"For a long page, pass `find` with a few words to get just the passages that mention them, or `offset` to read " +
+			"further on. Pages are cached for this job, so both are cheap. For pages that need a login or a lot of " +
+			"JavaScript, try bash with curl.",
+		parameters: Type.Object({
+			url: Type.String(),
+			find: Type.Optional(Type.String({ description: "A few words to look for; returns the matching passages." })),
+			offset: Type.Optional(Type.Number({ description: "Character to start from, for reading further on." })),
+		}),
+		async execute(_id, params: { url: string; find?: string; offset?: number }, signal) {
+			let page = pages.get(params.url);
+			if (page === undefined) {
+				page = readPage(params.url, signal);
+				pages.set(params.url, page);
+				page.catch(() => pages.delete(params.url));
+			}
+			const text = await page;
+			return { content: [{ type: "text", text: params.find ? findInPage(text, params.find) : pageWindow(text, params.offset) }], details: {} };
 		},
 	});
 }
