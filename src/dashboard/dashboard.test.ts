@@ -98,13 +98,15 @@ test("the dashboard API shows the timeline, held replies, workers, and their tra
 		// Pages: drafts aren't served, published ones are, and paths can't escape the page's folder.
 		const pageDir = join(workers.cwd, "pages", "trip");
 		mkdirSync(pageDir, { recursive: true });
-		writeFileSync(join(pageDir, "index.html"), "<h1>Trip</h1>");
+		const html = '<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>Trip</title><link rel="stylesheet" href="style.css"></head><h1>Trip</h1>';
+		writeFileSync(join(pageDir, "index.html"), html);
+		writeFileSync(join(pageDir, "style.css"), "");
 		const page = (path: string) => fetch(`http://127.0.0.1:${port}${path}`, { redirect: "manual" });
 		assert.equal((await page("/pages/trip/")).status, 404);
 		assert.equal(await publishPage(workers.cwd, "trip", { pagesUrl: "https://pinchy.example/pages" }), "https://pinchy.example/pages/trip/");
 		const served = await page("/pages/trip/");
 		assert.equal(served.status, 200);
-		assert.equal(await served.text(), "<h1>Trip</h1>");
+		assert.equal(await served.text(), html);
 		assert.match(served.headers.get("content-security-policy") ?? "", /connect-src 'none'/);
 		assert.equal((await page("/pages/trip")).status, 301);
 		assert.equal((await page("/pages/trip/..%2F..%2Fnotes.md")).status, 404);

@@ -30,9 +30,22 @@ function files(dir: string): string[] {
 }
 
 /** Problems that keep a page from being published; empty when it's fine. */
+/** What every page keeps from the template's <head>, so it's styled and readable on a phone. */
+const REQUIRED_HEAD: [RegExp, string][] = [
+	[/^\s*<!doctype html>/i, "it doesn't start with <!doctype html>"],
+	[/<meta[^>]+name=["']viewport["']/i, "it's missing the viewport <meta> (the page won't fit a phone)"],
+	[/<title>[^<]+<\/title>/i, "it has no <title>"],
+	[/<link[^>]+rel=["']stylesheet["'][^>]*href=["']style\.css["']|<link[^>]+href=["']style\.css["'][^>]*rel=["']stylesheet["']/i, 'it doesn\'t link style.css (<link rel="stylesheet" href="style.css">)'],
+];
+
 export function checkPage(dir: string): string[] {
 	if (!existsSync(join(dir, "index.html"))) return [`${dir} has no index.html.`];
 	const problems: string[] = [];
+	const index = readFileSync(join(dir, "index.html"), "utf8");
+	for (const [pattern, problem] of REQUIRED_HEAD) {
+		if (!pattern.test(index)) problems.push(`index.html: ${problem}. Keep the template's <head> and change only the <title>.`);
+	}
+	if (!existsSync(join(dir, "style.css"))) problems.push("style.css is missing; copy the whole template folder.");
 	let bytes = 0;
 	for (const file of files(dir)) {
 		bytes += statSync(file).size;

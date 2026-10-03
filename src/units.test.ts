@@ -103,9 +103,13 @@ test("read_page pages through long text and finds passages by keyword", () => {
 test("checkPage refuses pages that load from outside, and allows links out", async () => {
 	const dir = await mkdtemp(join(tmpdir(), "pclaw-page-"));
 	try {
-		const page = (html: string) => writeFileSync(join(dir, "index.html"), html);
-		page('<link rel="stylesheet" href="style.css"><p>Fetch your gear. <a href="https://example.com">source</a></p>');
+		const head = '<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>T</title><link rel="stylesheet" href="style.css"></head>';
+		writeFileSync(join(dir, "style.css"), "");
+		const page = (html: string) => writeFileSync(join(dir, "index.html"), head + html);
+		page('<p>Fetch your gear. <a href="https://example.com">source</a></p>');
 		assert.deepEqual(checkPage(dir), []);
+		writeFileSync(join(dir, "index.html"), '<main class="page"><h1>No head</h1></main>');
+		assert.match(checkPage(dir).join(), /doctype.*viewport.*title.*style\.css/s);
 		page('<script src="https://cdn.example.com/x.js"></script>');
 		assert.match(checkPage(dir).join(), /loads from outside the page/);
 		page("<script>fetch('/api')</script>");
