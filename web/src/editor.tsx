@@ -17,7 +17,7 @@ const markdown = new Language(defineLanguageFacet(), parser, [], 'markdown')
 // Highest precedence, listed before vim(): at equal precedence the earlier extension's styles win, and the vim
 // extension's own highest-precedence theme paints the cursor pink.
 const theme = Prec.highest(EditorView.theme({
-  '&': { fontSize: '13px', color: 'var(--fg)', backgroundColor: 'var(--bg)', maxHeight: '70vh' },
+  '&': { fontSize: '13px', color: 'var(--fg)', backgroundColor: 'var(--bg)', height: '100%' },
   '.cm-scroller': { overflow: 'auto', fontFamily: 'var(--font-mono)', lineHeight: '1.6' },
   '.cm-content': { padding: '10px 0', caretColor: 'var(--fg)' },
   '.cm-line': { padding: '0 14px' },
@@ -46,6 +46,7 @@ const highlight = HighlightStyle.define([
 /**
  * A vim-enabled markdown editor for long prose. Uncontrolled while typing: `text` only replaces the buffer when it
  * differs from what's in it, which is how discarding or an outside change gets in without disturbing the cursor.
+ * Fills its parent, which decides the height; the text scrolls inside.
  */
 export function Editor({ text, onChange, onSave }: { text: string; onChange: (text: string) => void; onSave: () => void }) {
   const host = useRef<HTMLDivElement>(null)
@@ -84,5 +85,5 @@ export function Editor({ text, onChange, onSave }: { text: string; onChange: (te
     if (editor && editor.state.doc.toString() !== text) editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: text } })
   }, [text])
 
-  return <div ref={host} className="overflow-hidden rounded border border-line" />
+  return <div ref={host} className="h-full overflow-hidden rounded border border-line" />
 }

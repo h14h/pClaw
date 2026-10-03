@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { ServiceId } from "./search.ts";
 
 export const home = process.env.PCLAW_HOME ?? join(homedir(), ".pclaw");
 const piAgentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
@@ -37,8 +38,18 @@ export type Config = {
 	/** Reasoning for jobs the front model marks quick; deep jobs use workerThinkingLevel. */
 	workerQuickThinkingLevel: ModelThinkingLevel;
 	workerTimeoutMinutes: number;
-	/** Web search for quick_search and workers (Tavily). TAVILY_API_KEY in the environment works too. */
+	/**
+	 * Skills workers can use besides pclaw's own (src/skills/): folders with a SKILL.md, e.g. a publishing skill kept with
+	 * your own scripts. A leading ~ is your home folder. Their markdown files are editable from the dashboard.
+	 */
+	workerSkills: string[];
+	/** Web search for quick_search and workers. TAVILY_API_KEY in the environment works too. */
 	tavilyApiKey?: string;
+	/** The other search service, for comparing with Tavily. PARALLEL_API_KEY in the environment works too. */
+	parallelApiKey?: string;
+	/** Which service runs searches and which reads pages (src/search.ts). */
+	searchService: ServiceId;
+	pageService: ServiceId;
 	/** The dashboard listens on 127.0.0.1 only; a proxy puts it on the tailnet. */
 	dashboardPort: number;
 	/** Where published pages are reachable, as the person would open them. Defaults to the dashboard's /pages. */
@@ -68,6 +79,9 @@ export const defaults: Config = {
 	workerThinkingLevel: "high",
 	workerQuickThinkingLevel: "medium",
 	workerTimeoutMinutes: 30,
+	workerSkills: [],
+	searchService: "tavily",
+	pageService: "tavily",
 	dashboardPort: 7421,
 	memoryQuietMinutes: 20,
 	summarizeAtTokens: 60_000,
@@ -93,6 +107,7 @@ export function loadConfig(): Config {
 		workerThinkingLevel: env.PCLAW_WORKER_THINKING as ModelThinkingLevel | undefined,
 		dashboardPort: env.PCLAW_DASHBOARD_PORT === undefined ? undefined : Number(env.PCLAW_DASHBOARD_PORT),
 		tavilyApiKey: env.TAVILY_API_KEY,
+		parallelApiKey: env.PARALLEL_API_KEY,
 	};
 	const defined = Object.fromEntries(Object.entries(fromEnv).filter(([, value]) => value !== undefined));
 	return { ...defaults, ...readStored(), ...defined };

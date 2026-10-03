@@ -9,7 +9,9 @@
  *   GET /api/events                                    text/event-stream of Change, one JSON object per `data:` line
  *   GET /api/settings                                  Settings
  *   PUT /api/settings/models   body ModelsUpdate       Settings (400 { error } when a model or level isn't valid)
- *   PUT /api/settings/prompts/:which   body { text }   Settings; :which is "front" or "worker"
+ *   PUT /api/settings/search   body SearchUpdate       Settings (400 { error } for an unknown or unconfigured service)
+ *   GET /api/files/:id                                 FileContent; :id is a FileSummary id, slashes and all
+ *   PUT /api/files/:id         body { text }           FileContent (400 { error } when the text is empty)
  * Writes need `Content-Type: application/json`. Changes apply to the next model request; nothing restarts.
  */
 
@@ -143,23 +145,56 @@ export type Settings = {
 	worker: ModelInfo;
 	/** Models that can be picked, with the reasoning levels each supports ("off" first, strongest last). */
 	models: ModelOption[];
-	prompts: { front: PromptFile; worker: PromptFile };
+	search: SearchSettings;
+	/** Every markdown file that shapes how pclaw behaves, without its text (GET /api/files/:id for that). */
+	files: FileSummary[];
 };
 
 export type ModelOption = { provider: string; id: string; name: string; thinkingLevels: string[] };
 
-export type PromptFile = {
-	text: string;
-	/** Where it lives, relative to the repo: src/prompts/front.md. Edits here are edits to that file. */
-	path: string;
-	/** One line on what it's for, to show next to the editor. */
-	description: string;
+/**
+ * Which service runs web searches (quick_search and workers' search) and which reads pages (workers' read_page).
+ * Switching applies to the next call; nothing restarts.
+ */
+export type SearchSettings = {
+	search: string;
+	pages: string;
+	/** Every service pclaw knows. `ready` is false when it has no API key, and it can't be picked then. */
+	services: { id: string; name: string; ready: boolean }[];
 };
+
+export type SearchUpdate = { search?: string; pages?: string };
+
+export type FileSummary = {
+	/** "prompts/front.md", "formatting/discord.md", "skills/web-page/STYLE.md". */
+	id: string;
+	/**
+	 * prompts: the front model's and workers' prompts, and the instructions for the notes pass and summarizing.
+	 * formatting: how to format messages for one chat app. skills: workers' skills, each a folder of markdown files.
+	 */
+	group: "prompts" | "formatting" | "skills";
+	/** For skill files: the skill's name ("web-page"). Its SKILL.md comes first. */
+	skill?: string;
+	/** Short label: "Front prompt", "Discord", "SKILL.md". */
+	name: string;
+	/** Where it lives: relative to the repo (src/prompts/front.md), or ~/… for a skill outside pclaw. */
+	path: string;
+	/** One line on what it's for. */
+	description: string;
+	/** Characters. */
+	size: number;
+	modifiedAt: number;
+};
+
+export type FileContent = FileSummary & { text: string };
 
 export type ModelsUpdate = { front?: ModelInfo; worker?: ModelInfo };
 
 export type Change =
 	| { scope: "overview" }
+	/** Settings changed, including the file list (a file's size or time). */
 	| { scope: "settings" }
+	/** A file's text changed, from the dashboard or on disk. */
+	| { scope: "file"; id: string }
 	| { scope: "conversation"; id: string }
 	| { scope: "worker"; conversationId: string; name: string };

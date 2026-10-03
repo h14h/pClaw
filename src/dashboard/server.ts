@@ -21,15 +21,17 @@ import type { Notes } from "../extensions/notes.ts";
 import { Reactions } from "../extensions/reactions.ts";
 import { type WorkerOptions, Workers } from "../extensions/workers.ts";
 import { PUBLISHED, SLUG } from "../pages.ts";
-import { prompts } from "../prompts.ts";
+import { FileError } from "./files.ts";
 import { SettingsError, settingsApi } from "./settings.ts";
 import type {
 	Change,
 	ConversationSummary,
 	ConversationView,
+	FileContent,
 	ModelsUpdate,
 	Overview,
 	PageReadFailure,
+	SearchUpdate,
 	Settings,
 	WorkerDetail,
 	WorkerSummary,
@@ -280,9 +282,12 @@ export async function startDashboard(
 	}
 	watchFile(notes.file, { interval: 2_000 }, () => emit({ scope: "overview" }));
 	cleanups.push(() => unwatchFile(notes.file));
-	// Prompts can also be edited outside the dashboard.
-	for (const { file } of Object.values(prompts)) {
-		watchFile(file, { interval: 2_000 }, () => emit({ scope: "settings" }));
+	// These files can also be edited outside the dashboard. Ones added later are listed but not watched until a restart.
+	for (const { id, file } of settings.files.paths()) {
+		watchFile(file, { interval: 2_000 }, () => {
+			emit({ scope: "file", id });
+			emit({ scope: "settings" });
+		});
 		cleanups.push(() => unwatchFile(file));
 	}
 
@@ -302,16 +307,20 @@ export async function startDashboard(
 	async function write(request: IncomingMessage, response: ServerResponse, path: string): Promise<boolean> {
 		if (request.method !== "PUT") return false;
 		try {
-			let result: Settings | undefined;
-			const prompt = /^\/api\/settings\/prompts\/([^/]+)$/.exec(path);
+			let result: Settings | FileContent;
+			const file = /^\/api\/files\/(.+)$/.exec(path);
 			if (path === "/api/settings/models") result = await settings.updateModels((await readJson(request)) as ModelsUpdate, context);
-			else if (prompt !== null) result = settings.savePrompt(prompt[1]!, ((await readJson(request)) as { text?: unknown }).text);
-			else return false;
+			else if (path === "/api/settings/search") result = settings.updateSearch((await readJson(request)) as SearchUpdate);
+			else if (file !== null) {
+				const id = decodeURIComponent(file[1]!);
+				result = settings.files.write(id, ((await readJson(request)) as { text?: unknown }).text);
+				emit({ scope: "file", id });
+			} else return false;
 			emit({ scope: "settings" });
 			emit({ scope: "overview" });
 			json(response, result);
 		} catch (error) {
-			if (!(error instanceof SettingsError) && !(error instanceof SyntaxError)) throw error;
+			if (!(error instanceof SettingsError) && !(error instanceof FileError) && !(error instanceof SyntaxError)) throw error;
 			response.writeHead(400, { "Content-Type": "application/json" }).end(JSON.stringify({ error: error.message }));
 		}
 		return true;
@@ -374,6 +383,15 @@ export async function startDashboard(
 			if (request.method !== "GET") return void response.writeHead(405).end();
 			if (path === "/api/overview") return json(response, await overview());
 			if (path === "/api/settings") return json(response, settings.get());
+			const file = /^\/api\/files\/(.+)$/.exec(path);
+			if (file !== null) {
+				try {
+					return json(response, settings.files.read(decodeURIComponent(file[1]!)));
+				} catch (error) {
+					if (error instanceof FileError) return json(response, undefined);
+					throw error;
+				}
+			}
 			if (path === "/api/events") {
 				response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
 				response.write(": hello\n\n");

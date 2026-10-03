@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type } from "@earendil-works/pi-ai";
 import { defineDoc, defineExtension, defineTask, defineTool, type Harness, type TaskId } from "@earendil-works/pi-durable";
@@ -50,11 +52,14 @@ export type WorkerOptions = {
 	toolsFile: string;
 	/** Reasoning for quick jobs; deep jobs use `thinkingLevel`. */
 	quickThinkingLevel: string;
-	/** pclaw's own pi skills (directories with SKILL.md), e.g. web-page. */
+	/** pi skills (directories with SKILL.md): pclaw's own, e.g. web-page, then config.workerSkills. */
 	skills: string[];
 };
 
 export type Depth = "quick" | "deep";
+
+/** pclaw's own skills. */
+const SKILLS = fileURLToPath(new URL("../skills", import.meta.url));
 
 export function workerOptions(config: Config, paths: { work: string; workerSessions: string }): WorkerOptions {
 	return {
@@ -68,7 +73,10 @@ export function workerOptions(config: Config, paths: { work: string; workerSessi
 		promptFile: prompts.worker.file,
 		toolsFile: fileURLToPath(new URL("../worker-tools.ts", import.meta.url)),
 		quickThinkingLevel: config.workerQuickThinkingLevel,
-		skills: [fileURLToPath(new URL("../skills/web-page", import.meta.url))],
+		skills: [
+			...readdirSync(SKILLS, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => join(SKILLS, entry.name)),
+			...config.workerSkills.map((dir) => resolve(dir.replace(/^~(?=$|\/)/, homedir()))),
+		],
 	};
 }
 

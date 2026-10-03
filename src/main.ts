@@ -9,12 +9,13 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { openAgent } from "./agent.ts";
 import { startDiscord } from "./channels/discord.ts";
 import { chatInTerminal } from "./channels/terminal.ts";
-import { ensureHome, loadConfig, paths, saveConfig } from "./config.ts";
+import { type Config, ensureHome, loadConfig, paths, saveConfig } from "./config.ts";
 import { startContextKeeper } from "./context-keeper.ts";
 import { FileCredentialStore } from "./credentials.ts";
 import { startDashboard } from "./dashboard/server.ts";
 import { Notes } from "./extensions/notes.ts";
 import { workerOptions } from "./extensions/workers.ts";
+import { chooseService, serviceReady, services } from "./search.ts";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -85,6 +86,11 @@ async function setup(): Promise<void> {
 		const key = await ask("Tavily API key: ");
 		if (key !== "") saveConfig({ tavilyApiKey: key });
 	}
+	if (config.parallelApiKey === undefined) {
+		console.log("\nOptional: a Parallel key (https://platform.parallel.ai) to compare its search with Tavily's. Enter skips.");
+		const key = await ask("Parallel API key: ");
+		if (key !== "") saveConfig({ parallelApiKey: key });
+	}
 
 	if (config.discordToken === undefined) {
 		console.log(
@@ -99,6 +105,17 @@ async function setup(): Promise<void> {
 	console.log(`\nDone. Settings are in ${paths.config}. Start it with \`pnpm start\`, then DM the bot.`);
 }
 
+/** Search (src/search.ts) reads its keys and choices from the environment, here and in the pi workers it starts. */
+function setUpSearch(config: Config): void {
+	if (config.tavilyApiKey !== undefined) process.env.TAVILY_API_KEY = config.tavilyApiKey;
+	if (config.parallelApiKey !== undefined) process.env.PARALLEL_API_KEY = config.parallelApiKey;
+	chooseService("search", config.searchService);
+	chooseService("pages", config.pageService);
+	for (const id of new Set([config.searchService, config.pageService])) {
+		if (!serviceReady(id)) console.log(`[pclaw] No ${services[id].name} key: searches through it will fail. Run \`pnpm setup\`.`);
+	}
+}
+
 async function start(): Promise<void> {
 	const config = loadConfig();
 	const models = createPclawModels();
@@ -106,12 +123,10 @@ async function start(): Promise<void> {
 		throw new Error(`Not signed in to ${config.provider}, or the sign-in expired. Run \`pnpm setup\`.`);
 	}
 	ensureHome();
-	// Search (src/search.ts) reads the key from the environment, in this process and in the pi workers it starts.
 	// Workers' publish_page tool reads these.
 	process.env.PCLAW_PAGES_URL = config.pagesUrl ?? `http://127.0.0.1:${config.dashboardPort}/pages`;
 	if (config.pagePublisher !== undefined) process.env.PCLAW_PAGE_PUBLISHER = config.pagePublisher;
-	if (config.tavilyApiKey !== undefined) process.env.TAVILY_API_KEY = config.tavilyApiKey;
-	else console.log("[pclaw] No Tavily key: quick_search and worker search will fail. Run `pnpm setup`.");
+	setUpSearch(config);
 	const notes = new Notes(paths.notes);
 	const workers = workerOptions(config, paths);
 	const agent = await openAgent(await openNodeSqliteStorage(paths.db), { config, models, notes, workers }, context);
@@ -138,7 +153,7 @@ async function chat(): Promise<void> {
 	const config = loadConfig();
 	const models = createPclawModels();
 	ensureHome();
-	if (config.tavilyApiKey !== undefined) process.env.TAVILY_API_KEY = config.tavilyApiKey;
+	setUpSearch(config);
 	const agent = await openAgent(await openNodeSqliteStorage(paths.chatDb), { config, models, notes: new Notes(paths.notes) }, context);
 	await chatInTerminal(agent, config, context);
 	await agent.harness.close(context);

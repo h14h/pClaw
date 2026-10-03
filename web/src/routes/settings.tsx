@@ -1,10 +1,10 @@
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
-import { createFileRoute, useBlocker } from '@tanstack/react-router'
-import { Fragment, useCallback, useEffect, useState } from 'react'
-import type { ModelInfo, ModelOption, ModelsUpdate, PromptFile, Settings } from '../../../src/dashboard/types'
+import { createFileRoute } from '@tanstack/react-router'
+import { Fragment } from 'react'
+import type { ModelInfo, ModelOption, ModelsUpdate, SearchUpdate, Settings } from '../../../src/dashboard/types'
 import { put, settingsQuery } from '../api'
-import { Editor } from '../editor'
-import { Shell, Tag } from '../ui'
+import { FileSections } from '../files'
+import { Shell } from '../ui'
 
 export const Route = createFileRoute('/settings')({
   loader: ({ context }) => context.queryClient.ensureQueryData(settingsQuery()),
@@ -15,20 +15,13 @@ type Which = 'front' | 'worker'
 
 function SettingsPage() {
   const { data: settings } = useSuspenseQuery(settingsQuery())
-  const [dirty, setDirty] = useState<Record<Which, boolean>>({ front: false, worker: false })
-  const markDirty = useCallback((which: Which, value: boolean) => setDirty((s) => (s[which] === value ? s : { ...s, [which]: value })), [])
-  const anyDirty = dirty.front || dirty.worker
-  useBlocker({
-    shouldBlockFn: () => anyDirty && !window.confirm('You have unsaved prompt changes. Leave and lose them?'),
-    enableBeforeUnload: anyDirty,
-  })
   return (
     <Shell left={<><span className="text-faint">/</span><span>settings</span></>}>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl space-y-8 px-3 py-4">
+        <div className="mx-auto max-w-3xl space-y-7 px-3 py-4">
           <Models settings={settings} />
-          <Prompt which="front" file={settings.prompts.front} onDirty={markDirty} />
-          <Prompt which="worker" file={settings.prompts.worker} onDirty={markDirty} />
+          <Search settings={settings} />
+          <FileSections files={settings.files} />
         </div>
       </div>
     </Shell>
@@ -102,59 +95,35 @@ function Models({ settings }: { settings: Settings }) {
   )
 }
 
-function Prompt({ which, file, onDirty }: { which: Which; file: PromptFile; onDirty: (which: Which, dirty: boolean) => void }) {
+/** Which service searches the web and which reads pages. A service without an API key is listed but can't be picked. */
+function Search({ settings }: { settings: Settings }) {
   const client = useQueryClient()
-  // `origin` is the saved text this draft started from. The draft is left alone once it differs from that.
-  const [draft, setDraft] = useState(file.text)
-  const [origin, setOrigin] = useState(file.text)
-  const dirty = draft !== file.text
-  const movedOnDisk = dirty && origin !== file.text
-  useEffect(() => {
-    if (draft === origin && file.text !== origin) {
-      setDraft(file.text)
-      setOrigin(file.text)
-    }
-  }, [file.text, draft, origin])
-  useEffect(() => onDirty(which, dirty), [which, dirty, onDirty])
-
   const save = useMutation({
-    mutationFn: (text: string) => put<Settings>(`/api/settings/prompts/${which}`, { text }),
-    onSuccess: (data) => {
-      client.setQueryData(settingsQuery().queryKey, data)
-      setOrigin(data.prompts[which].text)
-    },
+    mutationFn: (update: SearchUpdate) => put<Settings>('/api/settings/search', update),
+    onSuccess: (data) => client.setQueryData(settingsQuery().queryKey, data),
   })
-  const discard = () => {
-    setDraft(file.text)
-    setOrigin(file.text)
-    save.reset()
-  }
-  const name = which === 'front' ? 'Front prompt' : 'Worker prompt'
+  const rows: [keyof SearchUpdate, string, string][] = [
+    ['search', 'search', 'web searches'],
+    ['pages', 'pages', 'reading pages'],
+  ]
   return (
     <section>
-      <div className="mb-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h2 className="font-medium">{name}</h2>
-        <span className="font-mono text-[12px] text-faint">{file.path}</span>
-        <span className="flex-1" />
-        {dirty && !save.isPending && <Tag tone="amber">unsaved</Tag>}
-        {save.isPending && <span className="text-[12px] text-faint">saving…</span>}
-        {dirty && (
-          <button type="button" onClick={discard} className="text-[12px] text-mute hover:text-fg">discard</button>
-        )}
-        <button
-          type="button"
-          onClick={() => save.mutate(draft)}
-          disabled={!dirty || save.isPending}
-          title="Ctrl-S or :w"
-          className="rounded border border-line px-2 py-0.5 text-[12px] enabled:hover:border-mute disabled:text-faint"
-        >
-          save
-        </button>
+      <h2 className="mb-2 text-[11px] font-medium text-faint">Search</h2>
+      <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] items-center gap-x-3 gap-y-2 sm:grid-cols-[4.5rem_auto_minmax(0,1fr)]">
+        {rows.map(([field, label, hint]) => (
+          <Fragment key={field}>
+            <span className="text-mute">{label}</span>
+            <select className={`${select} justify-self-start`} value={settings.search[field]} onChange={(e) => save.mutate({ [field]: e.target.value })}>
+              {settings.search.services.map((s) => (
+                <option key={s.id} value={s.id} disabled={!s.ready}>{s.name}{s.ready ? '' : ' (no key)'}</option>
+              ))}
+            </select>
+            <span className="hidden text-[12px] text-faint sm:block">{hint}</span>
+          </Fragment>
+        ))}
       </div>
-      <p className="mb-2 text-[12px] text-mute">{file.description}</p>
-      {save.isError && <p className="mb-2 text-[12px] text-red-600 dark:text-red-400">Not saved: {save.error.message}</p>}
-      {movedOnDisk && <p className="mb-2 text-[12px] text-amber-700 dark:text-amber-400">This file changed on disk while you were editing. Saving overwrites it; discard loads the new version.</p>}
-      <Editor text={draft} onChange={setDraft} onSave={() => dirty && save.mutate(draft)} />
+      {save.isPending && <p className="mt-2 text-[12px] text-faint">saving…</p>}
+      {save.isError && <p className="mt-2 text-[12px] text-red-600 dark:text-red-400">{save.error.message}</p>}
     </section>
   )
 }

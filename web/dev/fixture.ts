@@ -6,7 +6,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Plugin } from 'vite'
 import type { Change } from '../../src/dashboard/types.ts'
-import { CONVERSATION_ID, GEN, LAST, MID, type Clock, conversation, overview, setModel, settings, stepTimes, workerDetail } from './scenario.ts'
+import { CONVERSATION_ID, GEN, LAST, MID, type Clock, conversation, files, overview, saveFile, setModel, setSearch, settings, stepTimes, workerDetail } from './scenario.ts'
 
 const body = (req: IncomingMessage) =>
 	new Promise<string>((resolve) => {
@@ -50,6 +50,19 @@ export function fixture(mode: string): Plugin {
 					res.writeHead(status, { 'content-type': 'application/json' })
 					res.end(JSON.stringify(value))
 				}
+				if (path.startsWith('/api/files/')) {
+					const id = decodeURIComponent(path.slice('/api/files/'.length))
+					if (req.method === 'PUT') {
+						const input = JSON.parse(await body(req))
+						const saved = saveFile(id, String(input.text ?? ''))
+						if (typeof saved === 'string') return json(400, { error: saved })
+						send({ scope: 'file', id })
+						send({ scope: 'settings' })
+						return json(200, saved)
+					}
+					const file = files.get(id)
+					return json(file ? 200 : 404, file ?? { error: 'not found' })
+				}
 				if (req.method === 'PUT') {
 					const input = JSON.parse(await body(req))
 					if (path === '/api/settings/models') {
@@ -58,8 +71,9 @@ export function fixture(mode: string): Plugin {
 							if (error) return json(400, { error })
 						}
 						send({ scope: 'overview' })
-					} else if (path === '/api/settings/prompts/front' || path === '/api/settings/prompts/worker') {
-						settings.prompts[path.endsWith('front') ? 'front' : 'worker'].text = String(input.text)
+					} else if (path === '/api/settings/search') {
+						const error = setSearch(input)
+						if (error) return json(400, { error })
 					} else return json(404, { error: 'not found' })
 					send({ scope: 'settings' })
 					return json(200, settings)

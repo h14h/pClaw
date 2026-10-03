@@ -1,6 +1,6 @@
 import { queryOptions, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
-import type { Change, ConversationView, Overview, Settings, WorkerDetail } from '../../src/dashboard/types'
+import type { Change, ConversationView, FileContent, Overview, Settings, WorkerDetail } from '../../src/dashboard/types'
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(path)
@@ -24,6 +24,11 @@ export const overviewQuery = () => queryOptions({ queryKey: ['overview'], queryF
 
 export const settingsQuery = () => queryOptions({ queryKey: ['settings'], queryFn: () => get<Settings>('/api/settings') })
 
+/** Where one of Settings.files lives in the API. The id's slashes stay slashes; each part between them is escaped. */
+export const fileUrl = (id: string) => `/api/files/${id.split('/').map(enc).join('/')}`
+
+export const fileQuery = (id: string) => queryOptions({ queryKey: ['file', id], queryFn: () => get<FileContent>(fileUrl(id)) })
+
 export const conversationQuery = (id: string) =>
   queryOptions({ queryKey: ['conversation', id], queryFn: () => get<ConversationView>(`/api/conversations/${enc(id)}`) })
 
@@ -34,6 +39,7 @@ function keyFor(change: Change) {
   switch (change.scope) {
     case 'overview': return ['overview']
     case 'settings': return ['settings']
+    case 'file': return ['file', change.id]
     case 'conversation': return ['conversation', change.id]
     case 'worker': return ['worker', change.conversationId, change.name]
   }

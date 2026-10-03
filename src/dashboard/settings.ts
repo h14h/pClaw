@@ -4,17 +4,20 @@ import { getSupportedThinkingLevels, type Models } from "@earendil-works/pi-ai/m
 import type { Agent } from "../agent.ts";
 import { type Config, saveConfig } from "../config.ts";
 import type { WorkerOptions } from "../extensions/workers.ts";
-import { type PromptName, prompts, readPrompt, writePrompt } from "../prompts.ts";
-import type { ModelInfo, ModelOption, ModelsUpdate, Settings } from "./types.ts";
+import { chooseService, isServiceId, serviceReady, services } from "../search.ts";
+import { editableFiles } from "./files.ts";
+import type { ModelInfo, ModelOption, ModelsUpdate, SearchUpdate, Settings } from "./types.ts";
 
 export class SettingsError extends Error {}
 
 /**
- * What the settings page reads and writes. Model changes go to config.json and take effect on the next request: the
- * front model by reconfiguring every conversation, the worker model by updating the options each pi run reads.
+ * What the settings page reads and writes. Model and search changes go to config.json and take effect on the next
+ * request: the front model by reconfiguring every conversation, the worker model by updating the options each pi run
+ * reads, search through the environment the next search and the next worker read.
  */
 export function settingsApi(options: { agent: Agent; config: Config; models: Models; workers: WorkerOptions }) {
 	const { agent, config, models, workers } = options;
+	const files = editableFiles(workers.skills);
 
 	function modelOptions(): ModelOption[] {
 		const providers = new Set([config.provider, workers.provider]);
@@ -29,12 +32,16 @@ export function settingsApi(options: { agent: Agent; config: Config; models: Mod
 	}
 
 	function get(): Settings {
-		const prompt = (name: PromptName) => ({ text: readPrompt(name), path: prompts[name].path, description: prompts[name].description });
 		return {
 			front: { provider: config.provider, model: config.model, thinkingLevel: config.thinkingLevel },
 			worker: { provider: workers.provider, model: workers.model, thinkingLevel: workers.thinkingLevel },
 			models: modelOptions(),
-			prompts: { front: prompt("front"), worker: prompt("worker") },
+			search: {
+				search: config.searchService,
+				pages: config.pageService,
+				services: Object.entries(services).map(([id, service]) => ({ id, name: service.name, ready: serviceReady(id as keyof typeof services) })),
+			},
+			files: files.list(),
 		};
 	}
 
@@ -64,12 +71,25 @@ export function settingsApi(options: { agent: Agent; config: Config; models: Mod
 		return get();
 	}
 
-	function savePrompt(name: string, text: unknown): Settings {
-		if (name !== "front" && name !== "worker") throw new SettingsError(`No prompt named ${name}.`);
-		if (typeof text !== "string" || text.trim() === "") throw new SettingsError("A prompt can't be empty.");
-		writePrompt(name, text);
+	function updateSearch(update: SearchUpdate): Settings {
+		// Validate both before applying either.
+		for (const id of [update.search, update.pages]) {
+			if (id === undefined) continue;
+			if (!isServiceId(id)) throw new SettingsError(`No search service named ${id}.`);
+			if (!serviceReady(id)) throw new SettingsError(`${services[id].name} has no API key. Add it with \`pnpm setup\`.`);
+		}
+		if (isServiceId(update.search)) {
+			chooseService("search", update.search);
+			config.searchService = update.search;
+			saveConfig({ searchService: update.search });
+		}
+		if (isServiceId(update.pages)) {
+			chooseService("pages", update.pages);
+			config.pageService = update.pages;
+			saveConfig({ pageService: update.pages });
+		}
 		return get();
 	}
 
-	return { get, updateModels, savePrompt };
+	return { get, updateModels, updateSearch, files };
 }

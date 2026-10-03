@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as CIdRouteImport } from './routes/c.$id'
+import { Route as SettingsFilesSplatRouteImport } from './routes/settings_.files.$'
 import { Route as CIdWNameRouteImport } from './routes/c.$id_.w.$name'
 
 const IndexRoute = IndexRouteImport.update({
@@ -29,6 +30,11 @@ const CIdRoute = CIdRouteImport.update({
   path: '/c/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SettingsFilesSplatRoute = SettingsFilesSplatRouteImport.update({
+  id: '/settings_/files/$',
+  path: '/settings/files/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const CIdWNameRoute = CIdWNameRouteImport.update({
   id: '/c/$id_/w/$name',
   path: '/c/$id/w/$name',
@@ -39,12 +45,14 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/settings': typeof SettingsRoute
   '/c/$id': typeof CIdRoute
+  '/settings/files/$': typeof SettingsFilesSplatRoute
   '/c/$id/w/$name': typeof CIdWNameRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/settings': typeof SettingsRoute
   '/c/$id': typeof CIdRoute
+  '/settings/files/$': typeof SettingsFilesSplatRoute
   '/c/$id/w/$name': typeof CIdWNameRoute
 }
 export interface FileRoutesById {
@@ -52,20 +60,29 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/settings': typeof SettingsRoute
   '/c/$id': typeof CIdRoute
+  '/settings_/files/$': typeof SettingsFilesSplatRoute
   '/c/$id_/w/$name': typeof CIdWNameRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/settings' | '/c/$id' | '/c/$id/w/$name'
+  fullPaths:
+    '/' | '/settings' | '/c/$id' | '/settings/files/$' | '/c/$id/w/$name'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/settings' | '/c/$id' | '/c/$id/w/$name'
-  id: '__root__' | '/' | '/settings' | '/c/$id' | '/c/$id_/w/$name'
+  to: '/' | '/settings' | '/c/$id' | '/settings/files/$' | '/c/$id/w/$name'
+  id:
+    | '__root__'
+    | '/'
+    | '/settings'
+    | '/c/$id'
+    | '/settings_/files/$'
+    | '/c/$id_/w/$name'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   SettingsRoute: typeof SettingsRoute
   CIdRoute: typeof CIdRoute
+  SettingsFilesSplatRoute: typeof SettingsFilesSplatRoute
   CIdWNameRoute: typeof CIdWNameRoute
 }
 
@@ -92,6 +109,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/settings_/files/$': {
+      id: '/settings_/files/$'
+      path: '/settings/files/$'
+      fullPath: '/settings/files/$'
+      preLoaderRoute: typeof SettingsFilesSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/c/$id_/w/$name': {
       id: '/c/$id_/w/$name'
       path: '/c/$id/w/$name'
@@ -106,6 +130,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   SettingsRoute: SettingsRoute,
   CIdRoute: CIdRoute,
+  SettingsFilesSplatRoute: SettingsFilesSplatRoute,
   CIdWNameRoute: CIdWNameRoute,
 }
 export const routeTree = rootRouteImport

@@ -4,7 +4,7 @@ import { formatSearch, search } from "../search.ts";
 
 /**
  * One fast search for the front model, for questions a single lookup settles (hours, a time, a price, a quick fact).
- * About 2 seconds, so the reply stays quick; anything needing comparison or judgment still goes to a worker.
+ * A second or two, so the reply stays quick; anything needing comparison or judgment still goes to a worker.
  */
 export function quickSearchExtension() {
 	return defineExtension({
@@ -13,7 +13,7 @@ export function quickSearchExtension() {
 			defineTool({
 				name: "quick_search",
 				description:
-					"One quick web search (about 2 seconds) for a question a single lookup settles: opening hours, a time, a " +
+					"One quick web search (a second or two) for a question a single lookup settles: opening hours, a time, a " +
 					"price, a date, a quick fact. Answer from what the sources say. If they don't clearly settle it, say so or " +
 					"delegate; never fill the gap with a guess. Comparisons, research, and anything needing several sources go " +
 					"to delegate instead.",

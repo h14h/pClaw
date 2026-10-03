@@ -11,7 +11,7 @@ import { Notes } from "./extensions/notes.ts";
 import { isEmoji } from "./extensions/reactions.ts";
 import { search } from "./extensions/recall.ts";
 import { checkPage } from "./pages.ts";
-import { findInPage, pageWindow } from "./search.ts";
+import { findInPage, pageWindow, readPage, search as webSearch } from "./search.ts";
 import { stamp, utcOffset } from "./time.ts";
 
 test("stamp gives weekday, local time, zone, and offset", () => {
@@ -120,4 +120,25 @@ test("checkPage refuses pages that load from outside, and allows links out", asy
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
+});
+
+test("Parallel: search sends the query as objective and keywords, and page reads use full content", async (t) => {
+	process.env.PARALLEL_API_KEY = "k";
+	const sent: { url: string; headers: Record<string, string>; body: Record<string, unknown> }[] = [];
+	const replies = [
+		{ results: [{ url: "https://a.example", title: "A", publish_date: "2026-09-01", excerpts: ["one", "two"] }] },
+		{ results: [{ url: "https://a.example", full_content: "  the page  ", excerpts: [] }], errors: [] },
+		{ results: [], errors: [{ url: "https://b.example", error_type: "fetch_failed", http_status_code: 403 }] },
+	];
+	t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
+		sent.push({ url, headers: init.headers as Record<string, string>, body: JSON.parse(String(init.body)) });
+		return new Response(JSON.stringify(replies.shift()));
+	});
+	const found = await webSearch("quiet nas case", { service: "parallel", maxResults: 3 });
+	assert.deepEqual(found, { results: [{ title: "A (2026-09-01)", url: "https://a.example", content: "one\n\ntwo" }] });
+	assert.equal(sent[0]?.url, "https://api.parallel.ai/v1/search");
+	assert.equal(sent[0]?.headers["x-api-key"], "k");
+	assert.deepEqual([sent[0]?.body.objective, sent[0]?.body.search_queries], ["quiet nas case", ["quiet nas case"]]);
+	assert.equal(await readPage("https://a.example", { service: "parallel" }), "the page");
+	await assert.rejects(readPage("https://b.example", { service: "parallel" }), /Couldn't read https:\/\/b.example: fetch_failed, HTTP 403/);
 });

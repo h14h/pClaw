@@ -1,11 +1,15 @@
 // A scripted day with pclaw, used by the dev fixture (see fixture.ts). Offsets are seconds from the start of the
 // scenario; `cutoff` decides how much of it has happened yet, so the same data can play back live.
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import type {
 	ConversationView,
+	FileContent,
+	FileSummary,
 	FollowUp,
 	ModelInfo,
 	Overview,
+	SearchUpdate,
 	Settings,
 	TimelineItem,
 	WorkerDetail,
@@ -154,8 +158,33 @@ const notes = `# Notes
 - Short replies. No bullet lists in chat.
 `
 
-// The real prompt files, read at dev-server start. Saves in the fixture only change memory, never the files.
-const prompt = (name: string) => readFileSync(new URL(`../../src/prompts/${name}.md`, import.meta.url), 'utf8')
+// The real markdown files, read at dev-server start. Saves in the fixture only change memory, never the files.
+// A file that isn't on this machine (a skill outside pclaw) gets a stub so the list still looks right.
+const home = process.env.HOME ?? ''
+const resolve = (path: string) => (path.startsWith('~/') ? `${home}/${path.slice(2)}` : fileURLToPath(new URL(`../../${path}`, import.meta.url)))
+type Seed = Omit<FileSummary, 'size' | 'modifiedAt'>
+const seeds: Seed[] = [
+	{ id: 'prompts/front.md', group: 'prompts', name: 'Front prompt', path: 'src/prompts/front.md', description: 'The whole system prompt for the model that talks to you: how it sounds, and how pclaw works.' },
+	{ id: 'prompts/worker.md', group: 'prompts', name: 'Worker prompt', path: 'src/prompts/worker.md', description: "Added to the end of pi's default coding-agent prompt for every worker; it doesn't replace it." },
+	{ id: 'prompts/memory.md', group: 'prompts', name: 'Notes pass', path: 'src/prompts/memory.md', description: 'Instructions for the background pass that keeps the notes file current after each stretch of conversation.' },
+	{ id: 'prompts/compaction.md', group: 'prompts', name: 'Summarizing', path: 'src/prompts/compaction.md', description: 'How the earlier part of a long conversation gets summarized when it is compacted.' },
+	{ id: 'formatting/discord.md', group: 'formatting', name: 'Discord', path: 'src/prompts/formatting/discord.md', description: 'How to write for Discord: its markdown, message length, mentions.' },
+	{ id: 'formatting/terminal.md', group: 'formatting', name: 'Terminal', path: 'src/prompts/formatting/terminal.md', description: 'How to write for a plain-text terminal that renders no markdown.' },
+	{ id: 'skills/web-page/SKILL.md', group: 'skills', skill: 'web-page', name: 'SKILL.md', path: 'src/skills/web-page/SKILL.md', description: 'Build a page from the standard template and publish it to the private address.' },
+	{ id: 'skills/web-page/STYLE.md', group: 'skills', skill: 'web-page', name: 'STYLE.md', path: 'src/skills/web-page/STYLE.md', description: 'The page style guide: look, tone, and the pieces a page is built from.' },
+	{ id: 'skills/routing-private-services/SKILL.md', group: 'skills', skill: 'routing-private-services', name: 'SKILL.md', path: '~/.claude/skills/routing-private-services/SKILL.md', description: 'Route a local service through a private h14h.link subdomain with DNSimple, Caddy, and Tailscale.' },
+]
+export const files = new Map<string, FileContent>(
+	seeds.map((seed) => {
+		const real = resolve(seed.path)
+		const found = existsSync(real)
+		const text = found ? readFileSync(real, 'utf8') : `# ${seed.skill ?? seed.name}\n\n(Not on this machine; the fixture made this up.)\n`
+		const modifiedAt = found ? statSync(real).mtimeMs : Date.now() - 86_400_000 * 3
+		return [seed.id, { ...seed, text, size: text.length, modifiedAt }]
+	}),
+)
+const summary = ({ text: _, ...rest }: FileContent): FileSummary => rest
+
 const grokLevels = ['off', 'low', 'medium', 'high']
 export const settings: Settings = {
 	front: { provider: 'xai', model: MODEL, thinkingLevel: 'medium' },
@@ -165,10 +194,39 @@ export const settings: Settings = {
 		{ provider: 'xai', id: 'grok-4.5-fast', name: 'Grok 4.5 Fast', thinkingLevels: ['off', 'low'] },
 		{ provider: 'xai', id: 'grok-4.7', name: 'Grok 4.7', thinkingLevels: grokLevels },
 	],
-	prompts: {
-		front: { text: prompt('front'), path: 'src/prompts/front.md', description: 'The whole system prompt for the model that talks to you: how it sounds, and how pclaw works.' },
-		worker: { text: prompt('worker'), path: 'src/prompts/worker.md', description: "Added to the end of pi's default coding-agent prompt for every worker; it doesn't replace it." },
+	search: {
+		search: 'tavily',
+		pages: 'parallel',
+		services: [
+			{ id: 'tavily', name: 'Tavily', ready: true },
+			{ id: 'parallel', name: 'Parallel', ready: true },
+			{ id: 'exa', name: 'Exa', ready: false },
+		],
 	},
+	files: [...files.values()].map(summary),
+}
+
+/** Saves a file's text the way the server would, or returns the reason it can't. */
+export function saveFile(id: string, text: string): FileContent | string {
+	const file = files.get(id)
+	if (!file) return `No file ${id}.`
+	if (!text.trim()) return 'The file would be empty.'
+	const next = { ...file, text, size: text.length, modifiedAt: Date.now() }
+	files.set(id, next)
+	settings.files = settings.files.map((f) => (f.id === id ? summary(next) : f))
+	return next
+}
+
+/** Picks a search service the way the server would, or returns the reason it can't. */
+export function setSearch(update: SearchUpdate): string | undefined {
+	for (const field of ['search', 'pages'] as const) {
+		const id = update[field]
+		if (id === undefined) continue
+		const service = settings.search.services.find((s) => s.id === id)
+		if (!service) return `No service ${id}.`
+		if (!service.ready) return `${service.name} has no API key.`
+		settings.search[field] = id
+	}
 }
 
 /** Applies a model change the way the server would, or returns the reason it can't. */

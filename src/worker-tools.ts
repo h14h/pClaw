@@ -4,10 +4,11 @@
  */
 import { Type } from "@earendil-works/pi-ai";
 import { publishPage } from "./pages.ts";
-import { findInPage, formatSearch, pageWindow, readPage, search } from "./search.ts";
+import { chosenService, findInPage, formatSearch, pageWindow, readPage, search } from "./search.ts";
 
-type Text = { content: { type: "text"; text: string }[]; details: Record<string, never> };
-const text = (value: string): Text => ({ content: [{ type: "text", text: value }], details: {} });
+/** `details` stays in the session file, not the model's context: which search service answered, for comparing them. */
+type Text = { content: { type: "text"; text: string }[]; details: Record<string, string> };
+const text = (value: string, details: Record<string, string> = {}): Text => ({ content: [{ type: "text", text: value }], details });
 
 type ToolApi = {
 	registerTool(tool: {
@@ -24,7 +25,7 @@ export default function (pi: ToolApi) {
 		name: "search",
 		label: "Search",
 		description:
-			"Search the web. Fast (about 2 seconds). Returns sources with snippets. Search one question at a time and read " +
+			"Search the web. Fast (a second or two). Returns sources with excerpts. Search one question at a time and read " +
 			"the results before searching again; run several searches together only when they're about different things.",
 		parameters: Type.Object({
 			query: Type.String({ description: "What to find, as a specific query." }),
@@ -32,11 +33,14 @@ export default function (pi: ToolApi) {
 		}),
 		async execute(_id, params: { query: string; max_results?: number }, signal) {
 			const maxResults = Math.min(Math.max(Math.round(params.max_results ?? 5), 1), 10);
-			return text(formatSearch(params.query, await search(params.query, { maxResults, ...(signal ? { signal } : {}) })));
+			const service = chosenService("search");
+			const found = await search(params.query, { maxResults, service, ...(signal ? { signal } : {}) });
+			return text(formatSearch(params.query, found), { service });
 		},
 	});
 	// Pages read in this job, so paging through one or searching it again doesn't refetch it.
 	const pages = new Map<string, Promise<string>>();
+	const service = chosenService("pages");
 	pi.registerTool({
 		name: "read_page",
 		label: "Read page",
@@ -53,12 +57,12 @@ export default function (pi: ToolApi) {
 		async execute(_id, params: { url: string; find?: string; offset?: number }, signal) {
 			let page = pages.get(params.url);
 			if (page === undefined) {
-				page = readPage(params.url, signal);
+				page = readPage(params.url, { service, ...(signal ? { signal } : {}) });
 				pages.set(params.url, page);
 				page.catch(() => pages.delete(params.url));
 			}
-			const text = await page;
-			return { content: [{ type: "text", text: params.find ? findInPage(text, params.find) : pageWindow(text, params.offset) }], details: {} };
+			const content = await page;
+			return text(params.find ? findInPage(content, params.find) : pageWindow(content, params.offset), { service });
 		},
 	});
 	pi.registerTool({

@@ -58,6 +58,10 @@ To try it without Discord, `pnpm chat` opens a conversation in the terminal. It 
 | `workerThinkingLevel` | `PCLAW_WORKER_THINKING` | `high` (deep jobs) |
 | `workerQuickThinkingLevel` | | `medium` (quick jobs) |
 | `tavilyApiKey` | `TAVILY_API_KEY` | set by `pnpm setup` |
+| `parallelApiKey` | `PARALLEL_API_KEY` | optional, set by `pnpm setup` |
+| `searchService` | `PCLAW_SEARCH` | `tavily` (or `parallel`; the dashboard switches it) |
+| `pageService` | `PCLAW_PAGE_READER` | `tavily` (or `parallel`; the dashboard switches it) |
+| `workerSkills` | | `[]` (more skill folders for workers, e.g. `["~/scripts/skills/publish"]`) |
 | `workerCommand` | | `pi` |
 | `workerTimeoutMinutes` | | `30` |
 | `memoryQuietMinutes` | | `20` |
@@ -80,9 +84,10 @@ Two models, split the way [exe.dev's "run fewer agents"](https://blog.exe.dev/et
 
 pclaw runs on [Pi Durable](https://earendil.com/posts/pi-durable/), a harness that writes every message, model turn, and tool call to SQLite before acting on it. If the process dies mid-reply, it picks up where it stopped. Follow-ups and worker runs are durable tasks; a worker cut off by a restart resumes its pi session.
 
-- `src/prompts/front.md` is the front model's system prompt: how pclaw talks (built from real Instinct conversations) and how it works. `src/prompts/worker.md` is added to pi's default prompt for every worker. Both are read on every request, so edits apply right away; the dashboard's settings page edits them too. `src/prompts/formatting/<app>.md` says what text formatting renders in each app (Discord, the terminal); the front model gets the one for the app the conversation is on.
+- `src/prompts/front.md` is the front model's system prompt: how pclaw talks (built from real Instinct conversations) and how it works. `src/prompts/worker.md` is added to pi's default prompt for every worker. Both are read on every request, so edits apply right away. The dashboard's settings page edits every markdown file here and in the workers' skills. `src/prompts/formatting/<app>.md` says what text formatting renders in each app (Discord, the terminal); the front model gets the one for the app the conversation is on.
 - `src/extensions/` holds the tools, one extension each: notes, follow-ups, workers.
 - `src/skills/web-page/` is the page skill workers load: `SKILL.md` (how to build and publish), `STYLE.md` (the style guide), and `template/`. Published pages are checked for anything loading from outside the page, then served by pclaw. To put pages somewhere else (a subdomain, a public host), set `pagePublisher` to a command that takes `<slug> <dir>` and prints the URL; that's where deployment specifics live, outside pclaw.
+- `src/search.ts` runs searches and page reads through Tavily or [Parallel](https://parallel.ai), each behind the same two calls. `pnpm search-bench "a query"` (or `--read <url>`) runs the same thing through every service with a key and prints how each did.
 - `src/channels/` connects conversations to Discord and the terminal.
 - `src/delivery.ts` sends replies out in order and remembers what it has sent.
 - `src/dashboard/` is the dashboard's API; `web/` is its UI (Vite, React, Tailwind, TanStack Router and Query). Build it with `pnpm --filter pclaw-web build`; pclaw serves `web/dist`. `PCLAW_FIXTURE=live pnpm --filter pclaw-web dev` runs the UI against a scripted conversation, no pclaw needed.

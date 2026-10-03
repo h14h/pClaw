@@ -15,7 +15,7 @@ import { Notes } from "../extensions/notes.ts";
 import type { WorkerOptions } from "../extensions/workers.ts";
 import { publishPage } from "../pages.ts";
 import { startDashboard } from "./server.ts";
-import type { ConversationView, Overview, Settings, WorkerDetail } from "./types.ts";
+import type { ConversationView, FileContent, Overview, Settings, WorkerDetail } from "./types.ts";
 import { pageReadsIn, parseWorkerSession } from "./views.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -23,6 +23,8 @@ const config: Config = { ...defaults, provider: "faux", model: "faux-1", thinkin
 
 let dir: string;
 before(async () => {
+	// The settings checks save to config.json; `pnpm test` points that at a temporary folder.
+	assert.ok(process.env.PCLAW_HOME, "Run this through `pnpm test`: it saves settings, and would change your real ones.");
 	dir = await mkdtemp(join(tmpdir(), "pclaw-dashboard-"));
 });
 after(async () => {
@@ -85,6 +87,11 @@ test("the dashboard API shows the timeline, held replies, workers, and their tra
 		fauxAssistantMessage("Jonsbo N4 looks right, $135"),
 	]);
 	const workers = await fakeWorkers();
+	const skill = join(dir, "skills", "demo");
+	mkdirSync(join(skill, "refs"), { recursive: true });
+	writeFileSync(join(skill, "SKILL.md"), "---\nname: demo\ndescription: A demo skill.\n---\n\n# Demo\n");
+	writeFileSync(join(skill, "refs", "notes.md"), "notes\n");
+	workers.skills.push(skill);
 	const agent = await openAgent(
 		await openNodeSqliteStorage(join(dir, "dash.sqlite")),
 		{ config, models, notes: new Notes(join(dir, "notes.md")), workers },
@@ -141,11 +148,10 @@ test("the dashboard API shows the timeline, held replies, workers, and their tra
 			["from-pclaw", "thinking", "tool", "text"],
 		);
 
-		// Settings: read, change the worker model, reject a bad level and a cross-origin write, save a prompt unchanged.
+		// Settings: read, change the worker model, reject a bad level and a cross-origin write.
 		const settings = await get<Settings>("/api/settings");
 		assert.equal(settings.worker.model, "grok-4.7");
 		assert.ok(settings.models.some((model) => model.id === "grok-4.5" && model.thinkingLevels.includes("medium")));
-		assert.match(settings.prompts.front.text, /You're pclaw/);
 		const put = (path: string, body: unknown, headers: Record<string, string> = {}) =>
 			fetch(`http://127.0.0.1:${port}${path}`, { method: "PUT", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
 		const changed = await put("/api/settings/models", { worker: { provider: "xai", model: "grok-4.5", thinkingLevel: "low" } });
@@ -153,10 +159,31 @@ test("the dashboard API shows the timeline, held replies, workers, and their tra
 		assert.equal(workers.model, "grok-4.5");
 		const bad = await put("/api/settings/models", { worker: { provider: "xai", model: "grok-4.5", thinkingLevel: "ludicrous" } });
 		assert.equal(bad.status, 400);
-		const crossSite = await put("/api/settings/prompts/worker", { text: "x" }, { Origin: "https://evil.example" });
-		assert.equal(crossSite.status, 400);
-		const saved = await put("/api/settings/prompts/worker", { text: settings.prompts.worker.text });
-		assert.equal(saved.status, 200);
+
+		// Search: a service without a key can't be picked; one with a key can, and the environment follows.
+		process.env.TAVILY_API_KEY = "test";
+		delete process.env.PARALLEL_API_KEY;
+		assert.deepEqual(settings.search.services.map((service) => [service.id, service.ready]), [["tavily", true], ["parallel", false]]);
+		assert.equal((await put("/api/settings/search", { pages: "parallel" })).status, 400);
+		process.env.PARALLEL_API_KEY = "test";
+		const switched = (await (await put("/api/settings/search", { pages: "parallel" })).json()) as Settings;
+		assert.deepEqual([switched.search.search, switched.search.pages], ["tavily", "parallel"]);
+		assert.equal(process.env.PCLAW_PAGE_READER, "parallel");
+
+		// Files: prompts, formatting, and skills (SKILL.md first) are listed; a skill file reads and saves; unknown ids
+		// and empty text are refused, and so is a cross-origin write.
+		const ids = settings.files.map((file) => file.id);
+		for (const id of ["prompts/front.md", "prompts/compaction.md", "formatting/discord.md", "skills/demo/SKILL.md"]) assert.ok(ids.includes(id), id);
+		assert.ok(ids.indexOf("skills/demo/SKILL.md") < ids.indexOf("skills/demo/refs/notes.md"));
+		assert.equal(settings.files.find((file) => file.id === "skills/demo/SKILL.md")?.description, "A demo skill.");
+		assert.match((await get<FileContent>("/api/files/prompts/front.md")).text, /You're pclaw/);
+		const saved = await put("/api/files/skills/demo/refs/notes.md", { text: "new notes" });
+		assert.equal(((await saved.json()) as FileContent).text, "new notes\n");
+		assert.equal((await get<FileContent>("/api/files/skills/demo/refs/notes.md")).text, "new notes\n");
+		assert.equal((await fetch(`http://127.0.0.1:${port}/api/files/skills%2Fdemo%2F..%2F..%2F..%2Fnotes.md`)).status, 404);
+		assert.equal((await put("/api/files/prompts/nope.md", { text: "x" })).status, 400);
+		assert.equal((await put("/api/files/skills/demo/refs/notes.md", { text: " " })).status, 400);
+		assert.equal((await put("/api/files/skills/demo/refs/notes.md", { text: "x" }, { Origin: "https://evil.example" })).status, 400);
 	} finally {
 		await dashboard.stop();
 		await agent.harness.close(context);
