@@ -50,6 +50,8 @@ export type WorkerOptions = {
 	toolsFile: string;
 	/** Reasoning for quick jobs; deep jobs use `thinkingLevel`. */
 	quickThinkingLevel: string;
+	/** pclaw's own pi skills (directories with SKILL.md), e.g. web-page. */
+	skills: string[];
 };
 
 export type Depth = "quick" | "deep";
@@ -66,6 +68,7 @@ export function workerOptions(config: Config, paths: { work: string; workerSessi
 		promptFile: prompts.worker.file,
 		toolsFile: fileURLToPath(new URL("../worker-tools.ts", import.meta.url)),
 		quickThinkingLevel: config.workerQuickThinkingLevel,
+		skills: [fileURLToPath(new URL("../skills/web-page", import.meta.url))],
 	};
 }
 
@@ -96,7 +99,8 @@ export function runWorker(
 		"--append-system-prompt", options.promptFile,
 		// pclaw's own tools, not the owner's personal pi setup: no other extensions, skills, or AGENTS.md files.
 		"--no-extensions", "--extension", options.toolsFile,
-		"--no-skills", "--no-context-files", "--no-prompt-templates", "--no-themes",
+		"--no-skills", ...options.skills.flatMap((skill) => ["--skill", skill]),
+		"--no-context-files", "--no-prompt-templates", "--no-themes",
 		// Trust project-local files in the workspace without an interactive prompt.
 		"--approve",
 		// pi reads a leading @ as a file to attach.

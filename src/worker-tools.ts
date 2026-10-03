@@ -3,6 +3,7 @@
  * which run every search through a Grok request and send one question to several search tools at once.
  */
 import { Type } from "@earendil-works/pi-ai";
+import { publishPage } from "./pages.ts";
 import { findInPage, formatSearch, pageWindow, readPage, search } from "./search.ts";
 
 type Text = { content: { type: "text"; text: string }[]; details: Record<string, never> };
@@ -58,6 +59,21 @@ export default function (pi: ToolApi) {
 			}
 			const text = await page;
 			return { content: [{ type: "text", text: params.find ? findInPage(text, params.find) : pageWindow(text, params.offset) }], details: {} };
+		},
+	});
+	pi.registerTool({
+		name: "publish_page",
+		label: "Publish page",
+		description:
+			"Publish a web page you built under pages/<slug>/ (see the web-page skill). Checks it, and returns its address " +
+			"on the person's private network. Call it again after changing a page.",
+		parameters: Type.Object({ slug: Type.String({ description: "The page's folder name under pages/." }) }),
+		async execute(_id, params: { slug: string }) {
+			const url = await publishPage(process.cwd(), params.slug, {
+				...(process.env.PCLAW_PAGES_URL ? { pagesUrl: process.env.PCLAW_PAGES_URL } : {}),
+				...(process.env.PCLAW_PAGE_PUBLISHER ? { publisher: process.env.PCLAW_PAGE_PUBLISHER } : {}),
+			});
+			return text(`Published: ${url}`);
 		},
 	});
 }

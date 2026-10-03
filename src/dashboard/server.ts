@@ -20,6 +20,7 @@ import { ConversationInfo, Routes } from "../routes.ts";
 import type { Notes } from "../extensions/notes.ts";
 import { Reactions } from "../extensions/reactions.ts";
 import { type WorkerOptions, Workers } from "../extensions/workers.ts";
+import { PUBLISHED, SLUG } from "../pages.ts";
 import { prompts } from "../prompts.ts";
 import { SettingsError, settingsApi } from "./settings.ts";
 import type {
@@ -45,6 +46,9 @@ const TYPES: Record<string, string> = {
 	".ico": "image/x-icon",
 	".json": "application/json",
 	".woff2": "font/woff2",
+	".webp": "image/webp",
+	".jpg": "image/jpeg",
+	".txt": "text/plain; charset=utf-8",
 };
 
 function fallbackLabel(address: string): string {
@@ -313,6 +317,37 @@ export async function startDashboard(
 		return true;
 	}
 
+	/** Published pages (src/pages.ts) from the workers' pages/ folder. Unpublished drafts aren't served. */
+	function servePage(path: string, response: ServerResponse): boolean {
+		const match = /^\/pages\/([^/]+)(\/.*)?$/.exec(path);
+		if (match === null) return false;
+		const slug = decodeURIComponent(match[1]!);
+		const root = join(workers.cwd, "pages", slug);
+		if (!SLUG.test(slug) || !existsSync(join(root, PUBLISHED))) {
+			response.writeHead(404, { "Content-Type": "text/plain" }).end("No such page.");
+			return true;
+		}
+		if (match[2] === undefined) {
+			response.writeHead(301, { Location: `/pages/${slug}/` }).end();
+			return true;
+		}
+		const rest = normalize(decodeURIComponent(match[2])).replace(/^(\.\.[/\\])+/, "");
+		let file = join(root, rest);
+		if (file.endsWith("/") || (existsSync(file) && statSync(file).isDirectory())) file = join(file, "index.html");
+		if (!file.startsWith(`${root}/`) || !existsSync(file) || file.endsWith(PUBLISHED)) {
+			response.writeHead(404, { "Content-Type": "text/plain" }).end("Not found.");
+			return true;
+		}
+		response.writeHead(200, {
+			"Content-Type": TYPES[extname(file)] ?? "application/octet-stream",
+			"Cache-Control": "no-cache",
+			// Pages are self-contained; this enforces it in the browser too.
+			"Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; frame-ancestors 'none'",
+		});
+		response.end(readFileSync(file));
+		return true;
+	}
+
 	function serveStatic(request: IncomingMessage, response: ServerResponse) {
 		if (!existsSync(join(WEB_DIST, "index.html"))) {
 			response.writeHead(503, { "Content-Type": "text/plain" }).end("The dashboard isn't built. Run `pnpm --filter pclaw-web build`.");
@@ -355,6 +390,7 @@ export async function startDashboard(
 			const conversation = /^\/api\/conversations\/([^/]+)$/.exec(path);
 			if (conversation !== null) return json(response, await conversationView(decodeURIComponent(conversation[1]!)));
 			if (path.startsWith("/api/")) return json(response, undefined);
+			if (servePage(path, response)) return;
 			serveStatic(request, response);
 		} catch (error) {
 			console.error("[pclaw] dashboard", error);

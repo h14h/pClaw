@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +13,7 @@ import { openAgent } from "../agent.ts";
 import { type Config, defaults } from "../config.ts";
 import { Notes } from "../extensions/notes.ts";
 import type { WorkerOptions } from "../extensions/workers.ts";
+import { publishPage } from "../pages.ts";
 import { startDashboard } from "./server.ts";
 import type { ConversationView, Overview, Settings, WorkerDetail } from "./types.ts";
 import { pageReadsIn, parseWorkerSession } from "./views.ts";
@@ -52,7 +54,7 @@ echo "Jonsbo N4, \\$135"
 `,
 	);
 	await chmod(command, 0o755);
-	return { command, provider: "xai", model: "grok-4.7", thinkingLevel: "high", timeoutMs: 10_000, cwd: join(dir, "work"), sessionDir, promptFile: join(dir, "worker.md"), toolsFile: join(dir, "worker-tools.ts"), quickThinkingLevel: "medium" };
+	return { command, provider: "xai", model: "grok-4.7", thinkingLevel: "high", timeoutMs: 10_000, cwd: join(dir, "work"), sessionDir, promptFile: join(dir, "worker.md"), toolsFile: join(dir, "worker-tools.ts"), quickThinkingLevel: "medium", skills: [] };
 }
 
 test("parseWorkerSession joins tool calls to results and strips the pclaw prefix", () => {
@@ -92,6 +94,21 @@ test("the dashboard API shows the timeline, held replies, workers, and their tra
 	const dashboard = await startDashboard({ agent, config, models, notes: new Notes(join(dir, "notes.md")), workers, port: 0 }, context);
 	try {
 		const { port } = dashboard;
+
+		// Pages: drafts aren't served, published ones are, and paths can't escape the page's folder.
+		const pageDir = join(workers.cwd, "pages", "trip");
+		mkdirSync(pageDir, { recursive: true });
+		writeFileSync(join(pageDir, "index.html"), "<h1>Trip</h1>");
+		const page = (path: string) => fetch(`http://127.0.0.1:${port}${path}`, { redirect: "manual" });
+		assert.equal((await page("/pages/trip/")).status, 404);
+		assert.equal(await publishPage(workers.cwd, "trip", { pagesUrl: "https://pinchy.example/pages" }), "https://pinchy.example/pages/trip/");
+		const served = await page("/pages/trip/");
+		assert.equal(served.status, 200);
+		assert.equal(await served.text(), "<h1>Trip</h1>");
+		assert.match(served.headers.get("content-security-policy") ?? "", /connect-src 'none'/);
+		assert.equal((await page("/pages/trip")).status, 301);
+		assert.equal((await page("/pages/trip/..%2F..%2Fnotes.md")).status, 404);
+		assert.equal((await page("/pages/trip/.published")).status, 404);
 		const get = async <T>(path: string): Promise<T> => (await fetch(`http://127.0.0.1:${port}${path}`)).json() as Promise<T>;
 
 		await conversation.submit({ type: "input", content: "[stamp]\nfind me a NAS case" }, context);

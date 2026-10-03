@@ -16,6 +16,7 @@ It's early. Today it can talk, remember, follow up on its own, and hand real wor
 - Answers one-lookup questions (hours, a time, a price) itself with a quick web search, in a few seconds.
 - Hands research, comparisons, and anything with files or many steps to a worker, then tells you what came back. Quick jobs run with less reasoning than deep ones.
 - Uses reactions as status: your message gets a badge while a worker is on it (⏳ or a topical emoji) and a closing one when the report is back (✅, 🎉, or something that fits bad news; ⚠️ if the job failed). It can answer "thanks" with just a reaction, and your reactions on its messages reach it as input.
+- Builds simple web pages (an itinerary, a comparison, a checklist) from one standard template and publishes them privately at `<dashboard>/pages/<slug>/`.
 - Sees images you send it.
 
 ## Setup
@@ -64,6 +65,8 @@ To try it without Discord, `pnpm chat` opens a conversation in the terminal. It 
 | `keepRecentTokens` | | `16000` |
 | `discordChannels` | | `[]` (DMs only) |
 | `dashboardPort` | `PCLAW_DASHBOARD_PORT` | `7421` |
+| `pagesUrl` | | the dashboard's `/pages` |
+| `pagePublisher` | | unset (pclaw serves pages itself) |
 | `authFile` | `PI_CODING_AGENT_DIR` moves it | `~/.pi/agent/auth.json` |
 | `timeZone` | `PCLAW_TZ` | the machine's time zone |
 | `discordToken` | `DISCORD_TOKEN` | set by `pnpm setup` |
@@ -79,6 +82,7 @@ pclaw runs on [Pi Durable](https://earendil.com/posts/pi-durable/), a harness th
 
 - `src/prompts/front.md` is the front model's system prompt: how pclaw talks (built from real Instinct conversations) and how it works. `src/prompts/worker.md` is added to pi's default prompt for every worker. Both are read on every request, so edits apply right away; the dashboard's settings page edits them too. `src/prompts/formatting/<app>.md` says what text formatting renders in each app (Discord, the terminal); the front model gets the one for the app the conversation is on.
 - `src/extensions/` holds the tools, one extension each: notes, follow-ups, workers.
+- `src/skills/web-page/` is the page skill workers load: `SKILL.md` (how to build and publish), `STYLE.md` (the style guide), and `template/`. Published pages are checked for anything loading from outside the page, then served by pclaw. To put pages somewhere else (a subdomain, a public host), set `pagePublisher` to a command that takes `<slug> <dir>` and prints the URL; that's where deployment specifics live, outside pclaw.
 - `src/channels/` connects conversations to Discord and the terminal.
 - `src/delivery.ts` sends replies out in order and remembers what it has sent.
 - `src/dashboard/` is the dashboard's API; `web/` is its UI (Vite, React, Tailwind, TanStack Router and Query). Build it with `pnpm --filter pclaw-web build`; pclaw serves `web/dist`. `PCLAW_FIXTURE=live pnpm --filter pclaw-web dev` runs the UI against a scripted conversation, no pclaw needed.

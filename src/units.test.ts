@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +10,7 @@ import { nextOccurrence } from "./extensions/follow-ups.ts";
 import { Notes } from "./extensions/notes.ts";
 import { isEmoji } from "./extensions/reactions.ts";
 import { search } from "./extensions/recall.ts";
+import { checkPage } from "./pages.ts";
 import { findInPage, pageWindow } from "./search.ts";
 import { stamp, utcOffset } from "./time.ts";
 
@@ -96,4 +98,22 @@ test("read_page pages through long text and finds passages by keyword", () => {
 	assert.match(found.split("---")[0]!, /three Silent Series R2 fans/);
 	assert.match(findInPage(page, "zeppelin"), /Nothing on the page mentions zeppelin/);
 	assert.equal(pageWindow("short page"), "short page");
+});
+
+test("checkPage refuses pages that load from outside, and allows links out", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pclaw-page-"));
+	try {
+		const page = (html: string) => writeFileSync(join(dir, "index.html"), html);
+		page('<link rel="stylesheet" href="style.css"><p>Fetch your gear. <a href="https://example.com">source</a></p>');
+		assert.deepEqual(checkPage(dir), []);
+		page('<script src="https://cdn.example.com/x.js"></script>');
+		assert.match(checkPage(dir).join(), /loads from outside the page/);
+		page("<script>fetch('/api')</script>");
+		assert.match(checkPage(dir).join(), /uses the network/);
+		page("<style>@import url(https://fonts.example.com/a.css);</style>");
+		assert.match(checkPage(dir).join(), /loads from outside the page/);
+		assert.match(checkPage(join(dir, "missing")).join(), /no index.html/);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
 });

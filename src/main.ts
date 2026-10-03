@@ -107,6 +107,9 @@ async function start(): Promise<void> {
 	}
 	ensureHome();
 	// Search (src/search.ts) reads the key from the environment, in this process and in the pi workers it starts.
+	// Workers' publish_page tool reads these.
+	process.env.PCLAW_PAGES_URL = config.pagesUrl ?? `http://127.0.0.1:${config.dashboardPort}/pages`;
+	if (config.pagePublisher !== undefined) process.env.PCLAW_PAGE_PUBLISHER = config.pagePublisher;
 	if (config.tavilyApiKey !== undefined) process.env.TAVILY_API_KEY = config.tavilyApiKey;
 	else console.log("[pclaw] No Tavily key: quick_search and worker search will fail. Run `pnpm setup`.");
 	const notes = new Notes(paths.notes);

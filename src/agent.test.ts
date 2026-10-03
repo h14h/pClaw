@@ -55,6 +55,7 @@ echo "walnut case is \\$135, ships free"
 		promptFile: join(dir, "worker.md"),
 		toolsFile: join(dir, "worker-tools.ts"),
 		quickThinkingLevel: "medium",
+		skills: [],
 	};
 }
 

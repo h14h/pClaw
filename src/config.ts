@@ -41,6 +41,10 @@ export type Config = {
 	tavilyApiKey?: string;
 	/** The dashboard listens on 127.0.0.1 only; a proxy puts it on the tailnet. */
 	dashboardPort: number;
+	/** Where published pages are reachable, as the person would open them. Defaults to the dashboard's /pages. */
+	pagesUrl?: string;
+	/** A publisher command for pages (`<command> <slug> <dir>`, prints the URL). Unset: pclaw serves them itself. */
+	pagePublisher?: string;
 	/** How long a conversation stays quiet before the memory pass updates the notes from it. */
 	memoryQuietMinutes: number;
 	/** Summarize older messages once a request's prompt passes this many tokens. */
