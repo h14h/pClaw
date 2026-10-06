@@ -16,7 +16,7 @@ import { quickSearchExtension } from "./extensions/quick-search.ts";
 import { reactionsExtension } from "./extensions/reactions.ts";
 import { recallExtension } from "./extensions/recall.ts";
 import { type Notes, notesExtension } from "./extensions/notes.ts";
-import { soulExtension } from "./extensions/soul.ts";
+import { formattingExtension, soulExtension } from "./extensions/soul.ts";
 import { ConversationInfo, Routes } from "./routes.ts";
 import { prepareWorkspace, type WorkerOptions, workerOptions, workersExtension } from "./extensions/workers.ts";
 
@@ -64,6 +64,8 @@ export async function openAgent(
 	registry.install(recallExtension(current, config.timeZone));
 	registry.install(reactionsExtension(current));
 	registry.install(quickSearchExtension());
+	// Last, so the app's rules end the system prompt.
+	registry.install(formattingExtension());
 
 	let agent = { model: { provider: config.provider, modelId: config.model }, thinkingLevel: config.thinkingLevel };
 	const harness = await Harness.open(

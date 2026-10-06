@@ -4,13 +4,15 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai/providers/faux";
 import { splitMessage } from "./channels/discord.ts";
-import { replyCollector } from "./delivery.ts";
+import { readAssistantReply, replyCollector } from "./delivery.ts";
 import { nextOccurrence } from "./extensions/follow-ups.ts";
 import { Notes } from "./extensions/notes.ts";
 import { isEmoji } from "./extensions/reactions.ts";
 import { search } from "./extensions/recall.ts";
 import { checkPage } from "./pages.ts";
+import { discordChecks } from "./prose-lab/checks.ts";
 import { findInPage, pageWindow, readPage, search as webSearch } from "./search.ts";
 import { stamp, utcOffset } from "./time.ts";
 
@@ -58,7 +60,7 @@ test("one run becomes one message: the answer wins over text said around tool ca
 	// With no answer, the interim text goes out instead of nothing.
 	collect({ kind: "interim", text: "saved that." });
 	assert.equal(collect({ kind: "final", silent: false }), "saved that.");
-	// NO_REPLY drops everything from the run.
+	// NO_REPLY suppresses short chatter, including on follow-ups and worker reports.
 	collect({ kind: "interim", text: "hm" });
 	assert.equal(collect({ kind: "final", silent: true }), undefined);
 	assert.equal(collect({ kind: "final", text: "fresh run", silent: false }), "fresh run");
@@ -66,6 +68,28 @@ test("one run becomes one message: the answer wins over text said around tool ca
 	collect({ kind: "interim", text: "on it, back in a few" });
 	assert.equal(flush(), "on it, back in a few");
 	assert.equal(flush(), undefined);
+});
+
+test("a substantive answer alongside tools survives a short final or NO_REPLY", () => {
+	const answer = "The walnut N4 is $135 for the case alone. It fits six drives, but you still need the motherboard, power supply, and disks. I'd price the whole build before buying it.";
+	for (const final of [undefined, "done, notes updated", "NO_REPLY"]) {
+		const collector = replyCollector();
+		collector.take({ kind: "interim", text: "I'll check." });
+		collector.take({ kind: "interim", text: answer });
+		collector.take({ kind: "interim", text: "saving that" });
+		assert.equal(
+			collector.take({ kind: "final", ...(final === undefined || final === "NO_REPLY" ? {} : { text: final }), silent: final === "NO_REPLY" }),
+			final === "done, notes updated" ? `${answer}\n\n${final}` : answer,
+		);
+		assert.equal(collector.flush(), undefined);
+		assert.equal(collector.take({ kind: "final", silent: true }), undefined);
+	}
+	const collector = replyCollector();
+	collector.take({ kind: "interim", text: answer });
+	assert.equal(collector.take({ kind: "final", text: answer.slice(0, 42), silent: false }), answer);
+	collector.take({ kind: "interim", text: answer });
+	const final = "The N4 fits six drives. The $135 buys the case only, so budget separately for the board, PSU, and disks.";
+	assert.equal(collector.take({ kind: "final", text: final, silent: false }), final);
 });
 
 test("recall ranks messages by matching terms, then recency", () => {
@@ -80,6 +104,19 @@ test("recall ranks messages by matching terms, then recency", () => {
 		[2, 1],
 	);
 	assert.deepEqual(search(messages, "the and of"), []);
+});
+
+test("reply text drops consecutive identical parts but keeps distinct parts and later repeats", () => {
+	assert.deepEqual(readAssistantReply(fauxAssistantMessage([fauxText("yeah, fair."), fauxText("yeah, fair.")])), {
+		kind: "final", text: "yeah, fair.", silent: false,
+	});
+	assert.deepEqual(readAssistantReply(fauxAssistantMessage([fauxText("one"), fauxText("two"), fauxText("one")])), {
+		kind: "final", text: "onetwoone", silent: false,
+	});
+	assert.deepEqual(readAssistantReply(fauxAssistantMessage([fauxText("answer"), fauxText("answer")], { stopReason: "toolUse" })), {
+		kind: "interim", text: "answer",
+	});
+	assert.deepEqual(readAssistantReply(fauxAssistantMessage("NO_REPLY")), { kind: "final", silent: true });
 });
 
 test("isEmoji accepts single emoji, including joined and flagged ones, and nothing else", () => {
@@ -141,4 +178,22 @@ test("Parallel: search sends the query as objective and keywords, and page reads
 	assert.deepEqual([sent[0]?.body.objective, sent[0]?.body.search_queries], ["quiet nas case", ["quiet nas case"]]);
 	assert.equal(await readPage("https://a.example", { service: "parallel" }), "the page");
 	await assert.rejects(readPage("https://b.example", { service: "parallel" }), /Couldn't read https:\/\/b.example: fetch_failed, HTTP 403/);
+});
+
+test("prose lab: Discord checks allow emphasis but catch bold sections, tables, headings, long messages, and unwrapped links", () => {
+	const rules = (text: string) => discordChecks(text).map((check) => check.rule);
+	assert.deepEqual(rules("walnut case. the $135 is just the case, though."), []);
+	assert.deepEqual(rules("| a | b |\n|---|---|\n| 1 | 2 |"), ["table"]);
+	assert.deepEqual(rules("### what they say\nstuff\n---\nmore"), ["heading", "rule"]);
+	assert.deepEqual(rules("**one** **two** **three**"), []);
+	assert.deepEqual(rules("**one** **two** **three** **four** **five** **six**"), []);
+	assert.deepEqual(rules("**one** **two** **three** **four** **five** **six** **seven**"), ["bold"]);
+	assert.deepEqual(rules("**The options**\nTake the walnut case."), ["bold"]);
+	assert.deepEqual(rules("**Price:** $135 for the case."), ["bold"]);
+	assert.deepEqual(rules("The **walnut case** is **$135**, before parts."), []);
+	assert.deepEqual(rules("The *walnut case* is _quiet_."), []);
+	assert.deepEqual(rules("x".repeat(2001)), ["length"]);
+	assert.deepEqual(rules("<https://a.example> and <https://b.example>"), []);
+	assert.deepEqual(rules("https://a.example and [b](https://b.example)"), ["links"]);
+	assert.deepEqual(rules("just one https://a.example"), []);
 });

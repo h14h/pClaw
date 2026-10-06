@@ -309,7 +309,7 @@ case "$last" in *restarted*) echo "resumed and finished";; *) sleep 30; echo "fi
 	}
 });
 
-test("the formatting guide follows the app the conversation is on", async () => {
+test("the formatting guide follows the app the conversation is on, at the end of the system prompt", async () => {
 	const { faux, models } = setup();
 	const requests: ModelContext[] = [];
 	const record = (request: ModelContext) => {
@@ -326,8 +326,10 @@ test("the formatting guide follows the app the conversation is on", async () => 
 		const conversation = await agent.conversationFor(address, context);
 		await (await conversation.submit({ type: "input", content: "hey" }, context)).wait(context);
 	}
-	assert.match(JSON.stringify(requests[0]), /Formatting for Discord/);
-	assert.doesNotMatch(JSON.stringify(requests[0]), /Formatting for the terminal/);
+	const discord = JSON.stringify(requests[0]);
+	assert.match(discord, /Formatting for Discord/);
+	assert.doesNotMatch(discord, /Formatting for the terminal/);
+	assert.ok(discord.indexOf("<notes>") < discord.indexOf("<formatting>"), "the app's rules come after everything else");
 	assert.match(JSON.stringify(requests[1]), /Formatting for the terminal/);
 	await agent.harness.close(context);
 });

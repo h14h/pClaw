@@ -40,12 +40,17 @@ export type Reply =
 export function readReply(entry: EntryRecord): Reply | undefined {
 	if (!AssistantEntry.is(entry)) return undefined;
 	const message = entry.model?.[0] as AssistantMessage | undefined;
-	if (message === undefined || message.stopReason === "aborted") return undefined;
+	return message === undefined ? undefined : readAssistantReply(message);
+}
+
+export function readAssistantReply(message: AssistantMessage): Reply | undefined {
+	if (message.stopReason === "aborted") return undefined;
 	if (message.stopReason === "error") {
 		return { kind: "final", text: `(something broke on my end: ${message.errorMessage ?? "unknown error"})`, silent: false };
 	}
 	const text = message.content
 		.flatMap((part) => (part.type === "text" ? [part.text] : []))
+		.filter((text, index, texts) => index === 0 || text !== texts[index - 1])
 		.join("")
 		.trim();
 	if (message.stopReason === "toolUse") return { kind: "interim", text };
@@ -55,9 +60,9 @@ export function readReply(entry: EntryRecord): Reply | undefined {
 
 /**
  * Collapses one run into one message. Models often say something before a tool call ("I'll check") and again after it
- * ("checking now"); only the answer goes out. Interim text goes out instead when the answer is empty, or when the run
- * ends without one (`delegate` ends the run as soon as the worker starts, so the line written with the call is the
- * reply).
+ * ("checking now"); only the answer goes out. Keep the longest interim if it's at least 100 characters and the final
+ * is absent, silent, or less than half as long, appending a distinct final. Empty finals and runs ending at a tool call
+ * still fall back to interim text (`delegate` ends the run as soon as the worker starts).
  */
 export function replyCollector() {
 	let interim: string[] = [];
@@ -71,7 +76,11 @@ export function replyCollector() {
 			if (reply.text !== "") interim.push(reply.text);
 			return undefined;
 		}
+		const longest = interim.reduce((best, text) => text.length > best.length ? text : best, "");
 		const held = flush();
+		if (longest.length >= 100 && (reply.text?.length ?? 0) < longest.length / 2) {
+			return reply.silent || reply.text === undefined || longest.includes(reply.text) ? longest : `${longest}\n\n${reply.text}`;
+		}
 		return reply.silent ? undefined : (reply.text ?? held);
 	};
 	return { take, flush };

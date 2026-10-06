@@ -15,7 +15,8 @@
     "chat": "node src/main.ts chat",
     "search-bench": "node src/search-bench.ts",
     "test": "PCLAW_HOME=$(mktemp -d) node --test 'src/**/*.test.ts'",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prose-lab": "node src/prose-lab/lab.ts"
   },
   "dependencies": {
     "@earendil-works/chord": "^1.0.0",
