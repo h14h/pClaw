@@ -69,7 +69,7 @@ function Item({ item, worker, isReport }: { item: WorkerItem; worker: WorkerDeta
     case 'tool':
       return (
         <Row at={item.at} who={item.name} whoClass="font-mono text-mute">
-          <ToolCall summary={summarize(item.args)} args={item.args} result={item.result} isError={item.isError} running={item.result === undefined && worker.status === 'working'} />
+          <ToolCall summary={summarize(item.args)} args={item.args} result={item.result} isError={item.isError} note={item.note} running={item.result === undefined && worker.status === 'working'} />
         </Row>
       )
   }

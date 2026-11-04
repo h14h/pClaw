@@ -14,7 +14,8 @@ import { deliver } from "./delivery.ts";
 import { NotesUpdate } from "./extensions/memory.ts";
 import { Notes } from "./extensions/notes.ts";
 import { Reactions } from "./extensions/reactions.ts";
-import type { WorkerOptions } from "./extensions/workers.ts";
+import { type WorkerOptions, Workers } from "./extensions/workers.ts";
+import { museTranscript, parseMuseSession } from "./muse.ts";
 
 const context = BACKGROUND_CONTEXT;
 const config: Config = { ...defaults, provider: "faux", model: "faux-1", thinkingLevel: "off", timeZone: "America/Los_Angeles" };
@@ -54,6 +55,9 @@ echo "walnut case is \\$135, ships free"
 		sessionDir: join(dir, "worker-sessions"),
 		promptFile: join(dir, "worker.md"),
 		toolsFile: join(dir, "worker-tools.ts"),
+		cliFile: join(dir, "worker-cli.ts"),
+		museCommand: join(dir, "fake-muse.sh"),
+		piFallback: { provider: "xai", model: "grok-4.7" },
 		quickThinkingLevel: "medium",
 		skills: [],
 	};
@@ -242,6 +246,75 @@ test("delegate runs a worker, its report comes back, and message_worker reuses i
 	assert.match(calls[1]!, /check it fits 4 drives/);
 	const session = (line: string) => /session=(\S+)/.exec(line)?.[1];
 	assert.equal(session(calls[0]!), session(calls[1]!));
+	await delivery.stop();
+	await agent.harness.close(context);
+});
+
+/** A stand-in for `muse exec --json`: logs its session id and prompt, and streams a run's events. */
+async function fakeMuse(): Promise<string> {
+	const command = join(dir, "fake-muse.mjs");
+	await writeFile(
+		command,
+		`#!${process.execPath}
+import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+const session = args[args.indexOf("--session-id") + 1];
+const prompt = args.at(-1);
+appendFileSync(${JSON.stringify(join(dir, "muse-calls.log"))}, JSON.stringify({ session, prompt, args }) + "\\n");
+const event = (payload) => console.log(JSON.stringify({ schema_version: 1, recorded_at: 1, payload }));
+event({ kind: "turn_input_user", prompt });
+event({ kind: "tool_result", call_id: "c1", correlation_facts: { tool_name: "bash", outcome: "success" }, text: JSON.stringify({ command: "ls", output: "notes.txt" }) });
+console.log("{half a line");
+event({ kind: "run_terminal", terminal: "completed", reason: null, text: prompt.includes("fits") ? "yep, it fits" : "walnut case is $135" });
+`,
+	);
+	await chmod(command, 0o755);
+	return command;
+}
+
+test("a Muse worker gets pclaw's worker prompt once, keeps its Muse session, and its events become the transcript", async () => {
+	const { faux, models } = setup();
+	faux.setResponses([
+		fauxAssistantMessage([fauxText("on it"), fauxToolCall("delegate", { name: "nas", brief: "find a walnut NAS case" })], { stopReason: "toolUse" }),
+		fauxAssistantMessage("walnut case is $135"),
+		fauxAssistantMessage([fauxText("asking"), fauxToolCall("message_worker", { name: "nas", message: "check it fits 4 drives" })], { stopReason: "toolUse" }),
+		fauxAssistantMessage("yep, it fits"),
+	]);
+	await writeFile(join(dir, "worker.md"), "WORKER RULES: never make things up.");
+	const workers = { ...(await fakeWorkers()), provider: "muse", model: "muse-wonder-full-1.0", museCommand: await fakeMuse(), sessionDir: join(dir, "muse-sessions") };
+	const agent = await openAgent(
+		await openNodeSqliteStorage(join(dir, "muse-workers.sqlite")),
+		{ config, models, notes: new Notes(join(dir, "notes-muse.md")), workers },
+		context,
+	);
+	const conversation = await agent.conversationFor("test:muse", context);
+	const { sent, outbox, until } = inbox();
+	const delivery = await deliver(agent.harness, conversation.id, outbox, context);
+
+	await conversation.submit({ type: "input", content: "find me a nice NAS case" }, context);
+	await until(2);
+	await conversation.submit({ type: "input", content: "does it fit 4 drives?" }, context);
+	await until(4);
+
+	assert.deepEqual(sent, ["on it", "walnut case is $135", "asking", "yep, it fits"]);
+	const calls = (await readFile(join(dir, "muse-calls.log"), "utf8")).trim().split("\n").map((line) => JSON.parse(line) as { session: string; prompt: string; args: string[] });
+	assert.equal(calls.length, 2);
+	assert.equal(calls[0]!.session, calls[1]!.session);
+	assert.match(calls[0]!.prompt, /WORKER RULES[\s\S]*worker-cli\.ts search[\s\S]*Message from pclaw:\n\nThis is a quick job[\s\S]*find a walnut NAS case/);
+	assert.doesNotMatch(calls[1]!.prompt, /WORKER RULES/);
+	assert.ok(calls[0]!.args.includes("muse-wonder-full-1.0") && calls[0]!.args.includes("--no-foreign-personal-context"));
+	const job = (await agent.harness.snapshot(Workers, conversation.id, context))?.workers.nas;
+	assert.equal(job?.provider, "muse");
+
+	const transcript = parseMuseSession(await readFile(museTranscript(workers.sessionDir, calls[0]!.session), "utf8"));
+	assert.deepEqual(
+		transcript.map((item) => item.kind),
+		["from-pclaw", "tool", "text", "from-pclaw", "tool", "text"],
+	);
+	assert.match((transcript[0] as { text: string }).text, /^This is a quick job/);
+	// Muse's own event times aren't wall-clock time; pclaw stamps them as they arrive.
+	assert.ok(Math.abs(transcript[0]!.at - Date.now()) < 60_000);
+	assert.deepEqual((transcript[1] as { args: unknown }).args, { command: "ls" });
 	await delivery.stop();
 	await agent.harness.close(context);
 });

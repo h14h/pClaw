@@ -31,6 +31,7 @@ export const Reactions = defineDoc<{
 	history: "latest",
 	fork: "initial",
 	initial: () => ({ asks: {}, reports: {} }),
+	checkpointWhen: (_value, _ops, { deltasSinceBase }) => deltasSinceBase >= 64,
 });
 
 export const WORKING = "⏳";
@@ -83,9 +84,9 @@ export function reactionsExtension(harness: { current?: Harness }) {
 					const value = emoji.trim() === "none" ? "" : emoji.trim();
 					if (value !== "" && !isEmoji(value)) throw new Error(`"${emoji}" isn't a single emoji.`);
 					const ref = await currentAsk(harness.current, api, api.conversationId, context);
-					if (ref === undefined) return { content: [{ type: "text" as const, text: "There's no message of theirs to react to here." }] };
+					if (ref === undefined) return { output: [{ type: "text" as const, text: "There's no message of theirs to react to here." }] };
 					await api.commit((tx) => setReaction(tx, api.conversationId, ref, value), context);
-					return { content: [{ type: "text" as const, text: value === "" ? "Cleared." : `Reacted ${value}.` }] };
+					return { output: [{ type: "text" as const, text: value === "" ? "Cleared." : `Reacted ${value}.` }] };
 				},
 			}),
 		],

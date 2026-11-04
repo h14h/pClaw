@@ -17,6 +17,7 @@ import { reactionsExtension } from "./extensions/reactions.ts";
 import { recallExtension } from "./extensions/recall.ts";
 import { type Notes, notesExtension } from "./extensions/notes.ts";
 import { formattingExtension, soulExtension } from "./extensions/soul.ts";
+import { t3Extension } from "./extensions/t3.ts";
 import { ConversationInfo, Routes } from "./routes.ts";
 import { prepareWorkspace, type WorkerOptions, workerOptions, workersExtension } from "./extensions/workers.ts";
 
@@ -64,6 +65,16 @@ export async function openAgent(
 	registry.install(recallExtension(current, config.timeZone));
 	registry.install(reactionsExtension(current));
 	registry.install(quickSearchExtension());
+	registry.install(
+		t3Extension({
+			t3Url: config.t3Url,
+			storeFile: paths.t3Auth,
+			redirectUri: config.t3RedirectUri ?? `http://127.0.0.1:${config.dashboardPort}/t3/callback`,
+			allowSend: config.t3AllowSend,
+			pollMs: Math.max(15, config.t3PollSeconds) * 1000,
+			timeZone: config.timeZone,
+		}),
+	);
 	// Last, so the app's rules end the system prompt.
 	registry.install(formattingExtension());
 

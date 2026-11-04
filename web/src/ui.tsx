@@ -140,7 +140,7 @@ export function Pre({ children, className = '' }: { children: ReactNode; classNa
 }
 
 /** A compact tool call: one clickable line, details underneath when open. */
-export function ToolCall({ lead, summary, args, result, isError, running }: { lead?: ReactNode; summary: string; args: unknown; result?: string; isError?: boolean; running: boolean }) {
+export function ToolCall({ lead, summary, args, result, isError, running, note }: { lead?: ReactNode; summary: string; args: unknown; result?: string; isError?: boolean; running: boolean; note?: string }) {
   const [open, setOpen] = useState(false)
   return (
     <div className="font-mono text-[12px] leading-5">
@@ -148,6 +148,7 @@ export function ToolCall({ lead, summary, args, result, isError, running }: { le
         <span className="w-2 shrink-0 text-faint">{open ? '▾' : '▸'}</span>
         {lead}
         <span className={`truncate ${lead ? 'text-mute' : ''}`}>{summary}</span>
+        {note && <span className="shrink-0 text-[11px] text-faint">{note}</span>}
         {running && <span className="flex shrink-0 items-center gap-1.5 text-amber-600 dark:text-amber-400"><Dot status="working" />running</span>}
         {isError && <Tag tone="red">error</Tag>}
       </button>

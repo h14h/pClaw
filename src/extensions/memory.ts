@@ -32,6 +32,7 @@ export const Memory = defineDoc<{ keeper?: TaskId; reviewed?: EntryId }>({
 	history: "latest",
 	fork: "initial",
 	initial: () => ({}),
+	checkpointWhen: (_value, _ops, { deltasSinceBase }) => deltasSinceBase >= 64,
 });
 
 /** A display-only transcript entry (no model message) recording what a pass changed. */
@@ -105,7 +106,7 @@ export function memoryExtension(options: { notes: Notes; models: Models; config:
 			watch: async (task, runtime, context) => {
 				// Each round saves a new checkpoint; Pi Durable doesn't rerun a phase whose checkpoint didn't change.
 				const next = { phase: "watch", tick: task.state.checkpoint.tick + 1 } as const;
-				const again = () => runtime.commit(() => ({ status: "running", checkpoint: next }), context);
+				const checkAgainAt = (until: number) => runtime.sleepUntil(until, next, context);
 				const id = runtime.conversationId;
 				const now = runtime.now();
 				const { entries } = await runtime.context(id, context);
@@ -117,12 +118,10 @@ export function memoryExtension(options: { notes: Notes; models: Models; config:
 				const { lines, lastAt } = conversationText(fresh);
 
 				if (last === undefined) {
-					await runtime.sleep(now + Math.min(CHECK_MS, options.quietMs), context);
-					return again();
+					return checkAgainAt(now + Math.min(CHECK_MS, options.quietMs));
 				}
 				if (lines.length > 0 && now < (lastAt ?? now) + options.quietMs) {
-					await runtime.sleep((lastAt ?? now) + options.quietMs, context);
-					return again();
+					return checkAgainAt((lastAt ?? now) + options.quietMs);
 				}
 
 				let changes = { add: [] as string[], remove: [] as string[] };
@@ -132,8 +131,7 @@ export function memoryExtension(options: { notes: Notes; models: Models; config:
 					} catch (error) {
 						if (context.abortSignal?.aborted) throw error;
 						runtime.report(error);
-						await runtime.sleep(now + RETRY_MS, context);
-						return again();
+						return checkAgainAt(now + RETRY_MS);
 					}
 				}
 				const existing = new Set(notes.read().split("\n").map((line) => line.replace(/^-\s*/, "").trim()));

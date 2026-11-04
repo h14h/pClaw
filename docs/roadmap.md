@@ -6,11 +6,12 @@ Each step should be usable on its own before the next one starts.
 
 ## 1. Text it on Discord (done)
 
-DMs with one owner, the voice prompt, notes, self-scheduled follow-ups, images in. A fast front model (Grok 4.5, medium) talks; pi workers (Grok 4.7, high) do the work and report back. Runs on Pi Durable with SQLite, signed in through a SuperGrok subscription.
+DMs with one owner, the voice prompt, notes, self-scheduled follow-ups, images in. A fast front model (Muse Spark 1.3, medium) talks; workers do the work and report back, in Muse Code (Muse Wonder Full, high) or pi. Runs on Pi Durable with SQLite, signed in through a Muse Code subscription.
 
 ## 1.5. Better workers
 
-- Claude Code and Codex as workers, chosen per job.
+- Claude Code and Codex as workers, chosen per job. Muse Code is the first harness besides pi (`src/muse.ts`); the others can follow its shape: a headless run with JSON events, the worker prompt in the first message, and `src/worker-cli.ts` for pclaw's tools.
+- Muse's sandbox. It can't start on mp1 (Ubuntu blocks the unprivileged user namespaces bubblewrap needs), so Muse workers run with it off. With an AppArmor profile for bwrap, workers could keep their shell but lose write access outside the work folder.
 - Progress from long jobs, so the front model can answer "how's it going?" without guessing. pi's JSON mode has the events.
 - Approval as a real gate instead of an instruction. Today the workers' brief says to stop before outward-facing actions, but a worker with a shell could ignore it. The browser and vault tools below should enforce it in code.
 - Replay turns from the exported Instinct thread against the front model, to catch voice regressions when the prompt or model changes.

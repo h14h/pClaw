@@ -1,0 +1,102 @@
+@import "tailwindcss";
+
+/* Geist, self-hosted from the fontsource packages: latin and latin-ext only, variable weight, woff2. `block` because
+   the files are small and same-origin, so a brief wait beats a visible swap. */
+@font-face {
+  font-family: 'Geist';
+  font-style: normal;
+  font-display: block;
+  font-weight: 100 900;
+  src: url('@fontsource-variable/geist/files/geist-latin-wght-normal.woff2') format('woff2-variations');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Geist';
+  font-style: normal;
+  font-display: block;
+  font-weight: 100 900;
+  src: url('@fontsource-variable/geist/files/geist-latin-ext-wght-normal.woff2') format('woff2-variations');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Geist Mono';
+  font-style: normal;
+  font-display: block;
+  font-weight: 100 900;
+  src: url('@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2') format('woff2-variations');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Geist Mono';
+  font-style: normal;
+  font-display: block;
+  font-weight: 100 900;
+  src: url('@fontsource-variable/geist-mono/files/geist-mono-latin-ext-wght-normal.woff2') format('woff2-variations');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@theme {
+  --font-sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, Menlo, Consolas, monospace;
+}
+
+/* Neutral palette that follows the system theme. Utilities: bg-bg, text-fg, text-mute, text-faint, border-line, bg-panel, bg-you. */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-fg: var(--fg);
+  --color-mute: var(--mute);
+  --color-faint: var(--faint);
+  --color-line: var(--line);
+  --color-panel: var(--panel);
+  --color-you: var(--you);
+}
+
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --fg: #1c1c1e;
+  --mute: #6b6b74;
+  --faint: #a4a4ad;
+  --line: #e7e7eb;
+  --panel: #f4f4f6;
+  --you: #edf2fa;
+  --sel: #cfe0f7;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131315;
+    --fg: #e4e4e8;
+    --mute: #9696a0;
+    --faint: #5d5d66;
+    --line: #27272c;
+    --panel: #1b1b1f;
+    --you: #1a2130;
+    --sel: #2a3a58;
+  }
+}
+
+html, body, #app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 14px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+/* Rendered message text (see md.tsx). */
+.md > * + * { margin-top: 0.5em; }
+.md p { white-space: pre-wrap; }
+.md ul { list-style: disc; padding-left: 1.4em; }
+.md ol { list-style: decimal; padding-left: 1.6em; }
+.md li + li { margin-top: 0.25em; }
+.md a { text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--faint); }
+.md a:hover { text-decoration-color: currentColor; }
+.md code { font-family: var(--font-mono); font-size: 0.9em; background: var(--panel); padding: 0 0.3em; border-radius: 3px; }
+.md pre { font-family: var(--font-mono); font-size: 12px; background: var(--panel); padding: 0.5em 0.75em; border-radius: 4px; overflow-x: auto; white-space: pre; }
+.md pre code { background: none; padding: 0; font-size: inherit; }

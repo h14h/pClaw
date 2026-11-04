@@ -1,5 +1,6 @@
 packages:
   - web
+  - lab-web
 
 # Pi 1.0 shipped 2026-10-01; let it through pnpm's default 24h release-age gate.
 minimumReleaseAgeExclude:

@@ -1,0 +1,20 @@
+# systemd user service for the prose lab page. Install with:
+#   cp deploy/prose-lab.service ~/.config/systemd/user/ && systemctl --user daemon-reload
+#   systemctl --user enable --now prose-lab
+# Logs: journalctl --user -u prose-lab -f
+[Unit]
+Description=pclaw prose lab
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/code/pclaw
+Environment=PATH=%h/.local/share/mise/shims:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PROSE_LAB_PORT=7423
+ExecStart=%h/.local/share/mise/shims/node src/prose-lab/server.ts
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

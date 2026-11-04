@@ -10,6 +10,7 @@ export const Routes = defineDoc<{ conversations: Record<string, ConversationId> 
 	version: 1,
 	scope: "session",
 	initial: () => ({ conversations: {} }),
+	checkpointWhen: (_value, _ops, { deltasSinceBase }) => deltasSinceBase >= 64,
 });
 
 /** The app a conversation lives in: "discord", "terminal". The part of its address before the first colon. */
@@ -27,4 +28,5 @@ export const ConversationInfo = defineDoc<{
 	version: 1,
 	scope: "session",
 	initial: () => ({ conversations: {} }),
+	checkpointWhen: (_value, _ops, { deltasSinceBase }) => deltasSinceBase >= 64,
 });

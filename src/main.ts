@@ -4,6 +4,7 @@ import { createInterface } from "node:readline/promises";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { AuthInteraction } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
+import { metaProvider } from "@earendil-works/pi-ai/providers/meta";
 import { xaiProvider } from "@earendil-works/pi-ai/providers/xai";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { openAgent } from "./agent.ts";
@@ -15,12 +16,14 @@ import { FileCredentialStore } from "./credentials.ts";
 import { startDashboard } from "./dashboard/server.ts";
 import { Notes } from "./extensions/notes.ts";
 import { workerOptions } from "./extensions/workers.ts";
+import { MUSE } from "./muse.ts";
 import { chooseService, serviceReady, services } from "./search.ts";
 
 const context = BACKGROUND_CONTEXT;
 
 function createPclawModels() {
 	const models = createModels({ credentials: new FileCredentialStore(loadConfig().authFile) });
+	models.setProvider(metaProvider());
 	models.setProvider(xaiProvider());
 	return models;
 }
@@ -49,7 +52,7 @@ const terminalLogin: AuthInteraction = {
 
 async function login(): Promise<void> {
 	const config = loadConfig();
-	console.log(`Signing in to ${config.provider} (a SuperGrok or X Premium subscription works for xAI).`);
+	console.log(`Signing in to ${config.provider} (a Muse Code subscription works for meta).`);
 	console.log(`The sign-in is saved to ${config.authFile}, shared with pi.`);
 	await createPclawModels().login(config.provider, "oauth", terminalLogin);
 	console.log("Signed in.");
@@ -71,14 +74,25 @@ async function setup(): Promise<void> {
 	if (!(await signedIn(models, config.provider))) await login();
 	else console.log(`Already signed in to ${config.provider}.`);
 
-	const worker = spawnSync(config.workerCommand, ["--version"], { encoding: "utf8" });
-	if (worker.status !== 0) {
-		console.log(
-			`\nWorkers run pi, and \`${config.workerCommand}\` didn't start. Install it with\n` +
-				"  npm install -g @earendil-works/pi-coding-agent\n",
-		);
+	if (config.workerProvider === MUSE) {
+		const muse = spawnSync(config.museCommand, ["usage"], { encoding: "utf8" });
+		if (muse.error !== undefined) {
+			console.log(`\nWorkers run Muse Code, and \`${config.museCommand}\` didn't start. Install Muse Code and run \`muse login\`.\n`);
+		} else if (muse.status !== 0) {
+			console.log(`\nWorkers run Muse Code, and it isn't signed in. Run \`${config.museCommand} login\`.\n`);
+		} else {
+			console.log(`Workers will use Muse Code with ${config.workerModel} (${config.workerThinkingLevel}).`);
+		}
 	} else {
-		console.log(`Workers will use pi ${worker.stdout.trim()} with ${config.workerModel} (${config.workerThinkingLevel}).`);
+		const worker = spawnSync(config.workerCommand, ["--version"], { encoding: "utf8" });
+		if (worker.status !== 0) {
+			console.log(
+				`\nWorkers run pi, and \`${config.workerCommand}\` didn't start. Install it with\n` +
+					"  npm install -g @earendil-works/pi-coding-agent\n",
+			);
+		} else {
+			console.log(`Workers will use pi ${worker.stdout.trim()} with ${config.workerModel} (${config.workerThinkingLevel}).`);
+		}
 	}
 
 	if (config.tavilyApiKey === undefined) {

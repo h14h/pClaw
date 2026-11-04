@@ -27,6 +27,7 @@ const Delivered = defineDoc<{ last?: EntryId }>({
 	history: "latest",
 	fork: "initial",
 	initial: () => ({}),
+	checkpointWhen: (_value, _ops, { deltasSinceBase }) => deltasSinceBase >= 64,
 });
 
 export const SILENT = "NO_REPLY";

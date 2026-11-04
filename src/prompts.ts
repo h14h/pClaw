@@ -15,7 +15,7 @@ export const prompts = {
 	worker: {
 		file: here("worker.md"),
 		name: "Worker prompt",
-		description: "Added to the end of pi's default coding-agent prompt for every worker run.",
+		description: "For every worker job: added to the end of pi's coding-agent prompt, or put in front of a Muse Code job's first message.",
 	},
 	memory: {
 		file: here("memory.md"),

@@ -45,7 +45,7 @@ export class Notes {
 	}
 }
 
-const text = (value: string) => ({ content: [{ type: "text" as const, text: value }] });
+const text = (value: string) => ({ output: [{ type: "text" as const, text: value }] });
 
 export function notesExtension(notes: Notes) {
 	return defineExtension({

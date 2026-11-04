@@ -107,6 +107,8 @@ export type TimelineItem =
 			/** Undefined while the call is still running. */
 			result?: string;
 			isError?: boolean;
+			/** What a service-backed call used and how long it took, e.g. "via parallel · 1.4s". */
+			note?: string;
 			worker?: string;
 	  };
 
@@ -134,7 +136,7 @@ export type WorkerItem =
 	/** Text the worker wrote. The last one in a run is its report. */
 	| { kind: "text"; at: number; text: string }
 	| { kind: "thinking"; at: number; text: string }
-	| { kind: "tool"; at: number; name: string; args: unknown; result?: string; isError?: boolean };
+	| { kind: "tool"; at: number; name: string; args: unknown; result?: string; isError?: boolean; note?: string };
 
 export type FollowUp = { id: string; at: number; note: string; repeat?: "daily" | "weekly" };
 

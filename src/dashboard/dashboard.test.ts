@@ -56,7 +56,7 @@ echo "Jonsbo N4, \\$135"
 `,
 	);
 	await chmod(command, 0o755);
-	return { command, provider: "xai", model: "grok-4.7", thinkingLevel: "high", timeoutMs: 10_000, cwd: join(dir, "work"), sessionDir, promptFile: join(dir, "worker.md"), toolsFile: join(dir, "worker-tools.ts"), quickThinkingLevel: "medium", skills: [] };
+	return { command, provider: "xai", model: "grok-4.7", thinkingLevel: "high", timeoutMs: 10_000, cwd: join(dir, "work"), sessionDir, promptFile: join(dir, "worker.md"), toolsFile: join(dir, "worker-tools.ts"), cliFile: join(dir, "worker-cli.ts"), museCommand: "muse", piFallback: { provider: "xai", model: "grok-4.5" }, quickThinkingLevel: "medium", skills: [] };
 }
 
 test("parseWorkerSession joins tool calls to results and strips the pclaw prefix", () => {

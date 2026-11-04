@@ -4,11 +4,14 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai/providers/faux";
 import { splitMessage } from "./channels/discord.ts";
 import { readAssistantReply, replyCollector } from "./delivery.ts";
+import { serviceNote } from "./dashboard/views.ts";
 import { nextOccurrence } from "./extensions/follow-ups.ts";
 import { Notes } from "./extensions/notes.ts";
+import { quickSearchExtension } from "./extensions/quick-search.ts";
 import { isEmoji } from "./extensions/reactions.ts";
 import { search } from "./extensions/recall.ts";
 import { checkPage } from "./pages.ts";
@@ -178,6 +181,32 @@ test("Parallel: search sends the query as objective and keywords, and page reads
 	assert.deepEqual([sent[0]?.body.objective, sent[0]?.body.search_queries], ["quiet nas case", ["quiet nas case"]]);
 	assert.equal(await readPage("https://a.example", { service: "parallel" }), "the page");
 	await assert.rejects(readPage("https://b.example", { service: "parallel" }), /Couldn't read https:\/\/b.example: fetch_failed, HTTP 403/);
+});
+
+test("quick_search records which service answered and how long it took, failures included", async (t) => {
+	process.env.PARALLEL_API_KEY = "k";
+	process.env.PCLAW_SEARCH = "parallel";
+	t.after(() => delete process.env.PCLAW_SEARCH);
+	const replies = [
+		new Response(JSON.stringify({ results: [{ url: "https://a.example", title: "A", excerpts: ["open till 2am"] }] })),
+		new Response("over the limit", { status: 432 }),
+	];
+	t.mock.method(globalThis, "fetch", async () => replies.shift());
+	const tool = quickSearchExtension().tools![0]!;
+	const run = (query: string) => tool.execute({ query }, {} as never, BACKGROUND_CONTEXT) as Promise<{ isError?: boolean; details?: Record<string, unknown> }>;
+	const found = await run("pequod's hours");
+	assert.equal(found.isError, undefined);
+	assert.equal(found.details?.service, "parallel");
+	assert.equal(found.details?.results, 1);
+	assert.equal(typeof found.details?.ms, "number");
+	const failed = await run("pequod's hours");
+	assert.equal(failed.isError, true);
+	assert.equal(failed.details?.service, "parallel");
+	assert.match(String(failed.details?.error), /432/);
+	assert.equal(serviceNote({ service: "parallel", ms: 1412 }), "via parallel · 1.4s");
+	assert.equal(serviceNote({ service: "tavily", ms: "250" }), "via tavily · 0.3s");
+	assert.equal(serviceNote({ service: "parallel" }), "via parallel");
+	assert.equal(serviceNote(undefined), undefined);
 });
 
 test("prose lab: Discord checks allow emphasis but catch bold sections, tables, headings, long messages, and unwrapped links", () => {

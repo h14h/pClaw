@@ -4,6 +4,7 @@ import { getSupportedThinkingLevels, type Models } from "@earendil-works/pi-ai/m
 import type { Agent } from "../agent.ts";
 import { type Config, saveConfig } from "../config.ts";
 import type { WorkerOptions } from "../extensions/workers.ts";
+import { MUSE, MUSE_THINKING_LEVELS, museModels } from "../muse.ts";
 import { chooseService, isServiceId, serviceReady, services } from "../search.ts";
 import { editableFiles } from "./files.ts";
 import type { ModelInfo, ModelOption, ModelsUpdate, SearchUpdate, Settings } from "./types.ts";
@@ -20,14 +21,17 @@ export function settingsApi(options: { agent: Agent; config: Config; models: Mod
 	const files = editableFiles(workers.skills);
 
 	function modelOptions(): ModelOption[] {
-		const providers = new Set([config.provider, workers.provider]);
+		// Muse is offered for workers even while they run in pi, so they can be switched to it.
+		const providers = new Set([config.provider, workers.provider, MUSE]);
 		return [...providers].flatMap((provider) =>
-			models.getModels(provider).map((model) => ({
-				provider,
-				id: model.id,
-				name: model.name,
-				thinkingLevels: getSupportedThinkingLevels(model),
-			})),
+			provider === MUSE
+				? museModels(workers.provider === MUSE ? workers.model : "muse-wonder-full-1.0").map(({ id, name }) => ({ provider, id, name, thinkingLevels: MUSE_THINKING_LEVELS }))
+				: models.getModels(provider).map((model) => ({
+						provider,
+						id: model.id,
+						name: model.name,
+						thinkingLevels: getSupportedThinkingLevels(model),
+					})),
 		);
 	}
 
@@ -56,11 +60,13 @@ export function settingsApi(options: { agent: Agent; config: Config; models: Mod
 
 	async function updateModels(update: ModelsUpdate, context: Context): Promise<Settings> {
 		// Validate both before applying either.
+		if (update.front?.provider === MUSE) throw new SettingsError("Muse Code runs workers only. Pick a pi model for the model you talk to.");
 		const front = update.front === undefined ? undefined : { ...update.front, thinkingLevel: validate(update.front) };
 		const worker = update.worker === undefined ? undefined : { ...update.worker, thinkingLevel: validate(update.worker) };
 		if (front !== undefined) {
 			await agent.setModel(front, context);
 			Object.assign(config, { provider: front.provider, model: front.model, thinkingLevel: front.thinkingLevel });
+			workers.piFallback = { provider: front.provider, model: front.model };
 			saveConfig({ provider: front.provider, model: front.model, thinkingLevel: front.thinkingLevel });
 		}
 		if (worker !== undefined) {

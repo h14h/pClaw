@@ -98,7 +98,8 @@ function markdownIn(dir: string): string[] {
 		.sort();
 }
 
-function skillDescription(file: string): string | undefined {
+/** The `description` in a SKILL.md's front matter. */
+export function skillDescription(file: string): string | undefined {
 	const front = /^---\n([\s\S]*?)\n---/.exec(readFileSync(file, "utf8"))?.[1];
 	return front?.match(/^description:\s*(.+)$/m)?.[1]?.trim().replace(/^(["'])(.*)\1$/, "$2");
 }

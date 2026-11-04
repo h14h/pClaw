@@ -15,6 +15,8 @@ export const paths = {
 	/** Where workers run and leave files. */
 	work: join(home, "work"),
 	workerSessions: join(home, "worker-sessions"),
+	/** T3 Code OAuth pairing (client id, tokens, pending PKCE state). 0600, never shown to models. */
+	t3Auth: join(home, "t3.json"),
 };
 
 export type Config = {
@@ -30,8 +32,11 @@ export type Config = {
 	/** pi's auth.json by default, so one sign-in covers pclaw and its pi workers. */
 	authFile: string;
 	timeZone: string;
-	/** The worker: a pi process with its default coding-agent prompt and tools. */
+	/** pi, for workers on a pi provider: its default coding-agent prompt and tools. */
 	workerCommand: string;
+	/** Muse Code, for workers on the `muse` provider. */
+	museCommand: string;
+	/** `muse` runs worker jobs in Muse Code; any other provider runs them in pi. */
 	workerProvider: string;
 	workerModel: string;
 	workerThinkingLevel: ModelThinkingLevel;
@@ -62,20 +67,33 @@ export type Config = {
 	summarizeAtTokens: number;
 	/** Roughly how many tokens of the most recent conversation stay word for word after a summary. */
 	keepRecentTokens: number;
+	/** T3 Code server origin for its official MCP endpoint (`<t3Url>/mcp`). */
+	t3Url: string;
+	/** OAuth redirect URI for T3 pairing, as the browser reaches the dashboard. Defaults to the local dashboard. */
+	t3RedirectUri?: string;
+	/** Let pclaw send messages into T3 threads on the owner's behalf. Off until the owner turns it on. */
+	t3AllowSend: boolean;
+	/** Project for T3 worker threads (`workerProvider: "t3"`), launched in a fresh worktree. Unset: workers launch scratch threads. */
+	t3WorkerProjectId?: string;
+	/** Base ref for a T3 worker's worktree. Defaults to "main". */
+	t3WorkerBaseRef?: string;
+	/** How often watched T3 threads are polled for waiting/finished/failed. */
+	t3PollSeconds: number;
 };
 
 type StoredConfig = Partial<Config>;
 
 export const defaults: Config = {
 	discordChannels: [],
-	provider: "xai",
-	model: "grok-4.5",
+	provider: "meta",
+	model: "muse-spark-1.3",
 	thinkingLevel: "medium",
 	authFile: join(piAgentDir, "auth.json"),
 	timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
 	workerCommand: "pi",
-	workerProvider: "xai",
-	workerModel: "grok-4.7",
+	museCommand: "muse",
+	workerProvider: "muse",
+	workerModel: "muse-wonder-full-1.0",
 	workerThinkingLevel: "high",
 	workerQuickThinkingLevel: "medium",
 	workerTimeoutMinutes: 30,
@@ -86,6 +104,9 @@ export const defaults: Config = {
 	memoryQuietMinutes: 20,
 	summarizeAtTokens: 60_000,
 	keepRecentTokens: 16_000,
+	t3Url: "http://127.0.0.1:3773",
+	t3AllowSend: false,
+	t3PollSeconds: 60,
 };
 
 function readStored(): StoredConfig {
@@ -108,6 +129,8 @@ export function loadConfig(): Config {
 		dashboardPort: env.PCLAW_DASHBOARD_PORT === undefined ? undefined : Number(env.PCLAW_DASHBOARD_PORT),
 		tavilyApiKey: env.TAVILY_API_KEY,
 		parallelApiKey: env.PARALLEL_API_KEY,
+		t3Url: env.PCLAW_T3_URL,
+		t3RedirectUri: env.PCLAW_T3_REDIRECT_URI,
 	};
 	const defined = Object.fromEntries(Object.entries(fromEnv).filter(([, value]) => value !== undefined));
 	return { ...defaults, ...readStored(), ...defined };

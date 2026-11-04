@@ -95,6 +95,7 @@ function Item({ item, who, worker, conversationId }: { item: TimelineItem; who?:
             args={item.args}
             result={item.result}
             isError={item.isError}
+            note={item.note}
             running={item.result === undefined}
           />
         </Row>

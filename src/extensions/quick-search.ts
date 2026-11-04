@@ -1,11 +1,17 @@
 import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
-import { formatSearch, search } from "../search.ts";
+import { chosenService, formatSearch, search } from "../search.ts";
 
 /**
  * One fast search for the front model, for questions a single lookup settles (hours, a time, a price, a quick fact).
  * A second or two, so the reply stays quick; anything needing comparison or judgment still goes to a worker.
  */
+const result = (text: string, details: Record<string, string | number>, isError = false) => ({
+	output: [{ type: "text" as const, text }],
+	details,
+	...(isError ? { isError } : {}),
+});
+
 export function quickSearchExtension() {
 	return defineExtension({
 		name: "pclaw.quick-search",
@@ -20,8 +26,18 @@ export function quickSearchExtension() {
 				parameters: Type.Object({ query: Type.String({ description: "A specific query." }) }),
 				replay: "safe",
 				execute: async ({ query }, _api, context) => {
-					const found = await search(query, { maxResults: 4, ...(context.abortSignal ? { signal: context.abortSignal } : {}) });
-					return { content: [{ type: "text" as const, text: formatSearch(query, found, 400) }] };
+					// `details` stays in the transcript, not the model's context: which service answered, and how fast.
+					const service = chosenService("search");
+					const started = performance.now();
+					const ms = () => Math.round(performance.now() - started);
+					try {
+						const found = await search(query, { maxResults: 4, service, ...(context.abortSignal ? { signal: context.abortSignal } : {}) });
+						return result(formatSearch(query, found, 400), { service, ms: ms(), results: found.results.length });
+					} catch (error) {
+						if (context.abortSignal?.aborted) throw error;
+						const message = error instanceof Error ? error.message : String(error);
+						return result(message, { service, ms: ms(), error: message.slice(0, 300) }, true);
+					}
 				},
 			}),
 		],

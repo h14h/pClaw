@@ -21,7 +21,7 @@ It's early. Today it can talk, remember, follow up on its own, and hand real wor
 
 ## Setup
 
-You need Node 24+, pnpm, [pi](https://github.com/earendil-works/pi) (`npm install -g @earendil-works/pi-coding-agent`), a SuperGrok or X Premium subscription, a [Tavily](https://app.tavily.com) API key for web search (the free tier is plenty), and a Discord account.
+You need Node 24+, pnpm, [pi](https://github.com/earendil-works/pi) (`npm install -g @earendil-works/pi-coding-agent`), Meta's Muse Code CLI signed in (`muse login`) on a Muse Code subscription, a [Tavily](https://app.tavily.com) API key for web search (the free tier is plenty), and a Discord account.
 
 ```sh
 git clone https://github.com/h14h/pClaw pclaw && cd pclaw
@@ -29,7 +29,7 @@ pnpm install
 pnpm setup
 ```
 
-`pnpm setup` signs you in to xAI in the browser and asks for a Discord bot token. The sign-in goes in pi's `~/.pi/agent/auth.json`, so pclaw and its pi workers share it; if pi is already signed in to xAI, there's nothing to do. To get the token, go to the [Discord developer portal](https://discord.com/developers/applications), click New Application, open Bot, click Reset Token, and copy it. Turn off Public Bot on the same page so nobody else can add it.
+`pnpm setup` signs you in to Meta in the browser (or whichever `provider` you set), checks that Muse Code is signed in for the workers, and asks for a Discord bot token. The sign-in goes in pi's `~/.pi/agent/auth.json`, shared with any pi workers; if pi is already signed in, there's nothing to do. To get the token, go to the [Discord developer portal](https://discord.com/developers/applications), click New Application, open Bot, click Reset Token, and copy it. Turn off Public Bot on the same page so nobody else can add it.
 
 Then start it:
 
@@ -51,10 +51,11 @@ To try it without Discord, `pnpm chat` opens a conversation in the terminal. It 
 
 | Setting | Env var | Default |
 |---|---|---|
-| `model` | `PCLAW_MODEL` | `grok-4.5` |
-| `provider` | `PCLAW_PROVIDER` | `xai` |
+| `model` | `PCLAW_MODEL` | `muse-spark-1.3` |
+| `provider` | `PCLAW_PROVIDER` | `meta` |
 | `thinkingLevel` | `PCLAW_THINKING` | `medium` |
-| `workerModel` | `PCLAW_WORKER_MODEL` | `grok-4.7` |
+| `workerProvider` | | `muse` (Muse Code; any other provider runs workers in pi) |
+| `workerModel` | `PCLAW_WORKER_MODEL` | `muse-wonder-full-1.0` |
 | `workerThinkingLevel` | `PCLAW_WORKER_THINKING` | `high` (deep jobs) |
 | `workerQuickThinkingLevel` | | `medium` (quick jobs) |
 | `tavilyApiKey` | `TAVILY_API_KEY` | set by `pnpm setup` |
@@ -63,6 +64,7 @@ To try it without Discord, `pnpm chat` opens a conversation in the terminal. It 
 | `pageService` | `PCLAW_PAGE_READER` | `tavily` (or `parallel`; the dashboard switches it) |
 | `workerSkills` | | `[]` (more skill folders for workers, e.g. `["~/scripts/skills/publish"]`) |
 | `workerCommand` | | `pi` |
+| `museCommand` | | `muse` |
 | `workerTimeoutMinutes` | | `30` |
 | `memoryQuietMinutes` | | `20` |
 | `summarizeAtTokens` | | `60000` |
@@ -80,14 +82,15 @@ To try it without Discord, `pnpm chat` opens a conversation in the terminal. It 
 
 ## How it's built
 
-Two models, split the way [exe.dev's "run fewer agents"](https://blog.exe.dev/etoomanythings) suggests. The one you talk to is fast and conversational: Grok 4.5 on medium, prompted for voice and judgment, with no shell or browser of its own. It answers in seconds and keeps the thread. Anything that takes real work goes to a worker: [pi](https://github.com/earendil-works/pi) with its default coding-agent prompt and tools plus pclaw's own search and page reader (`src/worker-tools.ts`), running Grok 4.7, in `~/.pclaw/work`. Workers don't load your personal pi extensions, skills, or AGENTS.md files. The worker reports back into the conversation and the front model tells you what matters. Each job keeps its pi session, so corrections continue where it left off. Claude Code or Codex can slot in as workers later.
+Two models, split the way [exe.dev's "run fewer agents"](https://blog.exe.dev/etoomanythings) suggests. The one you talk to is fast and conversational: Muse Spark 1.3 on medium, prompted for voice and judgment, with no shell or browser of its own. It answers in seconds and keeps the thread. Anything that takes real work goes to a worker in `~/.pclaw/work`: by default Meta's Muse Code CLI running Muse Wonder Full (`src/muse.ts`), or [pi](https://github.com/earendil-works/pi) with its default coding-agent prompt and tools when `workerProvider` is a pi provider. pi workers get pclaw's search, page reader, and page publisher as tools (`src/worker-tools.ts`); harnesses without extensions get the same as a command (`src/worker-cli.ts`) and pclaw's worker prompt and skills in front of the first message. Muse workers run headless with approval prompts and Muse's sandbox off, the same reach pi workers have, and without your personal Claude Code rules and skills; pi workers don't load your personal pi extensions, skills, or AGENTS.md files. The worker reports back into the conversation and the front model tells you what matters. Each job keeps its session in the harness it started in, so corrections continue where it left off. Claude Code or Codex can slot in as more harnesses the same way.
 
-pclaw runs on [Pi Durable](https://earendil.com/posts/pi-durable/), a harness that writes every message, model turn, and tool call to SQLite before acting on it. If the process dies mid-reply, it picks up where it stopped. Follow-ups and worker runs are durable tasks; a worker cut off by a restart resumes its pi session.
+pclaw runs on [Pi Durable](https://earendil.com/posts/pi-durable/), a harness that writes every message, model turn, and tool call to SQLite before acting on it. If the process dies mid-reply, it picks up where it stopped. Follow-ups and worker runs are durable tasks; a worker cut off by a restart resumes its session.
 
-- `src/prompts/front.md` is the front model's system prompt: how pclaw talks (built from real Instinct conversations) and how it works. `src/prompts/worker.md` is added to pi's default prompt for every worker. Both are read on every request, so edits apply right away. The dashboard's settings page edits every markdown file here and in the workers' skills. `src/prompts/formatting/<app>.md` holds each app's etiquette (what renders, how long a message can be) for Discord and the terminal. The front model gets the one for the app the conversation is on, as the very last part of its prompt, so the voice stays the same everywhere and only the etiquette changes.
+- `src/prompts/front.md` is the front model's system prompt: how pclaw talks (built from real Instinct conversations) and how it works. `src/prompts/worker.md` is added to every worker's instructions. Both are read on every request, so edits apply right away. The dashboard's settings page edits every markdown file here and in the workers' skills. `src/prompts/formatting/<app>.md` holds each app's etiquette (what renders, how long a message can be) for Discord and the terminal. The front model gets the one for the app the conversation is on, as the very last part of its prompt, so the voice stays the same everywhere and only the etiquette changes.
 - `src/extensions/` holds the tools, one extension each: notes, follow-ups, workers.
 - `src/skills/web-page/` is the page skill workers load: `SKILL.md` (how to build and publish), `STYLE.md` (the style guide), and `template/`. Published pages are checked for anything loading from outside the page, then served by pclaw. To put pages somewhere else (a subdomain, a public host), set `pagePublisher` to a command that takes `<slug> <dir>` and prints the URL; that's where deployment specifics live, outside pclaw.
 - `pnpm prose-lab` tunes how the front model writes. `pnpm prose-lab extract <entry id>...` saves moments from your own conversation as scenarios. `pnpm prose-lab run live my-try --runs 3` replays each one with every prompt variant you name and checks the reply the way Discord shows it (tables, headings, bold, length, links). A second model scores how natural, tight, and complete each reply is. Variants are folders of `front.md` plus `discord.md` in `~/.pclaw/prose-lab/variants/`. `live` is the current prompts and `none` is no prompt at all. Results land in `~/.pclaw/prose-lab/runs/`, with every reply side by side in `replies.md`. Everything stays under `~/.pclaw`, since it's your conversations.
+- `pnpm prose-lab serve` does the same from a web page (port 7423, `deploy/prose-lab.service`): paste two system prompts, pick scenarios or type your own messages, and read both sets of replies side by side with their checks and judge scores. `pnpm --filter prose-lab-web build` rebuilds the page. Runs are saved in `~/.pclaw/prose-lab/web/`.
 - `src/search.ts` runs searches and page reads through Tavily or [Parallel](https://parallel.ai), each behind the same two calls. `pnpm search-bench "a query"` (or `--read <url>`) runs the same thing through every service with a key and prints how each did.
 - `src/channels/` connects conversations to Discord and the terminal.
 - `src/delivery.ts` sends replies out in order and remembers what it has sent.

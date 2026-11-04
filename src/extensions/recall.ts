@@ -114,7 +114,7 @@ export function recallExtension(harness: { current?: Harness }, timeZone: string
 						hits.length === 0
 							? "Nothing found. Try different words, or ask them."
 							: hits.map((hit) => `[${stamp(hit.at, timeZone)}] ${hit.who}: ${hit.text}`).join("\n\n");
-					return { content: [{ type: "text" as const, text }] };
+					return { output: [{ type: "text" as const, text }] };
 				},
 			}),
 		],

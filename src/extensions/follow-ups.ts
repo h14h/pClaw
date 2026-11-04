@@ -13,6 +13,7 @@ export const FollowUps = defineDoc<{ items: Record<string, FollowUpItem> }>({
 	history: "latest",
 	fork: "initial",
 	initial: () => ({ items: {} }),
+	checkpointWhen: (_value, _ops, { deltasSinceBase }) => deltasSinceBase >= 64,
 });
 
 type FollowUpState = { phase: "wait" } | { phase: "fire" };
@@ -37,8 +38,8 @@ export function wakeMessage(note: string, at: number, timeZone: string): string 
 }
 
 /**
- * Sleeps until a follow-up is due, then hands it to the conversation as a new input. The sleep survives restarts: the
- * phase runs again on reopen and sleeps until the same time. Cancelling removes the item from the document, and the
+ * Sleeps until a follow-up is due, then hands it to the conversation as a new input. The sleep is stored, so it survives
+ * restarts. Cancelling removes the item from the document, and the
  * task ends quietly when it wakes and finds it gone.
  */
 export function followUpTask(timeZone: string) {
@@ -49,12 +50,11 @@ export function followUpTask(timeZone: string) {
 		phases: {
 			wait: async (task, runtime, context) => {
 				const item = (await runtime.snapshot(FollowUps, runtime.conversationId, context))?.items[task.id];
-				if (item !== undefined) await runtime.sleep(item.dueAt, context);
 				await runtime.commit(
 					() =>
 						item === undefined
 							? { status: "terminal", outcome: { status: "completed", result: null } }
-							: { status: "running", checkpoint: { phase: "fire" } },
+							: { status: "sleeping", until: item.dueAt, checkpoint: { phase: "fire" } },
 					context,
 				);
 			},
@@ -94,7 +94,7 @@ export function followUpTask(timeZone: string) {
 	});
 }
 
-const text = (value: string) => ({ content: [{ type: "text" as const, text: value }] });
+const text = (value: string) => ({ output: [{ type: "text" as const, text: value }] });
 
 export function followUpsExtension(timeZone: string, now: () => number = Date.now) {
 	const FollowUp = followUpTask(timeZone);

@@ -34,8 +34,9 @@ export default function (pi: ToolApi) {
 		async execute(_id, params: { query: string; max_results?: number }, signal) {
 			const maxResults = Math.min(Math.max(Math.round(params.max_results ?? 5), 1), 10);
 			const service = chosenService("search");
+			const started = performance.now();
 			const found = await search(params.query, { maxResults, service, ...(signal ? { signal } : {}) });
-			return text(formatSearch(params.query, found), { service });
+			return text(formatSearch(params.query, found), { service, ms: String(Math.round(performance.now() - started)) });
 		},
 	});
 	// Pages read in this job, so paging through one or searching it again doesn't refetch it.
@@ -61,8 +62,9 @@ export default function (pi: ToolApi) {
 				pages.set(params.url, page);
 				page.catch(() => pages.delete(params.url));
 			}
+			const started = performance.now();
 			const content = await page;
-			return text(params.find ? findInPage(content, params.find) : pageWindow(content, params.offset), { service });
+			return text(params.find ? findInPage(content, params.find) : pageWindow(content, params.offset), { service, ms: String(Math.round(performance.now() - started)) });
 		},
 	});
 	pi.registerTool({

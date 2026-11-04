@@ -63,6 +63,8 @@ export function buildTimeline(entries: readonly EntryRecord[], idle = true, reac
 			if (tool !== undefined) {
 				tool.result = textOf(message.content);
 				if (message.isError) tool.isError = true;
+				const note = serviceNote(message.details);
+				if (note !== undefined) tool.note = note;
 			}
 		} else if (AssistantEntry.is(entry) && message.role === "assistant") {
 			const assistant = message as AssistantMessage;
@@ -157,6 +159,15 @@ export function sumUsage(state: { models?: Record<string, UsageLike> } | undefin
 
 const FROM_PCLAW = /^Message from pclaw:\s*/;
 
+/** "via parallel · 1.4s" from a search tool's details ({ service, ms }); ms may be a string in pi workers' details. */
+export function serviceNote(details: unknown): string | undefined {
+	if (typeof details !== "object" || details === null) return undefined;
+	const { service, ms } = details as { service?: unknown; ms?: unknown };
+	if (typeof service !== "string") return undefined;
+	const millis = Number(ms);
+	return Number.isFinite(millis) && ms !== undefined ? `via ${service} · ${(millis / 1000).toFixed(1)}s` : `via ${service}`;
+}
+
 /** A pi session file (JSONL) as the worker's transcript. Tolerates a half-written last line. */
 export function parseWorkerSession(jsonl: string): WorkerItem[] {
 	const items: WorkerItem[] = [];
@@ -189,6 +200,8 @@ export function parseWorkerSession(jsonl: string): WorkerItem[] {
 			if (tool !== undefined) {
 				tool.result = textOf(message.content);
 				if (message.isError) tool.isError = true;
+				const note = serviceNote(message.details);
+				if (note !== undefined) tool.note = note;
 			}
 		}
 	}

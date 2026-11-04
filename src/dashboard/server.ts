@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync, unwatchFile, watch, watchFile } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { extname, join, normalize } from "node:path";
+import { basename, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AttachedReplicatedState, Context, JsonValue } from "@earendil-works/chord";
 import {
@@ -19,8 +19,10 @@ import { FollowUps } from "../extensions/follow-ups.ts";
 import { ConversationInfo, Routes } from "../routes.ts";
 import type { Notes } from "../extensions/notes.ts";
 import { Reactions } from "../extensions/reactions.ts";
-import { type WorkerOptions, Workers } from "../extensions/workers.ts";
+import { jobOf, type WorkerOptions, Workers } from "../extensions/workers.ts";
 import { PUBLISHED, SLUG } from "../pages.ts";
+import { paths } from "../config.ts";
+import { completePairing } from "../t3-client.ts";
 import { FileError } from "./files.ts";
 import { SettingsError, settingsApi } from "./settings.ts";
 import type {
@@ -36,6 +38,7 @@ import type {
 	WorkerDetail,
 	WorkerSummary,
 } from "./types.ts";
+import { parseMuseSession } from "../muse.ts";
 import { buildTimeline, liveStatus, pageReadsIn, parseWorkerSession, sumUsage } from "./views.ts";
 
 const WEB_DIST = fileURLToPath(new URL("../../web/dist/", import.meta.url));
@@ -261,8 +264,8 @@ export async function startDashboard(
 		const file = sessionFile(worker.sessionId);
 		return {
 			...summary,
-			model: { provider: workers.provider, model: workers.model, thinkingLevel: workers.thinkingLevel },
-			transcript: file === undefined ? [] : parseWorkerSession(readFileSync(file, "utf8")),
+			model: { ...jobOf(workers, worker), thinkingLevel: workers.thinkingLevel },
+			transcript: file === undefined ? [] : (basename(file).startsWith("muse_") ? parseMuseSession : parseWorkerSession)(readFileSync(file, "utf8")),
 		};
 	}
 
@@ -381,6 +384,19 @@ export async function startDashboard(
 			const path = new URL(request.url ?? "/", "http://x").pathname;
 			if (await write(request, response, path)) return;
 			if (request.method !== "GET") return void response.writeHead(405).end();
+			if (path === "/t3/callback") {
+				// T3 sends the owner's browser here after they approve pclaw's MCP pairing.
+				const params = new URL(request.url ?? "/", "http://x").searchParams;
+				const code = params.get("code");
+				const state = params.get("state") ?? undefined;
+				try {
+					if (code === null) throw new Error("T3 sent no pairing code.");
+					await completePairing({ t3Url: options.config.t3Url, storeFile: paths.t3Auth, code, ...(state === undefined ? {} : { state }) });
+					return void response.writeHead(200, { "Content-Type": "text/plain" }).end("pclaw is paired with T3. You can close this tab and go back to Discord.");
+				} catch (error) {
+					return void response.writeHead(400, { "Content-Type": "text/plain" }).end(`T3 pairing didn't finish: ${error instanceof Error ? error.message : String(error)}`);
+				}
+			}
 			if (path === "/api/overview") return json(response, await overview());
 			if (path === "/api/settings") return json(response, settings.get());
 			const file = /^\/api\/files\/(.+)$/.exec(path);

@@ -49,6 +49,7 @@ const SentMessages = defineDoc<{ messages: Record<string, { conversation: Conver
 	version: 1,
 	scope: "session",
 	initial: () => ({ messages: {} }),
+	checkpointWhen: (_value, _ops, { deltasSinceBase }) => deltasSinceBase >= 64,
 });
 
 /** Split text into Discord-sized messages, preferring paragraph, then line, then word breaks. */
