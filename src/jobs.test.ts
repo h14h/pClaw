@@ -13,7 +13,7 @@ import { openAgent } from "./agent.ts";
 import { jobBoard, jobCard } from "./channels/discord.ts";
 import { type Config, defaults } from "./config.ts";
 import { type Answers, armOf, decisionClient, messageGuidance, messageQuestions, parseTemplates, readTurn, turnGuidance } from "./decisions.ts";
-import { summarize } from "./decision-report.ts";
+import { compareLanes, type LogEvent, summarize } from "./decision-report.ts";
 import { deliver } from "./delivery.ts";
 import { type Job, type JobBackend, JobStore, type JobSurface, readItems, type ThreadItem, type ThreadView, turnEnded } from "./extensions/jobs.ts";
 import { Notes } from "./extensions/notes.ts";
@@ -396,6 +396,24 @@ test("the card and board read at a glance", () => {
 	assert.match(board, /🙋 <#9> · pc1/);
 	assert.match(board, /Last 24 hours\*\*\n✅ <#8>/);
 	assert.match(jobBoard([], 1_000_000), /Nothing running/);
+});
+
+test("the report compares workers with background and full jobs", () => {
+	const at = (minutes: number) => new Date(1_800_000_000_000 + minutes * 60_000).toISOString();
+	const events: LogEvent[] = [
+		{ type: "worker", at: at(0), ok: true, ms: 120_000 },
+		{ type: "worker", at: at(1), ok: false, ms: 1_800_000 },
+		{ type: "job", event: "start", job: "quick", background: true, at: at(0) },
+		{ type: "wake", job: "quick", state: "done", at: at(1) },
+		{ type: "job", event: "start", job: "big", background: false, at: at(0) },
+		{ type: "wake", job: "big", state: "failed", at: at(10) },
+		{ type: "wake", job: "big", state: "done", at: at(20) },
+		{ type: "job", event: "start", job: "theirs", adopted: true, at: at(0) },
+	];
+	const lanes = compareLanes(events);
+	assert.deepEqual([lanes.worker.runs, lanes.worker.failed, lanes.worker.p50min], [2, 1, 2]);
+	assert.deepEqual([lanes.background.runs, lanes.background.failed, lanes.background.p50min], [1, 0, 1]);
+	assert.deepEqual([lanes.job.runs, lanes.job.failed, lanes.job.p50min], [1, 1, 10]);
 });
 
 test("the report counts what a hint did against the control arm", () => {

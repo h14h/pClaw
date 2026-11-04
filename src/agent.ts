@@ -82,7 +82,7 @@ export async function openAgent(
 	const workers = options.workers ?? workerOptions(config, paths);
 	prepareWorkspace(workers);
 	const current: { current?: Harness } = {};
-	registry.install(workersExtension(workers, current));
+	registry.install(workersExtension(workers, current, decisions.record));
 	const memory = memoryExtension({ notes, models, config, quietMs: options.memoryQuietMs ?? config.memoryQuietMinutes * 60_000 });
 	registry.install(memory.extension);
 	registry.install(recallExtension(current, config.timeZone));

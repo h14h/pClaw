@@ -29,6 +29,9 @@ export type LogEvent = {
 	state?: string;
 	outcome?: string;
 	surface?: string;
+	event?: string;
+	background?: boolean;
+	adopted?: boolean;
 };
 
 type Arm = { turns: number; followed: number; quiet: number; notes: number; pings: number };
@@ -41,6 +44,33 @@ const percentile = (values: number[], share: number) => [...values].sort((a, b) 
 
 /** What a hint's surface pick would look like if the front model did exactly that. */
 const actualSurface = (mode: string | undefined) => (mode === undefined ? "card" : mode === "ping" || mode === "shared" ? "ping" : "note");
+
+type Lane = { runs: number; failed: number; p50min: number; p90min: number };
+
+function lane(durations: number[], failed: number): Lane {
+	const minutes = (ms: number) => Math.round(ms / 6_000) / 10;
+	return { runs: durations.length, failed, p50min: minutes(percentile(durations, 0.5)), p90min: minutes(percentile(durations, 0.9)) };
+}
+
+/** Workers against background and full jobs: how often each is used, how long a first answer takes, how often it fails. */
+export function compareLanes(events: LogEvent[]): Record<"worker" | "background" | "job", Lane> {
+	const workers = events.filter((event) => event.type === "worker");
+	const starts = events.filter((event) => event.type === "job" && event.event === "start" && event.adopted !== true);
+	const wakes = events.filter((event) => event.type === "wake");
+	const jobLane = (background: boolean) => {
+		const mine = starts.filter((start) => (start.background === true) === background);
+		const first = mine.flatMap((start) => {
+			const wake = wakes.find((each) => each.job === start.job);
+			return wake === undefined ? [] : [{ ms: Date.parse(wake.at) - Date.parse(start.at), failed: wake.state === "failed" || wake.state === "blocked" }];
+		});
+		return lane(first.map((each) => each.ms), first.filter((each) => each.failed).length);
+	};
+	return {
+		worker: lane(workers.flatMap((event) => (event.ms === undefined ? [] : [event.ms])), workers.filter((event) => event.ok === false).length),
+		background: jobLane(true),
+		job: jobLane(false),
+	};
+}
 
 export function summarize(events: LogEvent[]) {
 	const decisions = events.filter((event) => event.type === "decision");
@@ -101,6 +131,7 @@ export function summarize(events: LogEvent[]) {
 		p95ms: percentile(asked.map((event) => event.ms ?? 0), 0.95),
 		outcomeAgreement: compared === 0 ? undefined : { agree, compared },
 		templates: [...new Set(decisions.map((event) => event.templates))],
+		lanes: compareLanes(events),
 	};
 }
 
@@ -116,6 +147,8 @@ function print(report: ReturnType<typeof summarize>): void {
 	}
 	const agreement = report.outcomeAgreement;
 	console.log(`\nd1 vs the front model on the job's state (H5): ${agreement === undefined ? "n/a" : share(agreement.agree, agreement.compared)}`);
+	console.log("\nWorkers vs T3 (H6): runs, failures, minutes to a first answer");
+	for (const [name, each] of Object.entries(report.lanes)) console.log(`  ${name}: ${each.runs} runs, ${each.failed} failed, median ${each.p50min}, p90 ${each.p90min}`);
 }
 
 function option(name: string): string | undefined {

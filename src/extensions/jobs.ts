@@ -649,7 +649,7 @@ export function createJobs(options: JobsOptions) {
 						return undefined;
 					});
 					if (placed !== undefined) store.put(Object.assign(job, placed));
-					decisions.record({ type: "job", event: "start", job: job.id, machine, project: project?.title, model, adopted: args.thread_id !== undefined });
+					decisions.record({ type: "job", event: "start", job: job.id, machine, project: project?.title, model, adopted: args.thread_id !== undefined, background: args.background === true });
 					console.log(`[pclaw] job ${job.id} started on ${machine}${project === undefined ? "" : ` in ${project.title}`}`);
 					// End the turn here: what was written alongside this call is the reply.
 					return { ...text(`Job ${job.id} is running in T3 on ${machine}. ${job.link ?? ""}`.trim()), control: { terminate: true } };

@@ -294,7 +294,10 @@ export function reportMessage(name: string, result: WorkerResult, hint = false):
 type RunInput = Partial<Job> & { name: string; sessionId: string; message: string; ask?: string; depth?: Depth };
 type RunState = { phase: "run" } | { phase: "report"; ok: boolean; output: string };
 
-export function workersExtension(options: WorkerOptions, harness: { current?: Harness }) {
+/** Logs each finished run, so workers and jobs can be compared (docs/decision-evals.md). */
+export type WorkerLog = (event: { type: "worker"; name: string; depth?: Depth; provider?: string; ok: boolean; ms?: number }) => void;
+
+export function workersExtension(options: WorkerOptions, harness: { current?: Harness }, log?: WorkerLog) {
 	const Run = defineTask<RunInput, RunState, null>({
 		name: "pclaw.worker-run",
 		version: 1,
@@ -337,6 +340,15 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 					},
 					context,
 				);
+				const started = (await runtime.snapshot(Workers, runtime.conversationId, context))?.workers[task.input.name]?.startedAt;
+				log?.({
+					type: "worker",
+					name: task.input.name,
+					...(task.input.depth === undefined ? {} : { depth: task.input.depth }),
+					...(task.input.provider === undefined ? {} : { provider: task.input.provider }),
+					ok,
+					...(started === undefined ? {} : { ms: runtime.now() - started }),
+				});
 				await runtime.commit(async (tx) => {
 					const worker = (await tx.doc(Workers, runtime.conversationId)).workers[task.input.name];
 					if (worker !== undefined && worker.run === task.id) {

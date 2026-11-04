@@ -10,6 +10,7 @@ import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@ear
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { openAgent } from "./agent.ts";
 import { type Config, defaults } from "./config.ts";
+import { decisionClient } from "./decisions.ts";
 import { deliver } from "./delivery.ts";
 import { NotesUpdate } from "./extensions/memory.ts";
 import { Notes } from "./extensions/notes.ts";
@@ -225,7 +226,7 @@ test("delegate runs a worker, its report comes back, and message_worker reuses i
 	]);
 	const agent = await openAgent(
 		await openNodeSqliteStorage(join(dir, "workers.sqlite")),
-		{ config, models, notes: new Notes(join(dir, "notes-4.md")), workers: await fakeWorkers() },
+		{ config, models, notes: new Notes(join(dir, "notes-4.md")), workers: await fakeWorkers(), decisions: decisionClient({ logFile: join(dir, "workers.jsonl") }) },
 		context,
 	);
 	const conversation = await agent.conversationFor("test:dm", context);
@@ -234,6 +235,9 @@ test("delegate runs a worker, its report comes back, and message_worker reuses i
 
 	await conversation.submit({ type: "input", content: "find me a nice NAS case" }, context);
 	await until(2);
+	const logged = JSON.parse((await readFile(join(dir, "workers.jsonl"), "utf8")).split("\n")[0]!) as { type: string; name: string; ok: boolean; ms: number };
+	assert.deepEqual([logged.type, logged.name, logged.ok], ["worker", "nas", true]);
+	assert.ok(logged.ms >= 0);
 	await conversation.submit({ type: "input", content: "does it fit 4 drives?" }, context);
 	await until(4);
 
