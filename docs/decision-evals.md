@@ -74,3 +74,4 @@ The first replay set is 36 cases from Nov 2: 19 real turns, plus 17 copies with 
 |---|---|---|---|
 | 2026-11-04 | First questions: one-step judgments over the full state | Starting point | State 36%, surface 69%, pings caught 0 of 9 |
 | 2026-11-04 | Small factual questions on the last 1,200 characters, combined in `readTurn` with whether the owner is driving and whether the message repeats | d1 is built for simple reads | State 75%, surface 92%, pings caught 6 of 9 with none wrong (same cases as tuning) |
+| 2026-11-04 | Added `fresh_check`, and tightened `job_size` so one-off checks and research stop reading as jobs | pclaw answered a question about pc1 from its notes, then a version check became a whole T3 thread | 25 sample messages: `fresh_check` 22, with the 3 misses on build work where it's ignored; job size 22, with the 3 misses simple questions read as research, now behind a higher threshold |

@@ -33,6 +33,8 @@ export type Job = {
 	project?: string;
 	model?: string;
 	link?: string;
+	/** A one-off with nothing to open later: no Discord thread, and its T3 thread settles itself. */
+	background?: boolean;
 	/** The conversation the job started in, by address, and the message that asked for it. */
 	origin: string;
 	ask?: string;
@@ -121,7 +123,6 @@ export type ThreadView = {
 	runCount: number;
 	itemCount: number;
 	settled: boolean;
-	link?: string;
 };
 export type ThreadItem = { type: string; text?: string; creationSource?: string };
 export type Project = { id: string; title: string; machine: string; environmentId?: string; hasRepo: boolean };
@@ -129,17 +130,18 @@ export type Machine = { machine: string; environmentId?: string };
 
 /** What jobs need from T3. */
 export type JobBackend = {
-	launch(args: Record<string, unknown>): Promise<{ threadId: string; link?: string }>;
+	launch(args: Record<string, unknown>): Promise<{ threadId: string }>;
 	peek(threadId: string, environmentId?: string): Promise<ThreadView>;
 	read(threadId: string, environmentId: string | undefined, from: number): Promise<{ items: ThreadItem[]; position: number }>;
 	pending(threadId: string, environmentId?: string): Promise<string[]>;
 	send(threadId: string, environmentId: string | undefined, message: string): Promise<void>;
 	interrupt(threadId: string, environmentId?: string): Promise<void>;
+	settle(threadId: string, environmentId?: string): Promise<void>;
 	projects(): Promise<Project[]>;
 	/** Every reachable machine, including ones with no projects yet. */
 	machines(): Promise<Machine[]>;
-	/** A link that opens the thread for the person. */
-	linkFor(threadId: string, environmentId: string | undefined, link: string | undefined): string | undefined;
+	/** A public link that opens the thread: in the T3 app on a phone that has it, otherwise in T3's hosted web app. */
+	linkFor(threadId: string, environmentId: string | undefined): Promise<string>;
 };
 
 /** Where a job shows up. Discord fills this in; without it, jobs still run and updates still reach the conversation. */
@@ -154,6 +156,8 @@ export type JobSurface = {
 	share(job: Job, text: string): Promise<void>;
 };
 
+/** Public, and registered as a universal link for /threads/*, so it reaches the app without the tailnet. */
+const HOSTED_T3 = "https://app.t3.codes";
 const PROJECTS_MS = 10 * 60_000;
 const CLIENT_MS = 10 * 60_000;
 const READ_PAGE = 100;
@@ -166,10 +170,16 @@ const environmentArg = (environmentId: string | undefined) => (environmentId ===
 export function t3Backend(t3Url: string, storeFile: string): JobBackend {
 	let client: { value: Awaited<ReturnType<typeof pairedClient>>; at: number } | undefined;
 	let projects: { value: Project[]; at: number } | undefined;
-	const machines = async (): Promise<Machine[]> => {
-		const links = (((await call("t3_environment_links", {})).links ?? []) as Record<string, unknown>[]).filter((link) => link.status === "reachable");
-		return [{ machine: hostname().replace(/\..*$/, "") }, ...links.map((link) => ({ machine: String(link.label), environmentId: String(link.environmentId) }))];
+	let fleet: { value: Machine[]; local: string; at: number } | undefined;
+	const readFleet = async () => {
+		if (fleet !== undefined && Date.now() - fleet.at < PROJECTS_MS) return fleet;
+		const linked = await call("t3_environment_links", {});
+		const links = ((linked.links ?? []) as Record<string, unknown>[]).filter((link) => link.status === "reachable");
+		const value: Machine[] = [{ machine: hostname().replace(/\..*$/, "") }, ...links.map((link) => ({ machine: String(link.label), environmentId: String(link.environmentId) }))];
+		fleet = { value, local: String(linked.environmentId), at: Date.now() };
+		return fleet;
 	};
+	const machines = async () => (await readFleet()).value;
 	const paired = async () => {
 		if (client === undefined || Date.now() - client.at > CLIENT_MS) client = { value: await pairedClient(t3Url, storeFile), at: Date.now() };
 		return client.value;
@@ -184,7 +194,6 @@ export function t3Backend(t3Url: string, storeFile: string): JobBackend {
 	};
 	const view = (read: Record<string, unknown>): ThreadView => {
 		const thread = asRecord(read.thread);
-		const link = typeof thread.link === "string" ? thread.link : undefined;
 		return {
 			status: String(thread.status ?? "unknown"),
 			activeRunId: typeof thread.activeRunId === "string" ? thread.activeRunId : null,
@@ -193,14 +202,13 @@ export function t3Backend(t3Url: string, storeFile: string): JobBackend {
 			runCount: Number(thread.runCount ?? 0),
 			itemCount: Number(thread.itemCount ?? 0),
 			settled: thread.settled === true,
-			...(link === undefined ? {} : { link }),
 		};
 	};
 	return {
 		launch: async (args) => {
 			const result = await call("t3_thread_launch", args);
 			if (typeof result.threadId !== "string") throw new Error(`T3 returned no thread id: ${JSON.stringify(result).slice(0, 300)}`);
-			return { threadId: result.threadId, ...(typeof result.link === "string" ? { link: result.link } : {}) };
+			return { threadId: result.threadId };
 		},
 		peek: async (threadId, environmentId) => view(await call("t3_thread_read", { threadId, ...environmentArg(environmentId), limit: 1, maxCharsPerItem: 1, runLimit: 1 })),
 		read: async (threadId, environmentId, from) => {
@@ -231,6 +239,9 @@ export function t3Backend(t3Url: string, storeFile: string): JobBackend {
 		interrupt: async (threadId, environmentId) => {
 			await call("t3_thread_interrupt", { threadId, ...environmentArg(environmentId), reason: "Stopped from pclaw." });
 		},
+		settle: async (threadId, environmentId) => {
+			await call("t3_thread_organize", { threadId, ...environmentArg(environmentId), action: "settle" });
+		},
 		projects: async () => {
 			if (projects !== undefined && Date.now() - projects.at < PROJECTS_MS) return projects.value;
 			const found = await Promise.all(
@@ -245,10 +256,9 @@ export function t3Backend(t3Url: string, storeFile: string): JobBackend {
 			return projects.value;
 		},
 		machines,
-		linkFor: (threadId, environmentId, link) => {
-			if (link?.startsWith("https://")) return link;
-			if (environmentId === undefined) return undefined;
-			return `${t3Url.replace(/\/$/, "")}/${environmentId}/${encodeURIComponent(threadId)}`;
+		linkFor: async (threadId, environmentId) => {
+			const environment = environmentId ?? (await readFleet()).local;
+			return `${HOSTED_T3}/threads/${encodeURIComponent(environment)}/${encodeURIComponent(threadId)}`;
 		},
 	};
 }
@@ -394,6 +404,9 @@ export function createJobs(options: JobsOptions) {
 		await refreshCard(job);
 		const reaction = REACTION[job.state];
 		if (reaction !== undefined) await setAskReaction(job, reaction, context);
+		if (job.background === true && (job.state === "done" || job.state === "idle")) {
+			await backend.settle(job.threadId, job.environmentId).catch((error: unknown) => console.error(`[pclaw] couldn't settle ${job.id}`, error));
+		}
 		console.log(`[pclaw] job ${job.id} turn ended: ${view.status}, card ${job.state}, ${shown === undefined ? "no hint shown" : "hint shown"}`);
 		decisions.record({ type: "wake", job: job.id, decision: decided?.id, arm: decided?.arm ?? "none", state: job.state, pending: view.pendingRequestCount });
 		const where = job.discordThreadId === undefined ? ' surface="none"' : "";
@@ -487,12 +500,13 @@ export function createJobs(options: JobsOptions) {
 	async function guideMessage(input: { id: string; text: string; channel: string; discordThreadId?: string }): Promise<string | undefined> {
 		if (!decisions.configured || input.text.trim() === "") return undefined;
 		const job = input.discordThreadId === undefined ? undefined : store.forThread(input.discordThreadId);
+		const live = store.active().filter((each) => each.state === "working" || each.state === "needs_you");
 		const decided = await decisions.ask({
 			id: `message:${input.id}`,
 			site: "message",
 			timeoutMs: 1_500,
 			...(job === undefined ? {} : { job: job.id }),
-			state: { channel: input.channel, message: input.text.slice(0, 4_000), active_jobs: store.active().slice(0, 10).map((each) => each.title), ...(job === undefined ? {} : { this_job: job.title, card_says: job.status }) },
+			state: { channel: input.channel, message: input.text.slice(0, 4_000), active_jobs: live.slice(0, 10).map((each) => each.title), ...(job === undefined ? {} : { this_job: job.title, card_says: job.status }) },
 			questions: messageQuestions(job !== undefined),
 		});
 		if (decided === undefined) return undefined;
@@ -505,7 +519,13 @@ export function createJobs(options: JobsOptions) {
 			const found = projects[Number((pick(chosen?.answers.project).choice ?? "").slice(1))];
 			if (found !== undefined && pick(chosen?.answers.project).choice !== "none") project = { project: found.title, machine: found.machine };
 		}
-		const guidance = messageGuidance(decided.answers, project);
+		const names = (await backend.machines().catch(() => [])).map((each) => each.machine.toLowerCase());
+		const words = input.text.toLowerCase().split(/\W+/);
+		const guidance = messageGuidance(decided.answers, {
+			liveJobs: live.length > 0,
+			namesMachine: words.some((word) => names.includes(word)),
+			...(project === undefined ? {} : { project }),
+		});
 		const shown = decided.arm === "guided" ? guidance : undefined;
 		if (guidance !== undefined) decisions.record({ type: "guidance", id: decided.id, site: "message", arm: decided.arm, guidance, shown: shown !== undefined });
 		return shown;
@@ -548,7 +568,7 @@ export function createJobs(options: JobsOptions) {
 			defineTool({
 				name: "start_job",
 				description:
-					"Start real work in a T3 Code thread: anything on code, a repository, a game project, or a named machine. It runs without a time limit, the owner can open it from any T3 client, and in a Discord channel it gets a thread under their message with a status card. The agent can't see this conversation, so the brief must stand alone. Pass thread_id to keep an eye on a T3 thread that already exists instead.",
+					"Start work in a T3 Code thread, on any machine, with no time limit. For work they'd want to open and steer: changing code, building something, long runs. In a Discord channel it gets a thread under their message with a status card. For a one-off check on a machine, pass background: true: no Discord thread, and the T3 thread settles itself. The agent can't see this conversation, so the brief must stand alone. Pass thread_id to keep an eye on a T3 thread that already exists.",
 				parameters: Type.Object({
 					title: Type.String({ description: "Short name, shown on the thread and the card." }),
 					brief: Type.Optional(Type.String({ description: "Self-contained brief: the goal and why, relevant facts, constraints, and what done looks like. Required unless thread_id is given." })),
@@ -558,6 +578,7 @@ export function createJobs(options: JobsOptions) {
 					workspace: Type.Optional(Type.Union([Type.Literal("worktree"), Type.Literal("root")], { description: "worktree (default for git projects): a fresh checkout. root: the project's own folder." })),
 					base_ref: Type.Optional(Type.String({ description: 'Branch a worktree starts from. Defaults to "main".' })),
 					thread_id: Type.Optional(Type.String({ description: "An existing T3 thread to track instead of launching one." })),
+					background: Type.Optional(Type.Boolean({ description: "A one-off with nothing to open later, like reading a version or a disk's free space on a machine." })),
 					emoji: Type.Optional(Type.String({ description: "A reaction for their message while the job runs: the literal emoji for the topic if there is one. Defaults to ⏳." })),
 				}),
 				execute: async (args, api, context) => {
@@ -580,7 +601,6 @@ export function createJobs(options: JobsOptions) {
 					}
 					const model = args.model ?? config.jobModel;
 					let threadId = args.thread_id;
-					let link: string | undefined;
 					if (threadId === undefined) {
 						if (args.brief === undefined) throw new Error("A new job needs a brief.");
 						const workspace = args.workspace ?? (project?.hasRepo === true ? "worktree" : "root");
@@ -593,7 +613,6 @@ export function createJobs(options: JobsOptions) {
 							runtimeMode: "full-access",
 						});
 						threadId = launched.threadId;
-						link = launched.link;
 					}
 					const emoji = args.emoji !== undefined && isEmoji(args.emoji.trim()) ? args.emoji.trim() : undefined;
 					const now = Date.now();
@@ -609,24 +628,23 @@ export function createJobs(options: JobsOptions) {
 						origin,
 						...(ask === undefined ? {} : { ask }),
 						...(emoji === undefined ? {} : { emoji }),
+						...(args.background === true ? { background: true } : {}),
+						link: await backend.linkFor(threadId, environmentId),
 						state: "working",
 						status: args.thread_id === undefined ? "Starting up." : "Watching.",
 						told: [],
 						startedAt: now,
 						updatedAt: now,
 					};
-					const opened = backend.linkFor(threadId, environmentId, link);
-					if (opened !== undefined) job.link = opened;
 					if (args.thread_id !== undefined) {
 						const view = await backend.peek(threadId, environmentId);
 						job.handled = turnKey(view);
 						job.position = Math.max(0, view.itemCount - 1);
 						job.state = turnEnded(view) ? "idle" : "working";
-						if (view.link !== undefined) job.link = backend.linkFor(threadId, environmentId, view.link) ?? job.link!;
 					}
 					store.put(job);
 					if (ask !== undefined) await api.commit((tx) => setReaction(tx, api.conversationId, ask, emoji ?? WORKING), context);
-					const placed = await surface.current?.open(job).catch((error: unknown) => {
+					const placed = args.background === true ? undefined : await surface.current?.open(job).catch((error: unknown) => {
 						console.error(`[pclaw] couldn't open a Discord thread for ${job.id}`, error);
 						return undefined;
 					});

@@ -39,10 +39,16 @@ This result looks worth keeping in the main channel: post it with `share_result`
 This result looks fine staying in the thread.
 
 ## message.t3_job
-This looks like real work for a T3 job (`start_job`), not a quick answer.
+This looks like work they'd want to open and steer: a T3 job (`start_job`).
 
 ## message.quick_worker
 This looks like research or a lookup for `delegate`.
+
+## message.fresh
+This depends on how things are right now, so don't answer from memory or your notes. Look it up with `quick_search`, or `delegate` if it takes more digging.
+
+## message.machine_check
+This depends on how one of their machines is right now, so don't answer from memory or your notes. Check it with `start_job` and `background: true`.
 
 ## message.project
 If this becomes a job, the likely project is {project} on {machine}.

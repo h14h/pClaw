@@ -36,7 +36,6 @@ const QUOTE_LIMIT = 800;
 const RESYNC_ON_ATTACH = 10;
 /** Text channels in a category with this name are served without being listed in `discordChannels`. */
 const PROJECTS_CATEGORY = "projects";
-const STOP_JOB = "job-stop:";
 
 const JOB_LABELS: Record<JobState, string> = {
 	working: "🟡 Working",
@@ -318,7 +317,6 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 	const cardControls = (job: Job) => {
 		const row = new ActionRowBuilder<ButtonBuilder>();
 		if (job.link !== undefined) row.addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel("Open in T3").setURL(job.link));
-		if (job.state !== "closed" && job.state !== "stopped") row.addComponents(new ButtonBuilder().setStyle(ButtonStyle.Secondary).setLabel("Stop").setCustomId(`${STOP_JOB}${job.id}`));
 		return row.components.length === 0 ? [] : [row];
 	};
 
@@ -459,21 +457,6 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 	client.on(Events.ThreadCreate, async (thread) => {
 		if (thread.parentId !== null && served(thread.parentId) && !thread.joined) {
 			await thread.join().catch((error: unknown) => console.error("[pclaw] couldn't join a thread", error));
-		}
-	});
-
-	// The card's Stop button.
-	client.on(Events.InteractionCreate, async (interaction) => {
-		if (!interaction.isButton() || !interaction.customId.startsWith(STOP_JOB)) return;
-		try {
-			if (interaction.user.id !== ownerId) {
-				await interaction.reply({ content: "Only the owner can stop a job.", flags: MessageFlags.Ephemeral });
-				return;
-			}
-			await interaction.deferUpdate();
-			await jobs.stop(interaction.customId.slice(STOP_JOB.length), context);
-		} catch (error) {
-			console.error("[pclaw] couldn't stop a job", error);
 		}
 	});
 

@@ -58,20 +58,22 @@ function fakeBackend() {
 		launched: [] as Record<string, unknown>[],
 		sent: [] as string[],
 		interrupted: 0,
+		settled: 0,
 	};
 	const backend: JobBackend = {
 		launch: async (args) => {
 			state.launched.push(args);
-			return { threadId: "t3-thread", link: "https://t3.example/thread" };
+			return { threadId: "t3-thread" };
 		},
 		peek: async () => state.view,
 		read: async (_thread, _env, from) => ({ items: state.items, position: from + state.items.length }),
 		pending: async () => [],
 		send: async (_thread, _env, message) => void state.sent.push(message),
 		interrupt: async () => void state.interrupted++,
+		settle: async () => void state.settled++,
 		projects: async () => [{ id: "p-game", title: "hexfall", machine: "pc1", environmentId: "env-pc1", hasRepo: true }],
 		machines: async () => [{ machine: "mp1" }, { machine: "pc1", environmentId: "env-pc1" }, { machine: "mm1", environmentId: "env-mm1" }],
-		linkFor: (_thread, _env, link) => link,
+		linkFor: async (thread) => `https://t3.example/${thread}`,
 	};
 	return { state, backend, running };
 }
@@ -226,6 +228,35 @@ test("a machine with no projects can still run a scratch job", async () => {
 	await close();
 });
 
+test("a background job gets no Discord thread, reports where it started, and settles its T3 thread", async () => {
+	const parts = setup("background", { ...NEEDS_YOU, asks_owner: noul(0.05), job_complete: noul(0.9) });
+	const { state, backend, running } = fakeBackend();
+	state.items = [{ type: "assistant_message", text: "Godot 4.7.2." }];
+	const requests: ModelContext[] = [];
+	parts.faux.setResponses([
+		start({ title: "Godot version", brief: "Read the version.", machine: "pc1", background: true }),
+		summary("done", "It's 4.7.2."),
+		(request) => {
+			requests.push(request);
+			return fauxAssistantMessage("it's 4.7.2");
+		},
+	]);
+	const { conversation, keeper, idle, close } = await open("background", parts, backend);
+	await conversation.submit({ type: "input", content: "what godot is on pc1", requestId: "discord:9" }, context);
+	await idle();
+	const job = parts.store.all()[0]!;
+	assert.equal(job.discordThreadId, undefined);
+	state.view = { ...running, status: "completed", activeRunId: null };
+	await keeper.tick();
+	await idle();
+	assert.match(lastMessage(requests[0]!), /surface=\\"none\\"/);
+	assert.equal(state.settled, 1);
+	state.view = { ...state.view, settled: true };
+	await keeper.tick();
+	assert.equal(parts.store.get(job.id)!.state, "closed");
+	await close();
+});
+
 test("a control event logs the hint but doesn't show it", async () => {
 	const parts = setup("control", NEEDS_YOU, 1);
 	const { state, backend, running } = fakeBackend();
@@ -313,7 +344,7 @@ test("every template a read can pick exists", () => {
 	const templates = parseTemplates(readPrompt("guidance"));
 	const outcomes = ["finished", "needs_owner", "procedural", "blocked", "still_going"].map((name) => `turn.${name}`);
 	const names = [...outcomes, "surface.ping", "surface.note", "surface.card", "place.parent", "place.thread", "no_news", "owner_driving", "caution"];
-	names.push("message.t3_job", "message.quick_worker", "message.project", "message.status", "message.steer", "message.too_loud", "message.too_quiet", "follow_up.wait");
+	names.push("message.t3_job", "message.quick_worker", "message.fresh", "message.machine_check", "message.project", "message.status", "message.steer", "message.too_loud", "message.too_quiet", "follow_up.wait");
 	for (const name of names) assert.ok(templates[name], `missing template ${name}`);
 });
 
@@ -335,13 +366,19 @@ test("hints reflect the read, and stay out of the way when nothing stands out", 
 	assert.match(hint, /already seen this/);
 	assert.match(hint, /card already covers/);
 	assert.match(hint, /explicit yes/);
-	const chat = { job_size: choice("answer"), asks_status: noul(0.05), noise_feedback: choice("neither"), hard_to_undo: noul(0.02) };
+	const chat = { job_size: choice("answer"), fresh_check: noul(0.1), asks_status: noul(0.05), noise_feedback: choice("neither"), hard_to_undo: noul(0.02) };
 	assert.equal(messageGuidance(chat), undefined);
-	const job = messageGuidance({ ...chat, job_size: choice("t3_job") }, { project: "hexfall", machine: "pc1" })!;
+	const project = { project: "hexfall", machine: "pc1" };
+	const job = messageGuidance({ ...chat, job_size: choice("t3_job") }, { project })!;
 	assert.match(job, /hexfall on pc1/);
-	const status = messageGuidance({ ...chat, job_size: choice("t3_job"), asks_status: noul(0.9) }, { project: "hexfall", machine: "pc1" })!;
+	const status = messageGuidance({ ...chat, job_size: choice("t3_job"), asks_status: noul(0.9) }, { project, liveJobs: true })!;
 	assert.match(status, /asking how a job is going/);
-	assert.doesNotMatch(status, /real work/);
+	assert.doesNotMatch(status, /open and steer/);
+	assert.doesNotMatch(messageGuidance({ ...chat, job_size: choice("quick_worker", 0.75), asks_status: noul(0.6) })!, /how a job is going/, "nothing's running");
+	assert.match(messageGuidance({ ...chat, fresh_check: noul(0.9) })!, /quick_search/);
+	assert.match(messageGuidance({ ...chat, fresh_check: noul(0.9) }, { namesMachine: true })!, /background: true/);
+	assert.doesNotMatch(messageGuidance({ ...chat, job_size: choice("t3_job"), fresh_check: noul(0.7) })!, /right now/, "build work isn't a lookup");
+	assert.equal(messageGuidance({ ...chat, job_size: choice("quick_worker", 0.6) }), undefined, "a simple question can read as research");
 	assert.ok("in_job" in messageQuestions(true));
 	assert.ok(!("in_job" in messageQuestions(false)));
 });

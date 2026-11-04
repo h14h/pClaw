@@ -191,10 +191,14 @@ export function messageQuestions(inJobThread: boolean): Questions {
 			type: "choice",
 			instructions: "What does this message need?",
 			criteria: {
-				answer: "A reply from the assistant right now: chat, an opinion, a small question",
-				quick_worker: "Research, a comparison, or a lookup that takes a few minutes",
-				t3_job: "Real work on code, a repository, a game project, or a named machine",
+				answer: "A reply right now: chat, an opinion, an explanation, or a quick fact",
+				quick_worker: "Research, a comparison, a lookup, or a one-off check, with nothing to build or keep",
+				t3_job: "Changing code or files, building something, or long work the owner would want to open and steer",
 			},
+		},
+		fresh_check: {
+			type: "noul",
+			instructions: "Would a correct answer depend on how something is right now, outside this conversation? Examples: a live system, what's installed or running, a price, opening hours, a schedule, a score, the weather, news, or a recent release. Answer no for timeless facts, explanations, opinions, and chat.",
 		},
 		asks_status: { type: "noul", instructions: "Is the owner asking how something running is going, or whether it finished?" },
 		noise_feedback: {
@@ -215,21 +219,35 @@ export function messageQuestions(inJobThread: boolean): Questions {
 	};
 }
 
-export function messageGuidance(answers: Answers, project?: { project: string; machine: string }, templates?: Record<string, string>): string | undefined {
+/** Facts about the moment a message arrived, known for certain. */
+export type MessageFacts = {
+	/** Something is running or waiting, so a question about status has something to be about. */
+	liveJobs?: boolean;
+	/** The message names one of the owner's machines. */
+	namesMachine?: boolean;
+	project?: { project: string; machine: string };
+};
+
+/** Simple questions can read as research, so that hint needs a firmer read unless the answer has to be looked up. */
+const WORKER_THRESHOLD = 0.7;
+
+export function messageGuidance(answers: Answers, facts: MessageFacts = {}, templates?: Record<string, string>): string | undefined {
 	const picks: string[] = [];
 	const size = pick(answers.job_size);
 	const inJob = pick(answers.in_job).choice;
+	const fresh = yes(answers.fresh_check) >= 0.5;
 	// A question about running work mentions the work, so it reads as new work unless this comes first.
-	if (yes(answers.asks_status) >= 0.5 || inJob === "status") picks.push("message.status");
+	if ((yes(answers.asks_status) >= 0.5 && facts.liveJobs === true) || inJob === "status") picks.push("message.status");
 	else if (inJob === "steer") picks.push("message.steer");
 	else if (size.choice === "t3_job" && size.p >= 0.5) {
 		picks.push("message.t3_job");
-		if (project !== undefined) picks.push("message.project");
-	} else if (size.choice === "quick_worker" && size.p >= 0.5) picks.push("message.quick_worker");
+		if (facts.project !== undefined) picks.push("message.project");
+	} else if (fresh) picks.push(facts.namesMachine === true ? "message.machine_check" : "message.fresh");
+	else if (size.choice === "quick_worker" && size.p >= WORKER_THRESHOLD) picks.push("message.quick_worker");
 	const noise = pick(answers.noise_feedback);
 	if (noise.choice !== undefined && noise.choice !== "neither" && noise.p >= 0.5) picks.push(`message.${noise.choice}`);
 	if (yes(answers.hard_to_undo) >= 0.5) picks.push("caution");
-	return renderGuidance(answers, picks, project ?? {}, templates);
+	return renderGuidance(answers, picks, facts.project ?? {}, templates);
 }
 
 export const projectQuestion = (projects: { title: string; machine: string }[]): Questions => ({
