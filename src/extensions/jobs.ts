@@ -1,0 +1,706 @@
+import { randomBytes } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { hostname } from "node:os";
+import type { Context } from "@earendil-works/chord";
+import { Type } from "@earendil-works/pi-ai";
+import type { Models } from "@earendil-works/pi-ai/models";
+import { type Conversation, defineExtension, defineTool, type Harness } from "@earendil-works/pi-durable";
+import { type Config, writePrivate } from "../config.ts";
+import { type Decided, type Decisions, messageGuidance, messageQuestions, pick, projectQuestion, readTurn, TURN_TAIL, turnGuidance, turnQuestions } from "../decisions.ts";
+import { Routes } from "../routes.ts";
+import { pairedClient } from "../t3-client.ts";
+import { stamp } from "../time.ts";
+import { currentAsk, isEmoji, setReaction, WORKING } from "./reactions.ts";
+
+/**
+ * Jobs: real work done in T3 Code threads, on any machine T3 can reach. The person can open a job's thread from any T3
+ * client; in a Discord channel it also gets a thread under their message, with a status card that's edited in place.
+ *
+ * A keeper polls each job. When a T3 turn ends it refreshes the card (edits don't notify anyone), asks the decision
+ * model for a read, and wakes the conversation with a `<job-update>`. What happens next is the front model's call:
+ * replies in a job thread land silently unless it calls `ping_owner` first.
+ */
+
+export type JobState = "working" | "needs_you" | "idle" | "blocked" | "done" | "failed" | "stopped" | "closed";
+
+export type Job = {
+	id: string;
+	title: string;
+	brief: string;
+	threadId: string;
+	environmentId?: string;
+	machine: string;
+	project?: string;
+	model?: string;
+	link?: string;
+	/** The conversation the job started in, by address, and the message that asked for it. */
+	origin: string;
+	ask?: string;
+	emoji?: string;
+	discordThreadId?: string;
+	cardMessageId?: string;
+	state: JobState;
+	/** One line on where things stand, shown on the card. */
+	status: string;
+	/** Which T3 turn was last reported, as `<run>|<status>|<pending>`. */
+	handled?: string;
+	/** Where reading the T3 thread picks up. */
+	position?: number;
+	itemCount?: number;
+	/** The agent's last words so far: a mid-turn refresh can read them before the turn ends. */
+	lastMessage?: string;
+	cardRefreshedAt?: number;
+	/** What the owner has actually been sent about this job. */
+	told: string[];
+	pingNext?: boolean;
+	/** A reply to an update is expected in a place with no thread. */
+	awaitingReply?: boolean;
+	decision?: string;
+	startedAt: number;
+	updatedAt: number;
+};
+
+type StoreData = { jobs: Record<string, Job>; boardMessageId?: string };
+
+/** Job state lives in a plain file, like the notes, so it can be read and fixed by hand. */
+export class JobStore {
+	readonly #file: string;
+	#data: StoreData;
+	/** Set whenever a job changes, so the board knows to redraw. */
+	dirty = false;
+
+	constructor(file: string) {
+		this.#file = file;
+		this.#data = existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as StoreData) : { jobs: {} };
+	}
+
+	get boardMessageId(): string | undefined {
+		return this.#data.boardMessageId;
+	}
+
+	set boardMessageId(id: string | undefined) {
+		if (id === undefined) delete this.#data.boardMessageId;
+		else this.#data.boardMessageId = id;
+		this.#save();
+	}
+
+	get(id: string): Job | undefined {
+		return this.#data.jobs[id];
+	}
+
+	all(): Job[] {
+		return Object.values(this.#data.jobs).sort((a, b) => b.updatedAt - a.updatedAt);
+	}
+
+	active(): Job[] {
+		return this.all().filter((job) => job.state !== "closed");
+	}
+
+	/** The job a Discord thread belongs to; the most recent one if it holds several. */
+	forThread(discordThreadId: string): Job | undefined {
+		return this.active().find((job) => job.discordThreadId === discordThreadId);
+	}
+
+	put(job: Job): void {
+		job.updatedAt = Date.now();
+		this.#data.jobs[job.id] = job;
+		this.dirty = true;
+		this.#save();
+	}
+
+	#save(): void {
+		writePrivate(this.#file, `${JSON.stringify(this.#data, null, "\t")}\n`);
+	}
+}
+
+export type ThreadView = {
+	status: string;
+	activeRunId: string | null;
+	latestRunId: string | null;
+	pendingRequestCount: number;
+	runCount: number;
+	itemCount: number;
+	settled: boolean;
+	link?: string;
+};
+export type ThreadItem = { type: string; text?: string; creationSource?: string };
+export type Project = { id: string; title: string; machine: string; environmentId?: string; hasRepo: boolean };
+
+/** What jobs need from T3. */
+export type JobBackend = {
+	launch(args: Record<string, unknown>): Promise<{ threadId: string; link?: string }>;
+	peek(threadId: string, environmentId?: string): Promise<ThreadView>;
+	read(threadId: string, environmentId: string | undefined, from: number): Promise<{ items: ThreadItem[]; position: number }>;
+	pending(threadId: string, environmentId?: string): Promise<string[]>;
+	send(threadId: string, environmentId: string | undefined, message: string): Promise<void>;
+	interrupt(threadId: string, environmentId?: string): Promise<void>;
+	projects(): Promise<Project[]>;
+	/** A link that opens the thread for the person. */
+	linkFor(threadId: string, environmentId: string | undefined, link: string | undefined): string | undefined;
+};
+
+/** Where a job shows up. Discord fills this in; without it, jobs still run and updates still reach the conversation. */
+export type JobSurface = {
+	/** Make the job's thread and card. Returns nothing when the origin can't have a thread (a DM). */
+	open(job: Job): Promise<Pick<Job, "discordThreadId" | "cardMessageId"> | undefined>;
+	card(job: Job): Promise<void>;
+	board(jobs: Job[]): Promise<void>;
+	/** The conversation updates go to: the job's thread if it has one. */
+	conversation(job: Job): Promise<Conversation>;
+	/** Post into the channel the job started from, as a reply to the message that asked for it. */
+	share(job: Job, text: string): Promise<void>;
+};
+
+const PROJECTS_MS = 10 * 60_000;
+const CLIENT_MS = 10 * 60_000;
+const READ_PAGE = 100;
+const READ_PAGES = 5;
+const ITEM_CHARS = 8_000;
+
+const asRecord = (value: unknown): Record<string, unknown> => (value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {});
+const environmentArg = (environmentId: string | undefined) => (environmentId === undefined ? {} : { environmentId });
+
+export function t3Backend(t3Url: string, storeFile: string): JobBackend {
+	let client: { value: Awaited<ReturnType<typeof pairedClient>>; at: number } | undefined;
+	let projects: { value: Project[]; at: number } | undefined;
+	const paired = async () => {
+		if (client === undefined || Date.now() - client.at > CLIENT_MS) client = { value: await pairedClient(t3Url, storeFile), at: Date.now() };
+		return client.value;
+	};
+	const call = async (tool: string, args: Record<string, unknown>) => {
+		try {
+			return asRecord(await (await paired()).callTool(tool, args));
+		} catch (error) {
+			client = undefined;
+			throw error;
+		}
+	};
+	const view = (read: Record<string, unknown>): ThreadView => {
+		const thread = asRecord(read.thread);
+		const link = typeof thread.link === "string" ? thread.link : undefined;
+		return {
+			status: String(thread.status ?? "unknown"),
+			activeRunId: typeof thread.activeRunId === "string" ? thread.activeRunId : null,
+			latestRunId: typeof thread.latestRunId === "string" ? thread.latestRunId : null,
+			pendingRequestCount: Number(thread.pendingRequestCount ?? 0),
+			runCount: Number(thread.runCount ?? 0),
+			itemCount: Number(thread.itemCount ?? 0),
+			settled: thread.settled === true,
+			...(link === undefined ? {} : { link }),
+		};
+	};
+	return {
+		launch: async (args) => {
+			const result = await call("t3_thread_launch", args);
+			if (typeof result.threadId !== "string") throw new Error(`T3 returned no thread id: ${JSON.stringify(result).slice(0, 300)}`);
+			return { threadId: result.threadId, ...(typeof result.link === "string" ? { link: result.link } : {}) };
+		},
+		peek: async (threadId, environmentId) => view(await call("t3_thread_read", { threadId, ...environmentArg(environmentId), limit: 1, maxCharsPerItem: 1, runLimit: 1 })),
+		read: async (threadId, environmentId, from) => {
+			const items: ThreadItem[] = [];
+			let position = from;
+			for (let page = 0; page < READ_PAGES; page++) {
+				const read = await call("t3_thread_read", { threadId, ...environmentArg(environmentId), afterPosition: position, limit: READ_PAGE, maxCharsPerItem: ITEM_CHARS, runLimit: 1 });
+				items.push(...((read.items as ThreadItem[] | undefined) ?? []));
+				if (typeof read.nextPosition === "number") position = read.nextPosition;
+				if (read.hasMore !== true) break;
+			}
+			return { items, position };
+		},
+		pending: async (threadId, environmentId) => {
+			const listed = await call("t3_pending_request", { action: "list", threadId, ...environmentArg(environmentId) });
+			const requests = (listed.requests ?? listed.pending ?? listed.items ?? []) as unknown[];
+			const details: string[] = [];
+			for (const request of requests.slice(0, 2)) {
+				const requestId = typeof request === "string" ? request : asRecord(request).requestId ?? asRecord(request).id;
+				if (typeof requestId !== "string") continue;
+				details.push(JSON.stringify(await call("t3_pending_request", { action: "read", requestId, threadId, ...environmentArg(environmentId) })).slice(0, 1_500));
+			}
+			return details;
+		},
+		send: async (threadId, environmentId, message) => {
+			await call("t3_thread_send", { threadId, ...environmentArg(environmentId), message, mode: "auto" });
+		},
+		interrupt: async (threadId, environmentId) => {
+			await call("t3_thread_interrupt", { threadId, ...environmentArg(environmentId), reason: "Stopped from pclaw." });
+		},
+		projects: async () => {
+			if (projects !== undefined && Date.now() - projects.at < PROJECTS_MS) return projects.value;
+			const links = (((await call("t3_environment_links", {})).links ?? []) as Record<string, unknown>[]).filter((link) => link.status === "reachable");
+			const machines = [{ machine: hostname().replace(/\..*$/, "") } as { machine: string; environmentId?: string }, ...links.map((link) => ({ machine: String(link.label), environmentId: String(link.environmentId) }))];
+			const found = await Promise.all(
+				machines.map(async ({ machine, environmentId }) => {
+					const listed = await call("t3_project_list", { ...environmentArg(environmentId), limit: 100 }).catch(() => ({ projects: [] }) as Record<string, unknown>);
+					return ((listed.projects ?? []) as Record<string, unknown>[])
+						.filter((project) => project.title !== "No project" && project.archivedAt == null)
+						.map((project): Project => ({ id: String(project.id), title: String(project.title), machine, ...(environmentId === undefined ? {} : { environmentId }), hasRepo: project.repositoryIdentity != null }));
+				}),
+			);
+			projects = { value: found.flat(), at: Date.now() };
+			return projects.value;
+		},
+		linkFor: (threadId, environmentId, link) => {
+			if (link?.startsWith("https://")) return link;
+			if (environmentId === undefined) return undefined;
+			return `${t3Url.replace(/\/$/, "")}/${environmentId}/${encodeURIComponent(threadId)}`;
+		},
+	};
+}
+
+/** Goes on the front of every job's brief, so a job's last message tells pclaw where things stand. */
+export const JOB_NOTE =
+	"You're running as a job from pclaw, the owner's assistant. They may be away and reading a summary on their phone. " +
+	"Keep going without them while you can. When you stop, your last message should say plainly where the job stands: " +
+	"done, blocked on what, or the exact question you need answered. Before anything outward-facing and hard to undo " +
+	"(send, buy, book, pay, delete, post, or deploy for real), stop and ask.";
+
+const slug = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 32) || "job";
+const tail = (text: string, limit: number) => (text.length > limit ? `…${text.slice(-limit)}` : text);
+const firstLine = (text: string) => (text.split("\n").find((line) => line.trim() !== "")?.trim() ?? "").slice(0, 180);
+
+/** The last thing the agent said, and whether a person, not pclaw, spoke to it most recently. */
+export function readItems(items: ThreadItem[]): { lastMessage?: string; ownerDriving: boolean } {
+	let lastMessage: string | undefined;
+	let ownerDriving = false;
+	for (const item of items) {
+		if (item.type === "assistant_message" && item.text?.trim()) lastMessage = item.text;
+		if (item.type === "user_message") ownerDriving = item.creationSource !== "mcp";
+	}
+	return { ...(lastMessage === undefined ? {} : { lastMessage }), ownerDriving };
+}
+
+/** T3's status says a turn ended, not why, so a finished thread and one asking a question look the same. */
+export function turnEnded(view: ThreadView): boolean {
+	if (view.pendingRequestCount > 0 || view.status === "waiting") return true;
+	if (view.status === "idle") return view.runCount > 0;
+	return !/^(preparing|queued|starting|running)$/.test(view.status);
+}
+
+export const turnKey = (view: ThreadView) => `${view.latestRunId}|${view.status}|${view.pendingRequestCount}`;
+
+const STATES = ["needs_you", "idle", "blocked", "done"] as const;
+
+function factualState(view: ThreadView): JobState | undefined {
+	if (/^(failed|cancelled|rolled_back)$/.test(view.status)) return "failed";
+	if (view.status === "interrupted") return "stopped";
+	if (view.pendingRequestCount > 0 || view.status === "waiting") return "needs_you";
+	return undefined;
+}
+
+const FROM_OUTCOME: Record<string, JobState> = { finished: "done", needs_owner: "needs_you", procedural: "idle", blocked: "blocked", still_going: "idle" };
+
+const SUMMARY_PROMPT =
+	"You read the last message from a coding agent working a job, and report where the job stands. Reply with JSON only: " +
+	'{"state": "done" | "needs_you" | "blocked" | "idle", "line": "..."}. "needs_you" means it ends on a question or a ' +
+	'decision for the owner. "blocked" means a failure or missing access stopped it. "idle" means it paused with nothing ' +
+	'needed. "done" means the job it was given is complete. "line" is one plain sentence of at most 140 characters about ' +
+	"where things stand, written for someone glancing at their phone. No preamble and no jargon.";
+
+export type JobsOptions = {
+	store: JobStore;
+	backend: JobBackend;
+	decisions: Decisions;
+	models: Models;
+	config: Config;
+	harness: { current?: Harness };
+};
+
+export type Jobs = ReturnType<typeof createJobs>;
+
+export function createJobs(options: JobsOptions) {
+	const { store, backend, decisions, models, config, harness } = options;
+	const surface: { current?: JobSurface } = {};
+	const text = (value: string) => ({ output: [{ type: "text" as const, text: value }] });
+
+	const mustGet = (id: string) => {
+		const job = store.get(id);
+		if (job === undefined) throw new Error(`No job ${id}. Use list_jobs.`);
+		return job;
+	};
+
+	async function refreshCard(job: Job): Promise<void> {
+		await surface.current?.card(job).catch((error: unknown) => console.error(`[pclaw] job card ${job.id}`, error));
+	}
+
+	/** One line on the card and a state, from the front model. A failure here only costs a plainer card. */
+	async function summarize(job: Job, message: string): Promise<{ line: string; state?: JobState }> {
+		try {
+			const model = models.getModel(config.provider, config.model);
+			if (model === undefined) throw new Error(`unknown model ${config.provider}/${config.model}`);
+			const reply = await models.completeSimple(
+				model,
+				{ systemPrompt: SUMMARY_PROMPT, messages: [{ role: "user", content: `Job: ${job.title}\n\nLast message:\n\n${tail(message, 6_000)}`, timestamp: Date.now() }] },
+				{ reasoning: "low", signal: AbortSignal.timeout(30_000) },
+			);
+			const raw = reply.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
+			const parsed = JSON.parse(/\{[\s\S]*\}/.exec(raw)?.[0] ?? "{}") as { state?: string; line?: string };
+			const state = STATES.find((each) => each === parsed.state);
+			return { line: parsed.line?.trim().slice(0, 200) || firstLine(message), ...(state === undefined ? {} : { state }) };
+		} catch (error) {
+			console.error(`[pclaw] job summary ${job.id}: ${error instanceof Error ? error.message : error}`);
+			return { line: firstLine(message) };
+		}
+	}
+
+	async function setAskReaction(job: Job, emoji: string, context: Context): Promise<void> {
+		if (job.ask === undefined || harness.current === undefined) return;
+		const id = (await harness.current.snapshot(Routes, context))?.conversations[job.origin];
+		const conversation = id === undefined ? undefined : await harness.current.conversation(id, context);
+		await conversation?.commit((tx) => setReaction(tx, conversation.id, job.ask!, emoji), context);
+	}
+
+	const REACTION: Partial<Record<JobState, string>> = { needs_you: "🙋", done: "✅", failed: "⚠️", blocked: "⚠️", stopped: "⏹️" };
+
+	async function updateConversation(job: Job, context: Context): Promise<Conversation | undefined> {
+		if (surface.current !== undefined) return surface.current.conversation(job);
+		const id = (await harness.current?.snapshot(Routes, context))?.conversations[job.origin];
+		return id === undefined ? undefined : harness.current?.conversation(id, context);
+	}
+
+	/** A T3 turn ended: read it, refresh the card, get a read from the decision model, and wake the conversation. */
+	async function handleTurn(job: Job, view: ThreadView, context: Context): Promise<void> {
+		const key = turnKey(view);
+		const { items, position } = await backend.read(job.threadId, job.environmentId, job.position ?? 0);
+		const { lastMessage, ownerDriving } = readItems(items);
+		const message = lastMessage ?? job.lastMessage ?? "(the agent said nothing new)";
+		const facts = { ownerDriving, repeat: lastMessage === undefined || tail(lastMessage, 6_000) === job.lastMessage };
+		job.lastMessage = tail(message, 6_000);
+		const pending = view.pendingRequestCount > 0 ? await backend.pending(job.threadId, job.environmentId).catch(() => []) : [];
+		const id = `turn:${job.id}:${key}`;
+		const decided: Decided | undefined = await decisions.ask({ id, site: "job-turn", job: job.id, timeoutMs: 5_000, state: { last_message: message.slice(-TURN_TAIL) }, questions: turnQuestions });
+		const read = decided === undefined ? undefined : readTurn(decided.answers, facts);
+		const summary = await summarize(job, message);
+		job.state = factualState(view) ?? summary.state ?? (read === undefined ? undefined : FROM_OUTCOME[read.outcome]) ?? "idle";
+		job.status = summary.line;
+		job.handled = key;
+		job.position = position;
+		job.itemCount = view.itemCount;
+		job.cardRefreshedAt = Date.now();
+		const guidance = decided === undefined ? undefined : turnGuidance(decided.answers, facts);
+		const shown = decided?.arm === "guided" ? guidance : undefined;
+		if (decided !== undefined) {
+			job.decision = decided.id;
+			decisions.record({ type: "guidance", id, site: "job-turn", job: job.id, arm: decided.arm, guidance, shown: shown !== undefined, ...read, ...facts, summaryState: summary.state, cardState: job.state });
+		}
+		const conversation = await updateConversation(job, context);
+		job.awaitingReply = job.discordThreadId === undefined;
+		store.put(job);
+		await refreshCard(job);
+		const reaction = REACTION[job.state];
+		if (reaction !== undefined) await setAskReaction(job, reaction, context);
+		console.log(`[pclaw] job ${job.id} turn ended: ${view.status}, card ${job.state}, ${shown === undefined ? "no hint shown" : "hint shown"}`);
+		decisions.record({ type: "wake", job: job.id, decision: decided?.id, arm: decided?.arm ?? "none", state: job.state, pending: view.pendingRequestCount });
+		const where = job.discordThreadId === undefined ? ' surface="none"' : "";
+		await conversation?.submit(
+			{
+				type: "input",
+				content: [
+					`[${stamp(Date.now(), config.timeZone)}]`,
+					`<job-update job="${job.id}" title="${job.title.replaceAll('"', "'")}" t3_status="${view.status}" turn="${view.runCount}" pending_requests="${view.pendingRequestCount}" card="${job.state}"${where}>`,
+					`Card now says: ${job.status}`,
+					...(pending.length === 0 ? [] : [`Pending in T3: ${pending.join("\n")}`]),
+					`The agent's last message:\n${tail(message, 4_000)}`,
+					"</job-update>",
+					...(shown === undefined ? [] : [shown]),
+				].join("\n"),
+				whenBusy: "followUp",
+				requestId: `job:${job.id}:${key}`,
+			},
+			context,
+		);
+	}
+
+	/** Mid-turn: keep the card honest, with no message and no wakeup. */
+	async function refreshRunning(job: Job): Promise<void> {
+		const { items, position } = await backend.read(job.threadId, job.environmentId, job.position ?? 0);
+		const { lastMessage } = readItems(items);
+		job.position = position;
+		job.cardRefreshedAt = Date.now();
+		if (lastMessage !== undefined) {
+			job.lastMessage = tail(lastMessage, 6_000);
+			job.status = (await summarize(job, lastMessage)).line;
+		}
+		store.put(job);
+		await refreshCard(job);
+	}
+
+	async function check(job: Job, refreshMs: number, context: Context): Promise<void> {
+		const view = await backend.peek(job.threadId, job.environmentId);
+		if (view.settled && job.state !== "working") {
+			job.state = "closed";
+			store.put(job);
+			await refreshCard(job);
+			return;
+		}
+		if (turnEnded(view)) {
+			if (turnKey(view) !== job.handled) await handleTurn(job, view, context);
+			else if (Date.now() - job.updatedAt > 7 * 24 * 60 * 60_000) {
+				job.state = "closed";
+				store.put(job);
+				await refreshCard(job);
+			}
+			return;
+		}
+		if (job.state !== "working") {
+			job.state = "working";
+			job.status = "Back at it.";
+			store.put(job);
+			await refreshCard(job);
+			await setAskReaction(job, job.emoji ?? WORKING, context);
+		}
+		if (view.itemCount !== job.itemCount && Date.now() - (job.cardRefreshedAt ?? job.startedAt) >= refreshMs) {
+			job.itemCount = view.itemCount;
+			await refreshRunning(job);
+		}
+	}
+
+	function startKeeper(context: Context, everyMs: number, refreshMs: number): { stop(): void; tick(): Promise<void> } {
+		let running = false;
+		const tick = async () => {
+			if (running) return;
+			running = true;
+			try {
+				for (const job of store.active()) {
+					await check(job, refreshMs, context).catch((error: unknown) => console.error(`[pclaw] job ${job.id}: ${error instanceof Error ? error.message : error}`));
+				}
+				if (store.dirty) {
+					store.dirty = false;
+					await surface.current?.board(store.all()).catch((error: unknown) => console.error("[pclaw] job board", error));
+				}
+			} finally {
+				running = false;
+			}
+		};
+		const timer = setInterval(() => void tick(), everyMs);
+		return { stop: () => clearInterval(timer), tick };
+	}
+
+	/** A hint for the owner's message, or nothing. Runs before the message reaches the front model, so it's kept quick. */
+	async function guideMessage(input: { id: string; text: string; channel: string; discordThreadId?: string }): Promise<string | undefined> {
+		if (!decisions.configured || input.text.trim() === "") return undefined;
+		const job = input.discordThreadId === undefined ? undefined : store.forThread(input.discordThreadId);
+		const decided = await decisions.ask({
+			id: `message:${input.id}`,
+			site: "message",
+			timeoutMs: 1_500,
+			...(job === undefined ? {} : { job: job.id }),
+			state: { channel: input.channel, message: input.text.slice(0, 4_000), active_jobs: store.active().slice(0, 10).map((each) => each.title), ...(job === undefined ? {} : { this_job: job.title, card_says: job.status }) },
+			questions: messageQuestions(job !== undefined),
+		});
+		if (decided === undefined) return undefined;
+		let project: { project: string; machine: string } | undefined;
+		if (pick(decided.answers.job_size).choice === "t3_job") {
+			const projects = await backend.projects().catch(() => []);
+			const chosen = projects.length === 0
+				? undefined
+				: await decisions.ask({ id: `project:${input.id}`, site: "project", timeoutMs: 1_500, state: { channel: input.channel, message: input.text.slice(0, 2_000) }, questions: projectQuestion(projects) });
+			const found = projects[Number((pick(chosen?.answers.project).choice ?? "").slice(1))];
+			if (found !== undefined && pick(chosen?.answers.project).choice !== "none") project = { project: found.title, machine: found.machine };
+		}
+		const guidance = messageGuidance(decided.answers, project);
+		const shown = decided.arm === "guided" ? guidance : undefined;
+		if (guidance !== undefined) decisions.record({ type: "guidance", id: decided.id, site: "message", arm: decided.arm, guidance, shown: shown !== undefined });
+		return shown;
+	}
+
+	/**
+	 * How a reply to `address` should go out: "ping" notifies, "silent" doesn't, undefined means it's not about a job.
+	 * Replies in a job's thread are silent unless the front model asked otherwise.
+	 */
+	function delivery(address: string, reply: string): "ping" | "silent" | "plain" | undefined {
+		const [, kind, id] = address.split(":");
+		const job = kind === "thread" ? store.forThread(id!) : store.active().find((each) => each.origin === address && each.awaitingReply === true);
+		if (job === undefined) return undefined;
+		const mode = kind !== "thread" ? "plain" : job.pingNext === true ? "ping" : "silent";
+		delete job.pingNext;
+		delete job.awaitingReply;
+		job.told = [...job.told, reply.slice(0, 300)].slice(-5);
+		store.put(job);
+		decisions.record({ type: "delivery", job: job.id, decision: job.decision, mode, chars: reply.length });
+		return mode;
+	}
+
+	async function stop(id: string, context: Context): Promise<void> {
+		const job = mustGet(id);
+		await backend.interrupt(job.threadId, job.environmentId);
+		job.state = "stopped";
+		job.status = "Stopped.";
+		store.put(job);
+		await refreshCard(job);
+		await setAskReaction(job, REACTION.stopped!, context);
+	}
+
+	function modelSelection(model: string): Record<string, unknown> {
+		return { ...(model.startsWith("claude") ? { instanceId: "claudeAgent" } : {}), model, ...(model.startsWith("claude") ? { options: [{ id: "effort", value: "high" }] } : {}) };
+	}
+
+	const extension = defineExtension({
+		name: "pclaw.jobs",
+		tools: [
+			defineTool({
+				name: "start_job",
+				description:
+					"Start real work in a T3 Code thread: anything on code, a repository, a game project, or a named machine. It runs without a time limit, the owner can open it from any T3 client, and in a Discord channel it gets a thread under their message with a status card. The agent can't see this conversation, so the brief must stand alone. Pass thread_id to keep an eye on a T3 thread that already exists instead.",
+				parameters: Type.Object({
+					title: Type.String({ description: "Short name, shown on the thread and the card." }),
+					brief: Type.Optional(Type.String({ description: "Self-contained brief: the goal and why, relevant facts, constraints, and what done looks like. Required unless thread_id is given." })),
+					project: Type.Optional(Type.String({ description: "Project name from list_projects. Omit for a scratch thread on `machine`." })),
+					machine: Type.Optional(Type.String({ description: "Which machine: mp1, pc1, mm1. Defaults to the project's machine, else this one." })),
+					model: Type.Optional(Type.String({ description: `T3 model id. Defaults to ${config.jobModel}.` })),
+					workspace: Type.Optional(Type.Union([Type.Literal("worktree"), Type.Literal("root")], { description: "worktree (default for git projects): a fresh checkout. root: the project's own folder." })),
+					base_ref: Type.Optional(Type.String({ description: 'Branch a worktree starts from. Defaults to "main".' })),
+					thread_id: Type.Optional(Type.String({ description: "An existing T3 thread to track instead of launching one." })),
+					emoji: Type.Optional(Type.String({ description: "A reaction for their message while the job runs: the literal emoji for the topic if there is one. Defaults to ⏳." })),
+				}),
+				execute: async (args, api, context) => {
+					const ask = await currentAsk(harness.current, api, api.conversationId, context);
+					const routes = (await api.snapshot(Routes, context))?.conversations ?? {};
+					const origin = Object.keys(routes).find((address) => routes[address] === api.conversationId);
+					if (origin === undefined) throw new Error("This conversation has no address, so a job here couldn't report back.");
+					const projects = args.project === undefined && args.machine === undefined ? [] : await backend.projects();
+					const named = (project: Project) => project.title.toLowerCase() === args.project!.toLowerCase() && (args.machine === undefined || project.machine === args.machine);
+					const project = args.project === undefined ? undefined : projects.find(named);
+					if (args.project !== undefined && project === undefined) {
+						throw new Error(`No project ${args.project}${args.machine === undefined ? "" : ` on ${args.machine}`}. Use list_projects.`);
+					}
+					const local = hostname().replace(/\..*$/, "");
+					const machine = project?.machine ?? args.machine ?? local;
+					let environmentId = project?.environmentId;
+					if (project === undefined && machine !== local) {
+						environmentId = (await backend.projects()).find((each) => each.machine === machine)?.environmentId;
+						if (environmentId === undefined) throw new Error(`Can't reach ${machine} through T3.`);
+					}
+					const model = args.model ?? config.jobModel;
+					let threadId = args.thread_id;
+					let link: string | undefined;
+					if (threadId === undefined) {
+						if (args.brief === undefined) throw new Error("A new job needs a brief.");
+						const workspace = args.workspace ?? (project?.hasRepo === true ? "worktree" : "root");
+						const launched = await backend.launch({
+							title: args.title,
+							...environmentArg(environmentId),
+							...(project === undefined ? { scratch: true } : { projectId: project.id, workspaceStrategy: workspace === "worktree" ? { type: "worktree", baseRef: args.base_ref ?? "main" } : { type: "root" } }),
+							message: `${JOB_NOTE}\n\n${args.brief}`,
+							modelSelection: modelSelection(model),
+							runtimeMode: "full-access",
+						});
+						threadId = launched.threadId;
+						link = launched.link;
+					}
+					const emoji = args.emoji !== undefined && isEmoji(args.emoji.trim()) ? args.emoji.trim() : undefined;
+					const now = Date.now();
+					const job: Job = {
+						id: `${slug(args.title)}-${randomBytes(2).toString("hex")}`,
+						title: args.title,
+						brief: args.brief ?? "(an existing T3 thread)",
+						threadId,
+						...environmentArg(environmentId),
+						machine,
+						...(project === undefined ? {} : { project: project.title }),
+						model,
+						origin,
+						...(ask === undefined ? {} : { ask }),
+						...(emoji === undefined ? {} : { emoji }),
+						state: "working",
+						status: args.thread_id === undefined ? "Starting up." : "Watching.",
+						told: [],
+						startedAt: now,
+						updatedAt: now,
+					};
+					const opened = backend.linkFor(threadId, environmentId, link);
+					if (opened !== undefined) job.link = opened;
+					if (args.thread_id !== undefined) {
+						const view = await backend.peek(threadId, environmentId);
+						job.handled = turnKey(view);
+						job.position = Math.max(0, view.itemCount - 1);
+						job.state = turnEnded(view) ? "idle" : "working";
+						if (view.link !== undefined) job.link = backend.linkFor(threadId, environmentId, view.link) ?? job.link!;
+					}
+					store.put(job);
+					if (ask !== undefined) await api.commit((tx) => setReaction(tx, api.conversationId, ask, emoji ?? WORKING), context);
+					const placed = await surface.current?.open(job).catch((error: unknown) => {
+						console.error(`[pclaw] couldn't open a Discord thread for ${job.id}`, error);
+						return undefined;
+					});
+					if (placed !== undefined) store.put(Object.assign(job, placed));
+					decisions.record({ type: "job", event: "start", job: job.id, machine, project: project?.title, model, adopted: args.thread_id !== undefined });
+					console.log(`[pclaw] job ${job.id} started on ${machine}${project === undefined ? "" : ` in ${project.title}`}`);
+					// End the turn here: what was written alongside this call is the reply.
+					return { ...text(`Job ${job.id} is running in T3 on ${machine}. ${job.link ?? ""}`.trim()), control: { terminate: true } };
+				},
+			}),
+			defineTool({
+				name: "list_projects",
+				description: "List the T3 projects start_job can use, on every reachable machine.",
+				parameters: Type.Object({}),
+				replay: "safe",
+				execute: async () => {
+					const projects = await backend.projects();
+					return text(projects.map((project) => `${project.title} (${project.machine})${project.hasRepo ? "" : ", no git repo"}`).join("\n") || "No projects found.");
+				},
+			}),
+			defineTool({
+				name: "list_jobs",
+				description: "List jobs and where each stands. Use this before answering any question about how a job is going.",
+				parameters: Type.Object({}),
+				replay: "safe",
+				execute: async () => {
+					const jobs = store.active();
+					return text(jobs.length === 0 ? "No active jobs." : jobs.map((job) => `${job.id} [${job.state}] on ${job.machine}: ${job.title}. ${job.status} ${job.link ?? ""}`.trim()).join("\n"));
+				},
+			}),
+			defineTool({
+				name: "message_job",
+				description: "Send a message to a job's agent: an answer, a go-ahead, a correction. It joins the running turn, or starts a new one if the agent has stopped.",
+				parameters: Type.Object({ job: Type.String(), message: Type.String() }),
+				execute: async ({ job: id, message }, _api, context) => {
+					if (!config.t3AllowSend) throw new Error("Sending into T3 threads is off (t3AllowSend).");
+					const job = mustGet(id);
+					await backend.send(job.threadId, job.environmentId, message);
+					job.state = "working";
+					job.status = "Picked up a new message.";
+					store.put(job);
+					await refreshCard(job);
+					await setAskReaction(job, job.emoji ?? WORKING, context);
+					return text(`Sent to ${job.title}.`);
+				},
+			}),
+			defineTool({
+				name: "stop_job",
+				description: "Stop a job's agent mid-turn. The T3 thread stays, so it can be picked up again.",
+				parameters: Type.Object({ job: Type.String() }),
+				execute: async ({ job }, _api, context) => {
+					await stop(job, context);
+					return text(`Stopped ${job}.`);
+				},
+			}),
+			defineTool({
+				name: "ping_owner",
+				description: "Make your next reply about this job a real notification. Without it, replies in a job's thread land silently. Call it before you write the message.",
+				parameters: Type.Object({ job: Type.String() }),
+				execute: async ({ job: id }) => {
+					const job = mustGet(id);
+					job.pingNext = true;
+					store.put(job);
+					return text("Your reply will notify them.");
+				},
+			}),
+			defineTool({
+				name: "share_result",
+				description: "Post a job's outcome in the channel it started from, as a reply to the message that asked for it. For results worth finding later. Write it for someone who didn't read the thread.",
+				parameters: Type.Object({ job: Type.String(), text: Type.String() }),
+				execute: async ({ job: id, text: result }) => {
+					const job = mustGet(id);
+					if (surface.current === undefined || job.discordThreadId === undefined) return text("This job has no channel to post in. Just reply here.");
+					await surface.current.share(job, result);
+					job.told = [...job.told, result.slice(0, 300)].slice(-5);
+					store.put(job);
+					decisions.record({ type: "delivery", job: job.id, decision: job.decision, mode: "shared", chars: result.length });
+					return text("Posted.");
+				},
+			}),
+		],
+	});
+
+	return { extension, store, surface, decisions, guideMessage, delivery, stop, startKeeper, backend };
+}

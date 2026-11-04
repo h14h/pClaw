@@ -15,6 +15,7 @@ import {
 	UserEntry,
 } from "@earendil-works/pi-durable";
 import type { Config } from "../config.ts";
+import { STRIP_GUIDANCE } from "../decisions.ts";
 import { readPrompt } from "../prompts.ts";
 import type { Notes } from "./notes.ts";
 
@@ -42,7 +43,7 @@ const CHECK_MS = 5 * 60_000;
 const RETRY_MS = 10 * 60_000;
 const MESSAGE_LIMIT = 1_500;
 const TRANSCRIPT_LIMIT = 40_000;
-const INTERNAL = /<(follow-up|worker-report)[\s>]/;
+const INTERNAL = /<(follow-up|worker-report|job-update)[\s>]/;
 
 const textOf = (message: Message): string =>
 	typeof message.content === "string"
@@ -59,7 +60,7 @@ export function conversationText(entries: readonly EntryRecord[]): { lines: stri
 		if ("timestamp" in message && typeof message.timestamp === "number") lastAt = Math.max(lastAt ?? 0, message.timestamp);
 		let line: string | undefined;
 		if (UserEntry.is(entry) && message.role === "user") {
-			const text = textOf(message).trim();
+			const text = textOf(message).replace(STRIP_GUIDANCE, "").trim();
 			if (!INTERNAL.test(text)) line = `them: ${text}`;
 		} else if (AssistantEntry.is(entry) && message.role === "assistant") {
 			const text = textOf(message).trim();

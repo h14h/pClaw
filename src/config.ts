@@ -17,6 +17,10 @@ export const paths = {
 	workerSessions: join(home, "worker-sessions"),
 	/** T3 Code OAuth pairing (client id, tokens, pending PKCE state). 0600, never shown to models. */
 	t3Auth: join(home, "t3.json"),
+	/** Jobs and where they stand. */
+	jobs: join(home, "jobs.json"),
+	/** Every decision-model call, what was shown, and what happened next. See docs/decision-evals.md. */
+	decisions: join(home, "decisions.jsonl"),
 };
 
 export type Config = {
@@ -79,6 +83,18 @@ export type Config = {
 	t3WorkerBaseRef?: string;
 	/** How often watched T3 threads are polled for waiting/finished/failed. */
 	t3PollSeconds: number;
+	/** How often jobs are checked in T3. */
+	jobPollSeconds: number;
+	/** How often a running job's status card can refresh. */
+	jobCardMinutes: number;
+	/** T3 model for jobs unless the front model picks another. */
+	jobModel: string;
+	/** A channel for one always-current message listing every job. Unset: no board. */
+	discordBoardChannel?: string;
+	/** A decision model's `/v1/decisions` server. Unset: no hints, and the front model decides alone. */
+	decisionUrl?: string;
+	/** Share of decisions asked and logged but not shown, for comparing behavior with and without hints. */
+	decisionHoldout: number;
 };
 
 type StoredConfig = Partial<Config>;
@@ -107,6 +123,10 @@ export const defaults: Config = {
 	t3Url: "http://127.0.0.1:3773",
 	t3AllowSend: false,
 	t3PollSeconds: 60,
+	jobPollSeconds: 30,
+	jobCardMinutes: 3,
+	jobModel: "claude-opus-5-5",
+	decisionHoldout: 0.2,
 };
 
 function readStored(): StoredConfig {

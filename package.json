@@ -14,6 +14,8 @@
     "setup": "node src/main.ts setup",
     "chat": "node src/main.ts chat",
     "search-bench": "node src/search-bench.ts",
+    "decisions": "node src/decision-report.ts",
+    "decisions:replay": "node src/decision-replay.ts",
     "test": "PCLAW_HOME=$(mktemp -d) node --test 'src/**/*.test.ts'",
     "typecheck": "tsc --noEmit",
     "prose-lab": "node src/prose-lab/lab.ts"

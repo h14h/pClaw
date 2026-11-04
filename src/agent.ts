@@ -17,12 +17,17 @@ import { reactionsExtension } from "./extensions/reactions.ts";
 import { recallExtension } from "./extensions/recall.ts";
 import { type Notes, notesExtension } from "./extensions/notes.ts";
 import { formattingExtension, soulExtension } from "./extensions/soul.ts";
+import { createJobs, JobStore, type Jobs, t3Backend } from "./extensions/jobs.ts";
 import { t3Extension } from "./extensions/t3.ts";
+import { type Decisions, decisionClient, followUpGuidance, followUpQuestions } from "./decisions.ts";
 import { ConversationInfo, Routes } from "./routes.ts";
+import { stamp } from "./time.ts";
 import { prepareWorkspace, type WorkerOptions, workerOptions, workersExtension } from "./extensions/workers.ts";
 
 export type Agent = {
 	harness: Harness;
+	/** Real work in T3 threads, and the hints that guide it. */
+	jobs: Jobs;
 	/** The conversation for `address`, created on first use. */
 	conversationFor(address: string, context: Context): Promise<Conversation>;
 	/** Addresses that have a conversation, for reattaching delivery after a restart. */
@@ -45,6 +50,10 @@ export async function openAgent(
 		models: Models;
 		notes: Notes;
 		workers?: WorkerOptions;
+		/** Stand-ins for tests. */
+		jobBackend?: Jobs["backend"];
+		decisions?: Decisions;
+		jobStore?: JobStore;
 		/** How long a conversation stays quiet before the memory pass reads it. */
 		memoryQuietMs?: number;
 		now?: () => number;
@@ -55,7 +64,21 @@ export async function openAgent(
 	const registry = createRegistry();
 	registry.install(soulExtension(config.timeZone));
 	registry.install(notesExtension(notes));
-	registry.install(followUpsExtension(config.timeZone, options.now));
+	const decisions = options.decisions ?? decisionClient({ url: config.decisionUrl, logFile: paths.decisions, holdout: config.decisionHoldout });
+	registry.install(
+		followUpsExtension(config.timeZone, options.now, async (id, note) => {
+			const decided = await decisions.ask({
+				id,
+				site: "follow-up",
+				state: { follow_up: note.slice(0, 2_000), local_time: stamp(Date.now(), config.timeZone) },
+				questions: followUpQuestions,
+			});
+			if (decided === undefined) return undefined;
+			const guidance = followUpGuidance(decided.answers);
+			if (guidance !== undefined) decisions.record({ type: "guidance", id, site: "follow-up", arm: decided.arm, guidance, shown: decided.arm === "guided" });
+			return decided.arm === "guided" ? guidance : undefined;
+		}),
+	);
 	const workers = options.workers ?? workerOptions(config, paths);
 	prepareWorkspace(workers);
 	const current: { current?: Harness } = {};
@@ -65,6 +88,15 @@ export async function openAgent(
 	registry.install(recallExtension(current, config.timeZone));
 	registry.install(reactionsExtension(current));
 	registry.install(quickSearchExtension());
+	const jobs = createJobs({
+		store: options.jobStore ?? new JobStore(paths.jobs),
+		backend: options.jobBackend ?? t3Backend(config.t3Url, paths.t3Auth),
+		decisions,
+		models,
+		config,
+		harness: current,
+	});
+	registry.install(jobs.extension);
 	registry.install(
 		t3Extension({
 			t3Url: config.t3Url,
@@ -159,5 +191,5 @@ export async function openAgent(
 	}
 
 	harness.resume();
-	return { harness, conversationFor, addresses, forkFor, describe, setModel };
+	return { harness, jobs, conversationFor, addresses, forkFor, describe, setModel };
 }

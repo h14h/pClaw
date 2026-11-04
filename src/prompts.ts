@@ -27,6 +27,11 @@ export const prompts = {
 		name: "Summarizing",
 		description: "How older messages are summarized when a conversation gets long.",
 	},
+	guidance: {
+		file: here("guidance.md"),
+		name: "Guidance templates",
+		description: "The advice the decision model picks between, shown to the front model as a hint it can ignore.",
+	},
 } as const;
 
 export type PromptName = keyof typeof prompts;

@@ -42,7 +42,10 @@ export function wakeMessage(note: string, at: number, timeZone: string): string 
  * restarts. Cancelling removes the item from the document, and the
  * task ends quietly when it wakes and finds it gone.
  */
-export function followUpTask(timeZone: string) {
+/** A hint for a follow-up that came due, or nothing. */
+export type FollowUpGuide = (id: string, note: string) => Promise<string | undefined>;
+
+export function followUpTask(timeZone: string, guide?: FollowUpGuide) {
 	return defineTask<null, FollowUpState, null>({
 		name: "pclaw.follow-up",
 		version: 1,
@@ -62,10 +65,11 @@ export function followUpTask(timeZone: string) {
 				const item = (await runtime.snapshot(FollowUps, runtime.conversationId, context))?.items[task.id];
 				if (item !== undefined) {
 					const conversation = await runtime.conversation(runtime.conversationId, context);
+					const hint = await guide?.(`follow-up:${task.id}:${item.dueAt}`, item.note);
 					await conversation?.submit(
 						{
 							type: "input",
-							content: wakeMessage(item.note, item.dueAt, timeZone),
+							content: hint === undefined ? wakeMessage(item.note, item.dueAt, timeZone) : `${wakeMessage(item.note, item.dueAt, timeZone)}\n${hint}`,
 							whenBusy: "followUp",
 							// A restart between submitting and committing must not deliver it twice.
 							requestId: `follow-up:${task.id}:${item.dueAt}`,
@@ -96,8 +100,8 @@ export function followUpTask(timeZone: string) {
 
 const text = (value: string) => ({ output: [{ type: "text" as const, text: value }] });
 
-export function followUpsExtension(timeZone: string, now: () => number = Date.now) {
-	const FollowUp = followUpTask(timeZone);
+export function followUpsExtension(timeZone: string, now: () => number = Date.now, guide?: FollowUpGuide) {
+	const FollowUp = followUpTask(timeZone, guide);
 	return defineExtension({
 		name: "pclaw.follow-ups",
 		tasks: [FollowUp],

@@ -149,6 +149,8 @@ test("the dashboard API shows the timeline, held replies, workers, and their tra
 		);
 
 		// Settings: read, change the worker model, reject a bad level and a cross-origin write.
+		process.env.TAVILY_API_KEY = "test";
+		delete process.env.PARALLEL_API_KEY;
 		const settings = await get<Settings>("/api/settings");
 		assert.equal(settings.worker.model, "grok-4.7");
 		assert.ok(settings.models.some((model) => model.id === "grok-4.5" && model.thinkingLevels.includes("medium")));
@@ -161,8 +163,6 @@ test("the dashboard API shows the timeline, held replies, workers, and their tra
 		assert.equal(bad.status, 400);
 
 		// Search: a service without a key can't be picked; one with a key can, and the environment follows.
-		process.env.TAVILY_API_KEY = "test";
-		delete process.env.PARALLEL_API_KEY;
 		assert.deepEqual(settings.search.services.map((service) => [service.id, service.ready]), [["tavily", true], ["parallel", false]]);
 		assert.equal((await put("/api/settings/search", { pages: "parallel" })).status, 400);
 		process.env.PARALLEL_API_KEY = "test";

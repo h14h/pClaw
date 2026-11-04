@@ -1,18 +1,19 @@
 import type { Context } from "@earendil-works/chord";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { AssistantEntry, type ConversationId, LiveDoc } from "@earendil-works/pi-durable";
+import { AssistantEntry, type ConversationId, type EntryId, LiveDoc } from "@earendil-works/pi-durable";
 import type { Agent } from "./agent.ts";
 import { readPrompt } from "./prompts.ts";
 
 const CHECK_MS = 60_000;
 
-/** Prompt tokens of the conversation's latest model request, cached or not. */
-async function promptTokens(agent: Agent, id: ConversationId, context: Context): Promise<number | undefined> {
+/** The conversation's latest model request: its entry, and its prompt tokens, cached or not. */
+async function latestRequest(agent: Agent, id: ConversationId, context: Context): Promise<{ entry: EntryId; tokens: number } | undefined> {
 	const conversation = await agent.harness.conversation(id, context);
 	const page = await conversation?.entries({}, 30, undefined, context);
-	const latest = page?.items.find((entry) => AssistantEntry.is(entry))?.model?.[0] as AssistantMessage | undefined;
-	if (latest === undefined) return undefined;
-	return latest.usage.input + latest.usage.cacheRead + latest.usage.cacheWrite;
+	const entry = page?.items.find((each) => AssistantEntry.is(each));
+	const latest = entry?.model?.[0] as AssistantMessage | undefined;
+	if (entry === undefined || latest === undefined) return undefined;
+	return { entry: entry.id, tokens: latest.usage.input + latest.usage.cacheRead + latest.usage.cacheWrite };
 }
 
 /**
@@ -23,13 +24,17 @@ async function promptTokens(agent: Agent, id: ConversationId, context: Context):
  */
 export function startContextKeeper(agent: Agent, thresholdTokens: number, context: Context, everyMs = CHECK_MS): { stop(): void } {
 	const pending = new Set<string>();
+	// The token count only changes with a new request, so one request is only worth one attempt.
+	const attempted = new Map<string, EntryId>();
 	const check = async () => {
 		for (const id of Object.values(await agent.addresses(context))) {
 			if (pending.has(String(id))) continue;
 			const live = await agent.harness.snapshot(LiveDoc, id, context);
 			if (live?.run !== undefined || (live?.compactions?.length ?? 0) > 0) continue;
-			const tokens = await promptTokens(agent, id, context);
-			if (tokens === undefined || tokens < thresholdTokens) continue;
+			const latest = await latestRequest(agent, id, context);
+			if (latest === undefined || latest.tokens < thresholdTokens || attempted.get(String(id)) === latest.entry) continue;
+			attempted.set(String(id), latest.entry);
+			const { tokens } = latest;
 			const conversation = await agent.harness.conversation(id, context);
 			if (conversation === undefined) continue;
 			pending.add(String(id));

@@ -8,18 +8,24 @@ import {
 	type UserInput,
 } from "@earendil-works/pi-durable";
 import {
+	ActionRowBuilder,
 	type AnyThreadChannel,
+	ButtonBuilder,
+	ButtonStyle,
 	ChannelType,
 	Client,
 	Events,
 	GatewayIntentBits,
 	type Message,
+	MessageFlags,
 	Partials,
 	type SendableChannels,
+	ThreadAutoArchiveDuration,
 } from "discord.js";
 import type { Agent } from "../agent.ts";
 import { type Config, saveConfig } from "../config.ts";
 import { deliver, type Outbox } from "../delivery.ts";
+import type { Job, JobState, JobSurface } from "../extensions/jobs.ts";
 import { Reactions } from "../extensions/reactions.ts";
 import { stamp } from "../time.ts";
 
@@ -28,6 +34,38 @@ const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const TYPING_REFRESH_MS = 8_000;
 const QUOTE_LIMIT = 800;
 const RESYNC_ON_ATTACH = 10;
+/** Text channels in a category with this name are served without being listed in `discordChannels`. */
+const PROJECTS_CATEGORY = "projects";
+const STOP_JOB = "job-stop:";
+
+const JOB_LABELS: Record<JobState, string> = {
+	working: "🟡 Working",
+	needs_you: "🙋 Needs you",
+	idle: "💤 Paused",
+	blocked: "⚠️ Blocked",
+	done: "✅ Done",
+	failed: "❌ Failed",
+	stopped: "⏹️ Stopped",
+	closed: "📦 Closed",
+};
+
+const unix = (ms: number) => Math.floor(ms / 1000);
+
+/** A job's status card. `<t:...:R>` renders as "12 minutes ago" and keeps itself current. */
+export function jobCard(job: Job): string {
+	const where = [job.machine, job.project, job.model].filter(Boolean).join(" · ");
+	return [`**${job.title}**`, `${JOB_LABELS[job.state]} · ${where}`, job.status, `Started <t:${unix(job.startedAt)}:R> · updated <t:${unix(job.updatedAt)}:R>`].join("\n");
+}
+
+/** The one message that lists everything: what's live, then what ended in the last day. */
+export function jobBoard(jobs: Job[], now = Date.now()): string {
+	const line = (job: Job) => `${JOB_LABELS[job.state].split(" ")[0]} ${job.discordThreadId === undefined ? job.title : `<#${job.discordThreadId}>`} · ${job.machine} · ${job.status}`;
+	const ended = (job: Job) => job.state === "done" || job.state === "failed" || job.state === "stopped" || job.state === "closed";
+	const live = jobs.filter((job) => !ended(job));
+	const recent = jobs.filter((job) => ended(job) && now - job.updatedAt < 24 * 60 * 60_000);
+	const lines = [`**Jobs** · updated <t:${unix(now)}:R>`, ...(live.length === 0 ? ["Nothing running."] : live.map(line)), ...(recent.length === 0 ? [] : ["", "**Last 24 hours**", ...recent.map(line)])];
+	return lines.join("\n").slice(0, MAX_MESSAGE);
+}
 
 /**
  * How pclaw maps Discord onto Pi Durable conversations:
@@ -35,6 +73,7 @@ const RESYNC_ON_ATTACH = 10;
  *   discord:channel:<id>     a server channel on the allowlist: one long conversation
  *   discord:thread:<id>      a thread in such a channel: a fork of the channel's conversation at the message the thread
  *                            started from, so it knows everything up to that point and then goes its own way
+ * A job's thread is one of these too, with a status card first; replies there land silently unless pinged.
  * A reply to an earlier message quotes it into the new message, which brings it back even after it's been summarized.
  */
 const address = {
@@ -107,6 +146,7 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 	if (config.discordToken === undefined) throw new Error("No Discord token. Run `pnpm setup`.");
 	let ownerId = config.discordOwnerId;
 	const channels = new Set(config.discordChannels);
+	const { jobs } = agent;
 
 	const client = new Client({
 		intents: [
@@ -125,6 +165,13 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 
 	const deliveries = new Map<string, { stop(): Promise<void> }>();
 
+	/** Whether pclaw answers in this channel: it's on the list, or it sits in the Projects category. */
+	function served(channelId: string): boolean {
+		if (channels.has(channelId)) return true;
+		const channel = client.channels.cache.get(channelId);
+		return channel !== undefined && "parent" in channel && channel.parent?.name.toLowerCase() === PROJECTS_CATEGORY;
+	}
+
 	async function target(addr: string): Promise<SendableChannels | undefined> {
 		const [, kind, id] = addr.split(":");
 		if (kind === "dm") return (await client.users.fetch(id!)).createDM();
@@ -139,7 +186,16 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 				const channel = await target(addr);
 				if (channel === undefined) throw new Error(`Can't reach ${addr}`);
 				const sent: string[] = [];
-				for (const chunk of splitMessage(text)) sent.push((await channel.send(chunk)).id);
+				// About a job: silent unless the front model asked to notify, and then only the first message does.
+				const mode = jobs.delivery(addr, text);
+				for (const [index, chunk] of splitMessage(text).entries()) {
+					const ping = mode === "ping" && index === 0;
+					const message = await channel.send({
+						content: ping ? `<@${ownerId}> ${chunk}`.slice(0, MAX_MESSAGE) : chunk,
+						...(mode === "silent" || (mode === "ping" && !ping) ? { flags: MessageFlags.SuppressNotifications } : {}),
+					});
+					sent.push(message.id);
+				}
 				await conversation.commit(async (tx) => {
 					const doc = await tx.doc(SentMessages);
 					for (const id of sent) doc.messages[id] = { conversation: conversation.id, entry };
@@ -226,6 +282,21 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 		};
 	}
 
+	/** The conversation behind a thread in a served channel, forked from the channel's on first use. */
+	async function threadRoute(channel: AnyThreadChannel): Promise<{ addr: string; conversation: Conversation; extra: string[] }> {
+		const addr = address.thread(channel.id);
+		const known = (await agent.addresses(context))[addr];
+		if (known !== undefined) return { addr, conversation: (await agent.harness.conversation(known, context))!, extra: [] };
+		const parent = await agent.conversationFor(address.channel(channel.parentId!), context);
+		const { at, quote } = await forkPoint(channel, parent);
+		const conversation =
+			at === undefined
+				? await agent.conversationFor(addr, context)
+				: await agent.forkFor(addr, parent, at, { label: channel.name }, context);
+		await agent.describe(conversation.id, { label: channel.name, parent: parent.id }, context);
+		return { addr, conversation, extra: quote === undefined ? [] : [quote] };
+	}
+
 	async function conversationFor(message: Message): Promise<{ addr: string; conversation: Conversation; extra: string[] } | undefined> {
 		const channel = message.channel;
 		if (channel.isDMBased()) {
@@ -234,20 +305,8 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 			await agent.describe(conversation.id, { label: "Discord DM" }, context);
 			return { addr, conversation, extra: [] };
 		}
-		if (channel.isThread() && channel.parentId !== null && channels.has(channel.parentId)) {
-			const addr = address.thread(channel.id);
-			const known = (await agent.addresses(context))[addr];
-			if (known !== undefined) return { addr, conversation: (await agent.harness.conversation(known, context))!, extra: [] };
-			const parent = await agent.conversationFor(address.channel(channel.parentId), context);
-			const { at, quote } = await forkPoint(channel, parent);
-			const conversation =
-				at === undefined
-					? await agent.conversationFor(addr, context)
-					: await agent.forkFor(addr, parent, at, { label: channel.name }, context);
-			await agent.describe(conversation.id, { label: channel.name, parent: parent.id }, context);
-			return { addr, conversation, extra: quote === undefined ? [] : [quote] };
-		}
-		if (channel.type === ChannelType.GuildText && channels.has(channel.id)) {
+		if (channel.isThread() && channel.parentId !== null && served(channel.parentId)) return threadRoute(channel);
+		if (channel.type === ChannelType.GuildText && served(channel.id)) {
 			const addr = address.channel(channel.id);
 			const conversation = await agent.conversationFor(addr, context);
 			await agent.describe(conversation.id, { label: `#${channel.name}` }, context);
@@ -255,6 +314,82 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 		}
 		return undefined;
 	}
+
+	const cardControls = (job: Job) => {
+		const row = new ActionRowBuilder<ButtonBuilder>();
+		if (job.link !== undefined) row.addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel("Open in T3").setURL(job.link));
+		if (job.state !== "closed" && job.state !== "stopped") row.addComponents(new ButtonBuilder().setStyle(ButtonStyle.Secondary).setLabel("Stop").setCustomId(`${STOP_JOB}${job.id}`));
+		return row.components.length === 0 ? [] : [row];
+	};
+
+	const threadOf = async (job: Job): Promise<AnyThreadChannel | undefined> => {
+		const channel = job.discordThreadId === undefined ? null : await client.channels.fetch(job.discordThreadId).catch(() => null);
+		return channel?.isThread() ? channel : undefined;
+	};
+
+	const surface: JobSurface = {
+		async open(job) {
+			const [, kind, id] = job.origin.split(":");
+			let thread: AnyThreadChannel | undefined;
+			if (kind === "thread") {
+				const channel = await client.channels.fetch(id!);
+				if (channel?.isThread()) thread = channel;
+			} else if (kind === "channel") {
+				const channel = await client.channels.fetch(id!);
+				if (channel?.type !== ChannelType.GuildText) return undefined;
+				const name = job.title.slice(0, 100);
+				const options = { name, autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek };
+				if (job.ask?.startsWith("discord:")) {
+					const message = await channel.messages.fetch(job.ask.slice("discord:".length));
+					thread = message.thread ?? (await message.startThread(options));
+				} else thread = await channel.threads.create(options);
+			}
+			if (thread === undefined) return undefined;
+			const card = await thread.send({ content: jobCard(job), components: cardControls(job), flags: MessageFlags.SuppressNotifications });
+			if (ownerId !== undefined) await thread.members.add(ownerId).catch((error: unknown) => console.error("[pclaw] couldn't add the owner to a job thread", error));
+			return { discordThreadId: thread.id, cardMessageId: card.id };
+		},
+		async card(job) {
+			if (job.cardMessageId === undefined) return;
+			const thread = await threadOf(job);
+			const card = await thread?.messages.fetch(job.cardMessageId);
+			await card?.edit({ content: jobCard(job), components: cardControls(job) });
+		},
+		async board(all) {
+			if (config.discordBoardChannel === undefined) return;
+			const channel = await client.channels.fetch(config.discordBoardChannel).catch(() => null);
+			if (channel === null || !channel.isSendable() || !("messages" in channel)) return;
+			const content = jobBoard(all);
+			const existing = jobs.store.boardMessageId === undefined ? undefined : await channel.messages.fetch(jobs.store.boardMessageId).catch(() => undefined);
+			if (existing !== undefined) await existing.edit(content);
+			else jobs.store.boardMessageId = (await channel.send({ content, flags: MessageFlags.SuppressNotifications })).id;
+		},
+		async conversation(job) {
+			const thread = await threadOf(job);
+			if (thread === undefined) return agent.conversationFor(job.origin, context);
+			if (thread.archived === true) await thread.setArchived(false).catch(() => undefined);
+			const route = await threadRoute(thread);
+			await attach(route.addr, route.conversation);
+			return route.conversation;
+		},
+		async share(job, text) {
+			const [, kind, id] = job.origin.split(":");
+			const channel = await client.channels.fetch(kind === "thread" ? (await threadOf(job))?.parentId ?? id! : id!);
+			if (channel === null || !channel.isSendable()) throw new Error(`Can't reach ${job.origin}`);
+			const reference = kind === "channel" && job.ask?.startsWith("discord:") ? job.ask.slice("discord:".length) : undefined;
+			for (const [index, chunk] of splitMessage(text).entries()) {
+				await channel.send({
+					content: chunk,
+					...(index === 0 && reference !== undefined ? { reply: { messageReference: reference, failIfNotExists: false } } : {}),
+				});
+			}
+			// The channel's conversation keeps the outcome, without running the model to say so.
+			const conversation = await agent.conversationFor(job.origin, context);
+			const content = `<job-result job="${job.id}">You posted this in the channel when ${job.title} finished:\n${text}</job-result>`;
+			await conversation.submit({ type: "write", entry: { kind: "pclaw.job-result", data: { job: job.id }, model: [{ role: "user", content, timestamp: Date.now() }] } }, context);
+		},
+	};
+	jobs.surface.current = surface;
 
 	client.on(Events.MessageCreate, async (message) => {
 		try {
@@ -268,7 +403,13 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 			const route = await conversationFor(message);
 			if (route === undefined) return;
 			await attach(route.addr, route.conversation);
-			const extra = [...route.extra, ...(await replyContext(message, client.user!.id, config.timeZone))];
+			const guidance = await jobs.guideMessage({
+				id: message.id,
+				text: message.content,
+				channel: "name" in message.channel && message.channel.name !== null ? message.channel.name : "direct message",
+				...(message.channel.isThread() ? { discordThreadId: message.channelId } : {}),
+			});
+			const extra = [...route.extra, ...(await replyContext(message, client.user!.id, config.timeZone)), ...(guidance === undefined ? [] : [guidance])];
 			// Messages sent while pclaw is working join the current run at its next step, like a person cutting in.
 			await route.conversation.submit(
 				{
@@ -298,6 +439,8 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 			if (addr === undefined) return;
 			const conversation = await agent.harness.conversation(known[addr]!, context);
 			const emoji = reaction.emoji.name ?? "?";
+			const job = jobs.store.forThread(message.channelId);
+			if (job !== undefined) jobs.decisions.record({ type: "reaction", job: job.id, decision: job.decision, emoji, message: message.id });
 			const content = `[${stamp(Date.now(), config.timeZone)}]\n[reacted ${emoji} to your message from ${stamp(message.createdTimestamp, config.timeZone)}: "${clip(message.content)}"]`;
 			await conversation?.submit(
 				{ type: "input", content, whenBusy: "followUp", requestId: `discord-reaction:${message.id}:${emoji}:${Date.now()}` },
@@ -310,8 +453,23 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 
 	// Join threads as they open in pclaw's channels, so their messages reliably reach it.
 	client.on(Events.ThreadCreate, async (thread) => {
-		if (thread.parentId !== null && channels.has(thread.parentId) && !thread.joined) {
+		if (thread.parentId !== null && served(thread.parentId) && !thread.joined) {
 			await thread.join().catch((error: unknown) => console.error("[pclaw] couldn't join a thread", error));
+		}
+	});
+
+	// The card's Stop button.
+	client.on(Events.InteractionCreate, async (interaction) => {
+		if (!interaction.isButton() || !interaction.customId.startsWith(STOP_JOB)) return;
+		try {
+			if (interaction.user.id !== ownerId) {
+				await interaction.reply({ content: "Only the owner can stop a job.", flags: MessageFlags.Ephemeral });
+				return;
+			}
+			await interaction.deferUpdate();
+			await jobs.stop(interaction.customId.slice(STOP_JOB.length), context);
+		} catch (error) {
+			console.error("[pclaw] couldn't stop a job", error);
 		}
 	});
 
@@ -336,6 +494,7 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 	return {
 		stop: async () => {
 			for (const delivery of deliveries.values()) await delivery.stop();
+			delete jobs.surface.current;
 			await client.destroy();
 		},
 	};
