@@ -70,6 +70,7 @@ function fakeBackend() {
 		send: async (_thread, _env, message) => void state.sent.push(message),
 		interrupt: async () => void state.interrupted++,
 		projects: async () => [{ id: "p-game", title: "hexfall", machine: "pc1", environmentId: "env-pc1", hasRepo: true }],
+		machines: async () => [{ machine: "mp1" }, { machine: "pc1", environmentId: "env-pc1" }, { machine: "mm1", environmentId: "env-mm1" }],
 		linkFor: (_thread, _env, link) => link,
 	};
 	return { state, backend, running };
@@ -212,6 +213,19 @@ test("with the decision model down, a job update still reaches the model, with n
 	await close();
 });
 
+test("a machine with no projects can still run a scratch job", async () => {
+	const parts = setup("scratch", NEEDS_YOU);
+	const { state, backend } = fakeBackend();
+	parts.faux.setResponses([start({ title: "Check", brief: "Run hostname.", machine: "MM1" })]);
+	const { conversation, idle, close } = await open("scratch", parts, backend);
+	await conversation.submit({ type: "input", content: "check mm1", requestId: "discord:9" }, context);
+	await idle();
+	assert.equal(state.launched[0]!.environmentId, "env-mm1");
+	assert.equal(state.launched[0]!.scratch, true);
+	assert.equal(parts.store.all()[0]!.machine, "mm1");
+	await close();
+});
+
 test("a control event logs the hint but doesn't show it", async () => {
 	const parts = setup("control", NEEDS_YOU, 1);
 	const { state, backend, running } = fakeBackend();
@@ -325,6 +339,9 @@ test("hints reflect the read, and stay out of the way when nothing stands out", 
 	assert.equal(messageGuidance(chat), undefined);
 	const job = messageGuidance({ ...chat, job_size: choice("t3_job") }, { project: "hexfall", machine: "pc1" })!;
 	assert.match(job, /hexfall on pc1/);
+	const status = messageGuidance({ ...chat, job_size: choice("t3_job"), asks_status: noul(0.9) }, { project: "hexfall", machine: "pc1" })!;
+	assert.match(status, /asking how a job is going/);
+	assert.doesNotMatch(status, /real work/);
 	assert.ok("in_job" in messageQuestions(true));
 	assert.ok(!("in_job" in messageQuestions(false)));
 });

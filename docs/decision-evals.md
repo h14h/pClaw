@@ -6,7 +6,9 @@ What feels right here is subjective and changes case by case, so the goal isn't 
 
 When a T3 turn ends, a message arrives, or a follow-up comes due, pclaw asks a decision model some questions. The answers pick sections of `src/prompts/guidance.md`, and the front model sees those as a `<guidance>` hint it can ignore. If the decision model is down, there's just no hint.
 
-Every event goes to `~/.pclaw/decisions.jsonl`. `pnpm decisions` reads it.
+Every event goes to `~/.pclaw/decisions.jsonl`. `pnpm decisions` reads it. `journalctl --user -u pclaw | grep -E 'decide|job '` shows the same thing as it happens.
+
+Any server that speaks `POST /v1/decisions` works as `decisionUrl`. Today that's d1-2B on mm1: a LaunchAgent (`com.h14h.pclaw.decide`) running agenda's `decide/server.py` on port 8083, separate from agenda's own on-demand copy, with `tailscale serve` putting it on the tailnet.
 
 ## The question
 

@@ -362,7 +362,11 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 			const content = jobBoard(all);
 			const existing = jobs.store.boardMessageId === undefined ? undefined : await channel.messages.fetch(jobs.store.boardMessageId).catch(() => undefined);
 			if (existing !== undefined) await existing.edit(content);
-			else jobs.store.boardMessageId = (await channel.send({ content, flags: MessageFlags.SuppressNotifications })).id;
+			else {
+				const board = await channel.send({ content, flags: MessageFlags.SuppressNotifications });
+				jobs.store.boardMessageId = board.id;
+				await board.pin().catch((error: unknown) => console.error("[pclaw] couldn't pin the board", error));
+			}
 		},
 		async conversation(job) {
 			const thread = await threadOf(job);

@@ -125,6 +125,7 @@ export type ThreadView = {
 };
 export type ThreadItem = { type: string; text?: string; creationSource?: string };
 export type Project = { id: string; title: string; machine: string; environmentId?: string; hasRepo: boolean };
+export type Machine = { machine: string; environmentId?: string };
 
 /** What jobs need from T3. */
 export type JobBackend = {
@@ -135,6 +136,8 @@ export type JobBackend = {
 	send(threadId: string, environmentId: string | undefined, message: string): Promise<void>;
 	interrupt(threadId: string, environmentId?: string): Promise<void>;
 	projects(): Promise<Project[]>;
+	/** Every reachable machine, including ones with no projects yet. */
+	machines(): Promise<Machine[]>;
 	/** A link that opens the thread for the person. */
 	linkFor(threadId: string, environmentId: string | undefined, link: string | undefined): string | undefined;
 };
@@ -163,6 +166,10 @@ const environmentArg = (environmentId: string | undefined) => (environmentId ===
 export function t3Backend(t3Url: string, storeFile: string): JobBackend {
 	let client: { value: Awaited<ReturnType<typeof pairedClient>>; at: number } | undefined;
 	let projects: { value: Project[]; at: number } | undefined;
+	const machines = async (): Promise<Machine[]> => {
+		const links = (((await call("t3_environment_links", {})).links ?? []) as Record<string, unknown>[]).filter((link) => link.status === "reachable");
+		return [{ machine: hostname().replace(/\..*$/, "") }, ...links.map((link) => ({ machine: String(link.label), environmentId: String(link.environmentId) }))];
+	};
 	const paired = async () => {
 		if (client === undefined || Date.now() - client.at > CLIENT_MS) client = { value: await pairedClient(t3Url, storeFile), at: Date.now() };
 		return client.value;
@@ -226,10 +233,8 @@ export function t3Backend(t3Url: string, storeFile: string): JobBackend {
 		},
 		projects: async () => {
 			if (projects !== undefined && Date.now() - projects.at < PROJECTS_MS) return projects.value;
-			const links = (((await call("t3_environment_links", {})).links ?? []) as Record<string, unknown>[]).filter((link) => link.status === "reachable");
-			const machines = [{ machine: hostname().replace(/\..*$/, "") } as { machine: string; environmentId?: string }, ...links.map((link) => ({ machine: String(link.label), environmentId: String(link.environmentId) }))];
 			const found = await Promise.all(
-				machines.map(async ({ machine, environmentId }) => {
+				(await machines()).map(async ({ machine, environmentId }) => {
 					const listed = await call("t3_project_list", { ...environmentArg(environmentId), limit: 100 }).catch(() => ({ projects: [] }) as Record<string, unknown>);
 					return ((listed.projects ?? []) as Record<string, unknown>[])
 						.filter((project) => project.title !== "No project" && project.archivedAt == null)
@@ -239,6 +244,7 @@ export function t3Backend(t3Url: string, storeFile: string): JobBackend {
 			projects = { value: found.flat(), at: Date.now() };
 			return projects.value;
 		},
+		machines,
 		linkFor: (threadId, environmentId, link) => {
 			if (link?.startsWith("https://")) return link;
 			if (environmentId === undefined) return undefined;
@@ -349,7 +355,7 @@ export function createJobs(options: JobsOptions) {
 		await conversation?.commit((tx) => setReaction(tx, conversation.id, job.ask!, emoji), context);
 	}
 
-	const REACTION: Partial<Record<JobState, string>> = { needs_you: "🙋", done: "✅", failed: "⚠️", blocked: "⚠️", stopped: "⏹️" };
+	const REACTION: Partial<Record<JobState, string>> = { needs_you: "🙋", idle: "💤", done: "✅", failed: "⚠️", blocked: "⚠️", stopped: "⏹️" };
 
 	async function updateConversation(job: Job, context: Context): Promise<Conversation | undefined> {
 		if (surface.current !== undefined) return surface.current.conversation(job);
@@ -456,6 +462,8 @@ export function createJobs(options: JobsOptions) {
 
 	function startKeeper(context: Context, everyMs: number, refreshMs: number): { stop(): void; tick(): Promise<void> } {
 		let running = false;
+		// Draw the board on the first check, so it's there before the first job.
+		store.dirty = true;
 		const tick = async () => {
 			if (running) return;
 			running = true;
@@ -557,18 +565,18 @@ export function createJobs(options: JobsOptions) {
 					const routes = (await api.snapshot(Routes, context))?.conversations ?? {};
 					const origin = Object.keys(routes).find((address) => routes[address] === api.conversationId);
 					if (origin === undefined) throw new Error("This conversation has no address, so a job here couldn't report back.");
-					const projects = args.project === undefined && args.machine === undefined ? [] : await backend.projects();
-					const named = (project: Project) => project.title.toLowerCase() === args.project!.toLowerCase() && (args.machine === undefined || project.machine === args.machine);
-					const project = args.project === undefined ? undefined : projects.find(named);
+					const wanted = args.machine?.toLowerCase();
+					const named = (project: Project) => project.title.toLowerCase() === args.project!.toLowerCase() && (wanted === undefined || project.machine.toLowerCase() === wanted);
+					const project = args.project === undefined ? undefined : (await backend.projects()).find(named);
 					if (args.project !== undefined && project === undefined) {
-						throw new Error(`No project ${args.project}${args.machine === undefined ? "" : ` on ${args.machine}`}. Use list_projects.`);
+						throw new Error(`No project ${args.project}${wanted === undefined ? "" : ` on ${wanted}`}. Use list_projects.`);
 					}
-					const local = hostname().replace(/\..*$/, "");
-					const machine = project?.machine ?? args.machine ?? local;
+					let machine = project?.machine ?? hostname().replace(/\..*$/, "");
 					let environmentId = project?.environmentId;
-					if (project === undefined && machine !== local) {
-						environmentId = (await backend.projects()).find((each) => each.machine === machine)?.environmentId;
-						if (environmentId === undefined) throw new Error(`Can't reach ${machine} through T3.`);
+					if (project === undefined && wanted !== undefined) {
+						const found = (await backend.machines()).find((each) => each.machine.toLowerCase() === wanted);
+						if (found === undefined) throw new Error(`Can't reach ${args.machine} through T3. Reachable: ${(await backend.machines()).map((each) => each.machine).join(", ")}.`);
+						({ machine, environmentId } = found);
 					}
 					const model = args.model ?? config.jobModel;
 					let threadId = args.thread_id;
@@ -631,12 +639,13 @@ export function createJobs(options: JobsOptions) {
 			}),
 			defineTool({
 				name: "list_projects",
-				description: "List the T3 projects start_job can use, on every reachable machine.",
+				description: "List the T3 projects start_job can use, and every reachable machine. A machine with no projects can still run scratch jobs.",
 				parameters: Type.Object({}),
 				replay: "safe",
 				execute: async () => {
 					const projects = await backend.projects();
-					return text(projects.map((project) => `${project.title} (${project.machine})${project.hasRepo ? "" : ", no git repo"}`).join("\n") || "No projects found.");
+					const lines = projects.map((project) => `${project.title} (${project.machine})${project.hasRepo ? "" : ", no git repo"}`);
+					return text([`Machines: ${(await backend.machines()).map((each) => each.machine).join(", ")}`, ...lines].join("\n"));
 				},
 			}),
 			defineTool({
@@ -677,9 +686,13 @@ export function createJobs(options: JobsOptions) {
 			defineTool({
 				name: "ping_owner",
 				description: "Make your next reply about this job a real notification. Without it, replies in a job's thread land silently. Call it before you write the message.",
-				parameters: Type.Object({ job: Type.String() }),
-				execute: async ({ job: id }) => {
-					const job = mustGet(id);
+				parameters: Type.Object({ job: Type.Optional(Type.String({ description: "The job's id. Optional in its own thread." })) }),
+				execute: async ({ job: id }, api, context) => {
+					const routes = (await api.snapshot(Routes, context))?.conversations ?? {};
+					const address = Object.keys(routes).find((each) => routes[each] === api.conversationId);
+					const here = address?.startsWith("discord:thread:") ? store.forThread(address.slice("discord:thread:".length)) : undefined;
+					const job = id === undefined ? here : mustGet(id);
+					if (job === undefined) throw new Error("Which job? Pass its id.");
 					job.pingNext = true;
 					store.put(job);
 					return text("Your reply will notify them.");

@@ -218,13 +218,14 @@ export function messageQuestions(inJobThread: boolean): Questions {
 export function messageGuidance(answers: Answers, project?: { project: string; machine: string }, templates?: Record<string, string>): string | undefined {
 	const picks: string[] = [];
 	const size = pick(answers.job_size);
-	if (size.choice === "t3_job" && size.p >= 0.5) {
+	const inJob = pick(answers.in_job).choice;
+	// A question about running work mentions the work, so it reads as new work unless this comes first.
+	if (yes(answers.asks_status) >= 0.5 || inJob === "status") picks.push("message.status");
+	else if (inJob === "steer") picks.push("message.steer");
+	else if (size.choice === "t3_job" && size.p >= 0.5) {
 		picks.push("message.t3_job");
 		if (project !== undefined) picks.push("message.project");
 	} else if (size.choice === "quick_worker" && size.p >= 0.5) picks.push("message.quick_worker");
-	const inJob = pick(answers.in_job).choice;
-	if (yes(answers.asks_status) >= 0.5 || inJob === "status") picks.push("message.status");
-	else if (inJob === "steer") picks.push("message.steer");
 	const noise = pick(answers.noise_feedback);
 	if (noise.choice !== undefined && noise.choice !== "neither" && noise.p >= 0.5) picks.push(`message.${noise.choice}`);
 	if (yes(answers.hard_to_undo) >= 0.5) picks.push("caution");
