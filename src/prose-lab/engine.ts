@@ -19,7 +19,7 @@ import { quickSearchExtension } from "../extensions/quick-search.ts";
 import { reactionsExtension } from "../extensions/reactions.ts";
 import { recallExtension } from "../extensions/recall.ts";
 import { workerOptions, workersExtension } from "../extensions/workers.ts";
-import { formattingDir, readPrompt } from "../prompts.ts";
+import { formattingDir, frontPrompt } from "../prompts.ts";
 import { stamp } from "../time.ts";
 import { discordChecks, words } from "./checks.ts";
 import type { Judgment, Result, Score } from "./types.ts";
@@ -178,7 +178,7 @@ export function assemble(front: string, rules: string | undefined): string {
 /** What pclaw sends today on `platform`. */
 export function livePrompt(platform: string): string {
 	const rules = join(formattingDir, `${platform}.md`);
-	return assemble(readPrompt("front"), existsSync(rules) ? readFileSync(rules, "utf8") : undefined);
+	return assemble(frontPrompt(), existsSync(rules) ? readFileSync(rules, "utf8") : undefined);
 }
 
 /** A variant folder's prompt; `live` is pclaw's own and `none` is no system prompt at all. */

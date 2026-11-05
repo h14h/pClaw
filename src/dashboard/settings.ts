@@ -5,6 +5,8 @@ import type { Agent } from "../agent.ts";
 import { type Config, saveConfig } from "../config.ts";
 import type { WorkerOptions } from "../extensions/workers.ts";
 import { MUSE, MUSE_THINKING_LEVELS, museModels } from "../muse.ts";
+import { profileFor, writeProfile } from "../profiles.ts";
+import { useProfile } from "../prompts.ts";
 import { chooseService, isServiceId, serviceReady, services } from "../search.ts";
 import { editableFiles } from "./files.ts";
 import type { ModelInfo, ModelOption, ModelsUpdate, SearchUpdate, Settings } from "./types.ts";
@@ -63,11 +65,17 @@ export function settingsApi(options: { agent: Agent; config: Config; models: Mod
 		if (update.front?.provider === MUSE) throw new SettingsError("Muse Code runs workers only. Pick a pi model for the model you talk to.");
 		const front = update.front === undefined ? undefined : { ...update.front, thinkingLevel: validate(update.front) };
 		const worker = update.worker === undefined ? undefined : { ...update.worker, thinkingLevel: validate(update.worker) };
-		if (front !== undefined) {
+		const profile = front === undefined ? undefined : profileFor(front.provider, front.model);
+		if (front !== undefined && profile === undefined) throw new SettingsError(`${front.model} has no profile yet. Add one with \`pnpm profile new\`.`);
+		if (front !== undefined && profile !== undefined) {
+			// Prompts and the model switch now; a change to which tools are offered needs a restart.
+			const { name, dir, ...stored } = profile;
+			writeProfile(dir, { ...stored, thinkingLevel: front.thinkingLevel });
+			useProfile(dir);
 			await agent.setModel(front, context);
-			Object.assign(config, { provider: front.provider, model: front.model, thinkingLevel: front.thinkingLevel });
+			Object.assign(config, { profile: name, provider: front.provider, model: front.model, thinkingLevel: front.thinkingLevel });
 			workers.piFallback = { provider: front.provider, model: front.model };
-			saveConfig({ provider: front.provider, model: front.model, thinkingLevel: front.thinkingLevel });
+			saveConfig({ profile: name });
 		}
 		if (worker !== undefined) {
 			Object.assign(workers, { provider: worker.provider, model: worker.model, thinkingLevel: worker.thinkingLevel });

@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { loadProfile } from "./profiles.ts";
 import type { ServiceId } from "./search.ts";
 
 export const home = process.env.PCLAW_HOME ?? join(homedir(), ".pclaw");
@@ -31,6 +32,8 @@ export type Config = {
 	discordOwnerId?: string;
 	/** Server channels pclaw answers in (besides DMs). Threads in them become forks of the channel's conversation. */
 	discordChannels: string[];
+	/** The folder in profiles/ for the model you talk to. Its provider, model, and reasoning level win over the ones below. */
+	profile: string;
 	/** The model you talk to: fast, tuned for conversation, hands real work to workers. */
 	provider: string;
 	model: string;
@@ -107,6 +110,7 @@ type StoredConfig = Partial<Config>;
 
 export const defaults: Config = {
 	discordChannels: [],
+	profile: "muse-spark-1.3",
 	provider: "meta",
 	model: "muse-spark-1.3",
 	thinkingLevel: "medium",
@@ -146,6 +150,7 @@ export function loadConfig(): Config {
 	const fromEnv: StoredConfig = {
 		discordToken: env.DISCORD_TOKEN,
 		discordOwnerId: env.PCLAW_DISCORD_OWNER_ID,
+		profile: env.PCLAW_PROFILE,
 		provider: env.PCLAW_PROVIDER,
 		model: env.PCLAW_MODEL,
 		thinkingLevel: env.PCLAW_THINKING as ModelThinkingLevel | undefined,
@@ -159,7 +164,9 @@ export function loadConfig(): Config {
 		t3RedirectUri: env.PCLAW_T3_REDIRECT_URI,
 	};
 	const defined = Object.fromEntries(Object.entries(fromEnv).filter(([, value]) => value !== undefined));
-	return { ...defaults, ...readStored(), ...defined };
+	const merged = { ...defaults, ...readStored(), ...defined };
+	const profile = loadProfile(merged.profile);
+	return { ...merged, provider: profile.provider, model: profile.model, thinkingLevel: profile.thinkingLevel, ...defined };
 }
 
 export function saveConfig(patch: StoredConfig): void {

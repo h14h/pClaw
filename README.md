@@ -48,6 +48,10 @@ To keep it running on a Linux box, `deploy/pclaw.service` is a systemd user serv
 
 To try it without Discord, `pnpm chat` opens a conversation in the terminal. It keeps its own history, so it won't mix with your Discord thread.
 
+## Models
+
+Everything model-specific lives in a folder under `profiles/`, so adding one takes no code. See [docs/tuning-profiles.md](docs/tuning-profiles.md).
+
 ## Settings
 
 `~/.pclaw/config.json` holds the settings. Environment variables override it.

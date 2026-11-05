@@ -1,17 +1,17 @@
 import { defineExtension, section } from "@earendil-works/pi-durable";
-import { readFormatting, readPrompt } from "../prompts.ts";
+import { frontPrompt, readFormatting } from "../prompts.ts";
 import { channelOf } from "../routes.ts";
 
 /**
- * The front model's system prompt: src/prompts/front.md (how it sounds and how pclaw works, the same in every app) and
- * the time zone. Rendered before every request, so edits apply right away; Pi Durable only resends a section when it
+ * The front model's system prompt: the active profile's voice, how pclaw works (src/prompts/front.md), and the time
+ * zone. Rendered before every request, so edits apply right away; Pi Durable only resends a section when it
  * changes, which keeps the prompt cache warm otherwise.
  */
 export function soulExtension(timeZone: string) {
 	return defineExtension({
 		name: "pclaw.soul",
 		sections: [
-			section("front", () => readPrompt("front").trim(), { tag: false }),
+			section("front", () => frontPrompt(), { tag: false }),
 			section("time-zone", () => `They live in the ${timeZone} time zone unless they say otherwise.`),
 		],
 	});

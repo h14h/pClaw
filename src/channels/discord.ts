@@ -216,6 +216,7 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 				const sent: string[] = [];
 				// About a job: silent unless the front model asked to notify, and then only the first message does.
 				const mode = jobs.delivery(addr, text);
+				if (mode === "moved") return;
 				for (const [index, chunk] of splitMessage(text).entries()) {
 					const ping = mode === "ping" && index === 0 && config.discordQuiet !== true;
 					const message = await channel.send({

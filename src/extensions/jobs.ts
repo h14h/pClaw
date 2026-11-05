@@ -67,6 +67,8 @@ export type Job = {
 	ownerAt?: number;
 	/** The channel it started in has been told how it ended. */
 	closedOut?: boolean;
+	/** A line written alongside starting it was moved into the thread. */
+	ackMoved?: boolean;
 	/** What the owner has actually been sent about this job. */
 	told: string[];
 	pingNext?: boolean;
@@ -177,6 +179,8 @@ export type JobSurface = {
 const HOSTED_T3 = "https://app.t3.codes";
 /** The first update comes sooner than the rest: that's when silence is most confusing. */
 const FIRST_UPDATE_MS = 20_000;
+/** A line written with the call that started a job arrives within moments of it. */
+const ACK_MS = 8_000;
 /** How long after a job ends its record might still read as running. */
 const REOPEN_MS = 30_000;
 /** They spoke in the thread this recently, so they're there. */
@@ -345,7 +349,7 @@ Use null unless a person would actually want to read it: something found, a snag
 
 /** Updates come from the same voice as everything else pclaw says. */
 export function progressPrompt(): string {
-	return `${readPrompt("front").split("# How pclaw works")[0]!.trim()}\n\n${PROGRESS_TASK}`;
+	return `${readPrompt("voice").trim()}\n\n${PROGRESS_TASK}`;
 }
 
 const SECRETS = /^.*(password|passwd|token|secret|api[_-]?key|authorization).*$/gim;
@@ -726,8 +730,16 @@ export function createJobs(options: JobsOptions) {
 	 * How a reply to `address` should go out: "ping" notifies, "silent" doesn't, undefined means it's not about a job.
 	 * Replies in a job's thread are silent unless the front model asked otherwise.
 	 */
-	function delivery(address: string, reply: string): "ping" | "silent" | "plain" | undefined {
+	function delivery(address: string, reply: string): "ping" | "silent" | "plain" | "moved" | undefined {
 		const [, kind, id] = address.split(":");
+		// "on it" belongs in the thread that just opened, however the model was told. The channel stays clean.
+		const opened = kind === "channel" ? store.active().find((each) => each.origin === address && each.discordThreadId !== undefined && each.ackMoved !== true && Date.now() - each.startedAt < ACK_MS) : undefined;
+		if (opened !== undefined) {
+			opened.ackMoved = true;
+			store.put(opened);
+			void surface.current?.note(opened, reply).catch((error: unknown) => console.error(`[pclaw] job note ${opened.id}`, error));
+			return "moved";
+		}
 		const job = kind === "thread" ? store.forThread(id!) : store.active().find((each) => each.origin === address && each.awaitingReply === true);
 		if (job === undefined) return undefined;
 		const mode = kind !== "thread" ? "plain" : job.pingNext === true ? "ping" : "silent";

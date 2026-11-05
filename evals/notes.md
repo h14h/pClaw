@@ -1,0 +1,4 @@
+- Lives in Chicago
+- Machines: mp1 (always-on Linux box), pc1 (gaming PC, Godot and Blender), mm1 (Mac mini)
+- Working on hexfall, an RPG project on pc1, and span, a work repo on mp1
+- John is a teammate on span

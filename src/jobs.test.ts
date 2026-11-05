@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,7 +20,8 @@ import { deliver } from "./delivery.ts";
 import { describeActivity, type Job, type JobBackend, JobStore, type JobSurface, readItems, type ThreadItem, type ThreadView, turnEnded } from "./extensions/jobs.ts";
 import { Workers } from "./extensions/workers.ts";
 import { Notes } from "./extensions/notes.ts";
-import { readPrompt } from "./prompts.ts";
+import { applyProfile, createProfile, listProfiles, loadProfile, profileFor } from "./profiles.ts";
+import { frontPrompt, readPrompt, useProfile } from "./prompts.ts";
 import { memoLabel, transcribe } from "./speech.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -215,7 +217,7 @@ test("with the decision model down, a job update still reaches the model, with n
 	assert.match(lastMessage(requests[0]!), /<job-update/);
 	assert.doesNotMatch(lastMessage(requests[0]!), /<guidance/);
 	assert.equal(parts.store.all()[0]!.state, "done");
-	assert.deepEqual(replies, ["undefined: on it"]);
+	assert.deepEqual(replies, ["moved: on it"], "a line written with the call goes in the thread");
 	await close();
 });
 
@@ -638,4 +640,42 @@ test("the report counts what a hint did against the control arm", () => {
 	assert.equal(report.positiveReactions, 1);
 	assert.equal(report.failed, 1);
 	assert.deepEqual(report.outcomeAgreement, { agree: 3, compared: 3 });
+});
+
+test("profiles are files: a copy needs no code, and hides or rewrites tools by config", () => {
+	const root = mkdtempSync(join(tmpdir(), "pclaw-profiles-"));
+	mkdirSync(join(root, "base"));
+	writeFileSync(join(root, "base", "profile.json"), JSON.stringify({ provider: "meta", model: "one", thinkingLevel: "medium", deferredTools: ["t3_*"], toolDescriptions: { react: "new words" } }));
+	writeFileSync(join(root, "base", "voice.md"), "be brief");
+	writeFileSync(join(root, "base", "TUNING.md"), "history of another model");
+	const made = createProfile("other", "base", { provider: "openai-codex", model: "two", thinkingLevel: "low", catalogBase: "older" }, root);
+	assert.equal(made.model, "two");
+	assert.deepEqual(made.deferredTools, ["t3_*"]);
+	assert.equal(readFileSync(join(made.dir, "voice.md"), "utf8"), "be brief");
+	assert.equal(existsSync(join(made.dir, "TUNING.md")), false, "a tuning log belongs to its model");
+	assert.deepEqual(listProfiles(root), ["base", "other"]);
+	assert.equal(profileFor("openai-codex", "two", root)?.name, "other");
+	assert.throws(() => createProfile("other", "base", {}, root), /already exists/);
+	assert.throws(() => loadProfile("nope", root), /No profile nope/);
+
+	const tool = (name: string) => ({ name, description: "old words" }) as never;
+	const applied = applyProfile({ name: "x", tools: [tool("t3_status"), tool("react"), tool("delegate")] } as never, made);
+	const [t3, react, delegate] = (applied as unknown as { tools: { description: string; deferred?: boolean }[] }).tools;
+	assert.equal(t3!.deferred, true);
+	assert.equal(react!.description, "new words");
+	assert.equal(delegate!.deferred, undefined);
+	rmSync(root, { recursive: true, force: true });
+});
+
+test("a profile's prompt overrides the shared one, and anything else falls through", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pclaw-overlay-"));
+	writeFileSync(join(dir, "guidance.md"), "## turn.finished\nmine");
+	const before = loadProfile("muse-spark-1.3").dir;
+	useProfile(dir);
+	assert.match(readPrompt("guidance"), /mine/);
+	assert.match(readPrompt("front"), /How pclaw works/);
+	useProfile(before);
+	assert.match(readPrompt("voice"), /texting the user/);
+	assert.doesNotMatch(frontPrompt(), /Grok/);
+	rmSync(dir, { recursive: true, force: true });
 });

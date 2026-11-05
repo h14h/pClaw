@@ -9,6 +9,7 @@ import {
 	Harness,
 	type Storage,
 } from "@earendil-works/pi-durable";
+import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
 import { type Config, paths } from "./config.ts";
 import { followUpsExtension } from "./extensions/follow-ups.ts";
 import { memoryExtension } from "./extensions/memory.ts";
@@ -20,6 +21,8 @@ import { formattingExtension, soulExtension } from "./extensions/soul.ts";
 import { createJobs, JobStore, type Jobs, t3Backend } from "./extensions/jobs.ts";
 import { t3Extension } from "./extensions/t3.ts";
 import { type Decisions, decisionClient, followUpGuidance, followUpQuestions } from "./decisions.ts";
+import { applyProfile, loadProfile } from "./profiles.ts";
+import { useProfile } from "./prompts.ts";
 import { ConversationInfo, Routes } from "./routes.ts";
 import { stamp } from "./time.ts";
 import type { WorkerItem } from "./dashboard/types.ts";
@@ -64,11 +67,14 @@ export async function openAgent(
 	context: Context,
 ): Promise<Agent> {
 	const { config, models, notes } = options;
+	const profile = loadProfile(config.profile);
+	useProfile(profile.dir);
 	const registry = createRegistry();
+	const install = (extension: Parameters<typeof applyProfile>[0]) => registry.install(applyProfile(extension, profile));
 	registry.install(soulExtension(config.timeZone));
-	registry.install(notesExtension(notes));
+	install(notesExtension(notes));
 	const decisions = options.decisions ?? decisionClient({ url: config.decisionUrl, logFile: paths.decisions, holdout: config.decisionHoldout });
-	registry.install(
+	install(
 		followUpsExtension(config.timeZone, options.now, async (id, note) => {
 			const decided = await decisions.ask({
 				id,
@@ -86,7 +92,7 @@ export async function openAgent(
 	prepareWorkspace(workers);
 	const current: { current?: Harness } = {};
 	const sessions: { current?: Jobs } = {};
-	registry.install(
+	install(
 		workersExtension(workers, current, {
 			log: decisions.record,
 			session: async (worker, context) => sessions.current?.openSession(worker, context),
@@ -95,9 +101,9 @@ export async function openAgent(
 	);
 	const memory = memoryExtension({ notes, models, config, quietMs: options.memoryQuietMs ?? config.memoryQuietMinutes * 60_000 });
 	registry.install(memory.extension);
-	registry.install(recallExtension(current, config.timeZone));
-	registry.install(reactionsExtension(current));
-	registry.install(quickSearchExtension());
+	install(recallExtension(current, config.timeZone));
+	install(reactionsExtension(current));
+	install(quickSearchExtension());
 	const jobs = createJobs({
 		store: options.jobStore ?? new JobStore(paths.jobs),
 		backend: options.jobBackend ?? t3Backend(config.t3Url, paths.t3Auth),
@@ -108,8 +114,8 @@ export async function openAgent(
 		workerItems: options.workerItems ?? ((sessionId) => workerItems(workers.sessionDir, sessionId)),
 	});
 	sessions.current = jobs;
-	registry.install(jobs.extension);
-	registry.install(
+	install(jobs.extension);
+	install(
 		t3Extension({
 			t3Url: config.t3Url,
 			storeFile: paths.t3Auth,
@@ -119,6 +125,7 @@ export async function openAgent(
 			timeZone: config.timeZone,
 		}),
 	);
+	if (profile.deferredTools.length > 0) registry.install(createToolSearchExtension());
 	// Last, so the app's rules end the system prompt.
 	registry.install(formattingExtension());
 

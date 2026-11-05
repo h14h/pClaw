@@ -17,14 +17,17 @@ import { startDashboard } from "./dashboard/server.ts";
 import { Notes } from "./extensions/notes.ts";
 import { workerOptions } from "./extensions/workers.ts";
 import { MUSE } from "./muse.ts";
+import { listProfiles, loadProfile, registerProfiles } from "./profiles.ts";
+import { useProfile } from "./prompts.ts";
 import { chooseService, serviceReady, services } from "./search.ts";
 
 const context = BACKGROUND_CONTEXT;
 
-function createPclawModels() {
+async function createPclawModels() {
 	const models = createModels({ credentials: new FileCredentialStore(loadConfig().authFile) });
 	models.setProvider(metaProvider());
 	models.setProvider(xaiProvider());
+	await registerProfiles(models, listProfiles().map((name) => loadProfile(name)));
 	return models;
 }
 
@@ -54,12 +57,12 @@ async function login(): Promise<void> {
 	const config = loadConfig();
 	console.log(`Signing in to ${config.provider} (a Muse Code subscription works for meta).`);
 	console.log(`The sign-in is saved to ${config.authFile}, shared with pi.`);
-	await createPclawModels().login(config.provider, "oauth", terminalLogin);
+	await (await createPclawModels()).login(config.provider, "oauth", terminalLogin);
 	console.log("Signed in.");
 }
 
 /** False when there's no credential or it can't be refreshed (an expired sign-in needs a new login). */
-async function signedIn(models: ReturnType<typeof createPclawModels>, provider: string): Promise<boolean> {
+async function signedIn(models: Awaited<ReturnType<typeof createPclawModels>>, provider: string): Promise<boolean> {
 	try {
 		return (await models.getAuth(provider)) !== undefined;
 	} catch {
@@ -70,7 +73,7 @@ async function signedIn(models: ReturnType<typeof createPclawModels>, provider: 
 async function setup(): Promise<void> {
 	ensureHome();
 	const config = loadConfig();
-	const models = createPclawModels();
+	const models = await createPclawModels();
 	if (!(await signedIn(models, config.provider))) await login();
 	else console.log(`Already signed in to ${config.provider}.`);
 
@@ -132,7 +135,7 @@ function setUpSearch(config: Config): void {
 
 async function start(): Promise<void> {
 	const config = loadConfig();
-	const models = createPclawModels();
+	const models = await createPclawModels();
 	if (!(await signedIn(models, config.provider))) {
 		throw new Error(`Not signed in to ${config.provider}, or the sign-in expired. Run \`pnpm setup\`.`);
 	}
@@ -142,6 +145,8 @@ async function start(): Promise<void> {
 	if (config.pagePublisher !== undefined) process.env.PCLAW_PAGE_PUBLISHER = config.pagePublisher;
 	setUpSearch(config);
 	const notes = new Notes(paths.notes);
+	useProfile(loadProfile(config.profile).dir);
+	console.log(`[pclaw] profile ${config.profile}`);
 	const workers = workerOptions(config, paths);
 	const agent = await openAgent(await openNodeSqliteStorage(paths.db), { config, models, notes, workers }, context);
 	const discord = await startDiscord(agent, config, context);
@@ -168,7 +173,7 @@ async function start(): Promise<void> {
 
 async function chat(): Promise<void> {
 	const config = loadConfig();
-	const models = createPclawModels();
+	const models = await createPclawModels();
 	ensureHome();
 	setUpSearch(config);
 	const agent = await openAgent(await openNodeSqliteStorage(paths.chatDb), { config, models, notes: new Notes(paths.notes) }, context);

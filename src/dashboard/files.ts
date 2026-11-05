@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, renameSync, statSy
 import { homedir } from "node:os";
 import { basename, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { formattingDir, type PromptName, prompts } from "../prompts.ts";
+import { formattingDir, formattingFile, type PromptName, prompts } from "../prompts.ts";
 import type { FileContent, FileSummary } from "./types.ts";
 
 const REPO = fileURLToPath(new URL("../../", import.meta.url));
@@ -28,9 +28,9 @@ export function editableFiles(skills: string[]) {
 				id: `formatting/${name}`,
 				group: "formatting",
 				name: app[0]!.toUpperCase() + app.slice(1),
-				path: display(join(formattingDir, name)),
+				path: display(formattingFile(name)),
 				description: `How to format messages in ${app[0]!.toUpperCase() + app.slice(1)}.`,
-				file: join(formattingDir, name),
+				file: formattingFile(name),
 			});
 		}
 		const seen = new Set<string>();
