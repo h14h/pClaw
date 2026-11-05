@@ -1,0 +1,10 @@
+{
+	"deferredTools": [
+		"t3_*"
+	],
+	"toolDescriptions": {},
+	"thinkingLevel": "low",
+	"provider": "openai-codex",
+	"model": "gpt-6.1-terra",
+	"catalogBase": "gpt-5.6-terra"
+}

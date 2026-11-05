@@ -66,7 +66,7 @@ export function settingsApi(options: { agent: Agent; config: Config; models: Mod
 		const front = update.front === undefined ? undefined : { ...update.front, thinkingLevel: validate(update.front) };
 		const worker = update.worker === undefined ? undefined : { ...update.worker, thinkingLevel: validate(update.worker) };
 		const profile = front === undefined ? undefined : profileFor(front.provider, front.model);
-		if (front !== undefined && profile === undefined) throw new SettingsError(`${front.model} has no profile yet. Add one with \`pnpm profile new\`.`);
+		if (front !== undefined && profile === undefined) throw new SettingsError(`${front.model} has no profile yet. Add one with \`pnpm profiles new\`.`);
 		if (front !== undefined && profile !== undefined) {
 			// Prompts and the model switch now; a change to which tools are offered needs a restart.
 			const { name, dir, ...stored } = profile;

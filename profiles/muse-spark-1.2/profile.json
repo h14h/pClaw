@@ -1,0 +1,9 @@
+{
+	"deferredTools": [
+		"t3_*"
+	],
+	"toolDescriptions": {},
+	"thinkingLevel": "medium",
+	"provider": "meta",
+	"model": "muse-spark-1.2"
+}

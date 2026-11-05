@@ -3,9 +3,9 @@ import { saveConfig } from "./config.ts";
 import { createProfile, listProfiles, loadProfile } from "./profiles.ts";
 
 /**
- *   pnpm profile list
- *   pnpm profile new <name> --from <profile> --provider <id> --model <id> [--thinking low] [--catalog-base <model>]
- *   pnpm profile use <name>      make it what Discord runs, from the next restart
+ *   pnpm profiles list
+ *   pnpm profiles new <name> --from <profile> --provider <id> --model <id> [--thinking low] [--catalog-base <model>]
+ *   pnpm profiles use <name>      make it what Discord runs, from the next restart
  */
 
 const [command, name, ...rest] = process.argv.slice(2);
@@ -33,6 +33,6 @@ if (command === "list" || command === undefined) {
 	saveConfig({ profile: name });
 	console.log(`Set ${name}. Restart pclaw to run it: systemctl --user restart pclaw`);
 } else {
-	console.log("usage: pnpm profile list | new <name> --from <profile> --provider <id> --model <id> [--thinking low] [--catalog-base <model>] | use <name>");
+	console.log("usage: pnpm profiles list | new <name> --from <profile> --provider <id> --model <id> [--thinking low] [--catalog-base <model>] | use <name>");
 	process.exit(1);
 }

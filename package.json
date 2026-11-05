@@ -15,7 +15,7 @@
     "chat": "node src/main.ts chat",
     "search-bench": "node src/search-bench.ts",
     "evals": "node src/evals.ts",
-    "profile": "node src/profile-cli.ts",
+    "profiles": "node src/profile-cli.ts",
     "decisions": "node src/decision-report.ts",
     "decisions:replay": "node src/decision-replay.ts",
     "test": "PCLAW_HOME=$(mktemp -d) node --test 'src/**/*.test.ts'",

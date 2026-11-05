@@ -13,11 +13,11 @@ What stays out of profiles is the contract: what good behavior is. That's the ev
 ## Adding a model
 
 ```sh
-pnpm profile new gpt-6.1-terra --from muse-spark-1.3 --provider openai-codex --model gpt-6.1-terra --thinking low --catalog-base gpt-5.6-terra
+pnpm profiles new gpt-6.1-terra --from muse-spark-1.3 --provider openai-codex --model gpt-6.1-terra --thinking low --catalog-base gpt-5.6-terra
 pnpm evals gpt-6.1-terra
 ```
 
-That's a copy of the source profile with a different model, and no code changes. If the provider needs signing in: `PCLAW_PROFILE=<name> pnpm pclaw login`. To make it what Discord runs: `pnpm profile use <name>`, then restart pclaw.
+That's a copy of the source profile with a different model, and no code changes. If the provider needs signing in: `PCLAW_PROFILE=<name> pnpm pclaw login`. To make it what Discord runs: `pnpm profiles use <name>`, then restart pclaw.
 
 ## Evals
 
