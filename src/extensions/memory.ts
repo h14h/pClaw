@@ -43,7 +43,7 @@ const CHECK_MS = 5 * 60_000;
 const RETRY_MS = 10 * 60_000;
 const MESSAGE_LIMIT = 1_500;
 const TRANSCRIPT_LIMIT = 40_000;
-const INTERNAL = /<(follow-up|worker-report|job-update)[\s>]/;
+const INTERNAL = /<(follow-up|worker-report|job-update|job-result)[\s>]/;
 
 const textOf = (message: Message): string =>
 	typeof message.content === "string"

@@ -69,8 +69,9 @@ export function typingTargets(conversations: { address: string; workers: { statu
 
 /** A job's status card. `<t:...:R>` renders as "12 minutes ago" and keeps itself current. */
 export function jobCard(job: Job): string {
-	const where = [job.machine, job.project, job.model].filter(Boolean).join(" · ");
-	return [`**${job.title}**`, `${JOB_LABELS[job.state]} · ${where}`, job.status, `Started <t:${unix(job.startedAt)}:R> · updated <t:${unix(job.updatedAt)}:R>`].join("\n");
+	const where = job.worker === undefined ? [job.machine, job.project].filter(Boolean).join(" · ") : "";
+	const state = [JOB_LABELS[job.state], where, `started <t:${unix(job.startedAt)}:R>`].filter(Boolean).join(" · ");
+	return [state, job.status].join("\n");
 }
 
 /** The one message that lists everything: what's live, then what ended in the last day. */
@@ -89,7 +90,8 @@ export function jobBoard(jobs: Job[], now = Date.now()): string {
  *   discord:channel:<id>     a server channel on the allowlist: one long conversation
  *   discord:thread:<id>      a thread in such a channel: a fork of the channel's conversation at the message the thread
  *                            started from, so it knows everything up to that point and then goes its own way
- * A job's thread is one of these too, with a status card first; replies there land silently unless pinged.
+ * A job's thread is one of these too, with a status card first. It's a session: the work and its result stay in it, and
+ * replies land silently unless pinged.
  * A reply to an earlier message quotes it into the new message, which brings it back even after it's been summarized.
  */
 const address = {
@@ -422,20 +424,10 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 			await attach(route.addr, route.conversation);
 			return route.conversation;
 		},
-		async share(job, text) {
-			const [, kind, id] = job.origin.split(":");
-			const channel = await client.channels.fetch(kind === "thread" ? (await threadOf(job))?.parentId ?? id! : id!);
-			if (channel === null || !channel.isSendable()) throw new Error(`Can't reach ${job.origin}`);
-			const reference = kind === "channel" && job.ask?.startsWith("discord:") ? job.ask.slice("discord:".length) : undefined;
-			for (const [index, chunk] of splitMessage(text).entries()) {
-				await channel.send({
-					content: chunk,
-					...(index === 0 && reference !== undefined ? { reply: { messageReference: reference, failIfNotExists: false } } : {}),
-				});
-			}
-			// The channel's conversation keeps the outcome, without running the model to say so.
+		async remember(job, text) {
+			// The channel's conversation keeps the outcome, without running the model or saying anything there.
 			const conversation = await agent.conversationFor(job.origin, context);
-			const content = `<job-result job="${job.id}">You posted this in the channel when ${job.title} finished:\n${text}</job-result>`;
+			const content = `<job-result job="${job.id}" thread="${job.discordThreadId}">${job.title} finished in its thread:\n${text}</job-result>`;
 			await conversation.submit({ type: "write", entry: { kind: "pclaw.job-result", data: { job: job.id }, model: [{ role: "user", content, timestamp: Date.now() }] } }, context);
 		},
 	};

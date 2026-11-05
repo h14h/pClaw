@@ -24,7 +24,7 @@ import { ConversationInfo, Routes } from "./routes.ts";
 import { stamp } from "./time.ts";
 import type { WorkerItem } from "./dashboard/types.ts";
 import { workerItems } from "./dashboard/views.ts";
-import { prepareWorkspace, type WorkerOptions, workerOptions, type WorkerStarted, workersExtension } from "./extensions/workers.ts";
+import { prepareWorkspace, type WorkerOptions, workerOptions, workersExtension } from "./extensions/workers.ts";
 
 export type Agent = {
 	harness: Harness;
@@ -85,8 +85,14 @@ export async function openAgent(
 	const workers = options.workers ?? workerOptions(config, paths);
 	prepareWorkspace(workers);
 	const current: { current?: Harness } = {};
-	const showWorker: { current?: WorkerStarted } = {};
-	registry.install(workersExtension(workers, current, decisions.record, (worker, context) => showWorker.current?.(worker, context) ?? Promise.resolve()));
+	const sessions: { current?: Jobs } = {};
+	registry.install(
+		workersExtension(workers, current, {
+			log: decisions.record,
+			session: async (worker, context) => sessions.current?.openSession(worker, context),
+			reporting: async (worker, context) => sessions.current?.workerReporting(worker, context),
+		}),
+	);
 	const memory = memoryExtension({ notes, models, config, quietMs: options.memoryQuietMs ?? config.memoryQuietMinutes * 60_000 });
 	registry.install(memory.extension);
 	registry.install(recallExtension(current, config.timeZone));
@@ -101,7 +107,7 @@ export async function openAgent(
 		harness: current,
 		workerItems: options.workerItems ?? ((sessionId) => workerItems(workers.sessionDir, sessionId)),
 	});
-	showWorker.current = jobs.trackWorker;
+	sessions.current = jobs;
 	registry.install(jobs.extension);
 	registry.install(
 		t3Extension({

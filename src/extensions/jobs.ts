@@ -8,6 +8,7 @@ import { type Conversation, type ConversationId, defineExtension, defineTool, ty
 import { type Config, writePrivate } from "../config.ts";
 import type { WorkerItem } from "../dashboard/types.ts";
 import { type Decided, type Decisions, messageGuidance, messageQuestions, pick, progressGuidance, progressQuestions, projectQuestion, readTurn, TURN_TAIL, turnGuidance, turnQuestions, yes } from "../decisions.ts";
+import { readPrompt } from "../prompts.ts";
 import { Routes } from "../routes.ts";
 import { pairedClient } from "../t3-client.ts";
 import { stamp } from "../time.ts";
@@ -17,8 +18,9 @@ import { Workers } from "./workers.ts";
 /**
  * Jobs: real work done in T3 Code threads, on any machine T3 can reach. The person can open a job's thread from any T3
  * client; in a Discord channel it also gets a thread under their message, with a status card that's edited in place.
- * Workers are tracked here too when they run in a channel, so everything running in one is visible the same way: no
- * activity means nothing is happening. DMs stay like texting, with typing and then the answer.
+ * Workers started in a channel get the same thread, and live in its conversation. A thread is a session: its updates,
+ * result, and follow-ups stay in it, so no activity there means nothing is happening. DMs stay like texting, with typing
+ * and then the answer.
  *
  * A keeper polls each job. While it runs, new activity refreshes the card, and a short update goes in the thread when
  * something's worth reading. When a T3 turn ends the keeper asks the decision model for a read and wakes the
@@ -61,6 +63,10 @@ export type Job = {
 	cardRefreshedAt?: number;
 	/** When an update last went in the thread. */
 	lastNoteAt?: number;
+	/** When the owner last spoke in the thread: if they're there, a finished job doesn't need to ping them. */
+	ownerAt?: number;
+	/** The channel it started in has been told how it ended. */
+	closedOut?: boolean;
 	/** What the owner has actually been sent about this job. */
 	told: string[];
 	pingNext?: boolean;
@@ -163,14 +169,18 @@ export type JobSurface = {
 	board(jobs: Job[]): Promise<void>;
 	/** The conversation updates go to: the job's thread if it has one. */
 	conversation(job: Job): Promise<Conversation>;
-	/** Post into the channel the job started from, as a reply to the message that asked for it. */
-	share(job: Job, text: string): Promise<void>;
+	/** Tell the channel the job started in how it ended, without saying anything there. */
+	remember(job: Job, text: string): Promise<void>;
 };
 
 /** Public, and registered as a universal link for /threads/*, so it reaches the app without the tailnet. */
 const HOSTED_T3 = "https://app.t3.codes";
 /** The first update comes sooner than the rest: that's when silence is most confusing. */
 const FIRST_UPDATE_MS = 20_000;
+/** How long after a job ends its record might still read as running. */
+const REOPEN_MS = 30_000;
+/** They spoke in the thread this recently, so they're there. */
+const OWNER_HERE_MS = 5 * 60_000;
 const PROJECTS_MS = 10 * 60_000;
 const CLIENT_MS = 10 * 60_000;
 const READ_PAGE = 100;
@@ -325,13 +335,18 @@ const SUMMARY_PROMPT =
 	'needed. "done" means the job it was given is complete. "line" is one plain sentence of at most 140 characters about ' +
 	"where things stand, written for someone glancing at their phone. No preamble and no jargon.";
 
-const PROGRESS_PROMPT =
-	"You watch an agent working a job, for someone following along in a chat thread on their phone. Reply with JSON only: " +
-	'{"line": "...", "post": true | false}. "line" is one plain sentence of at most 140 characters on what it just did or ' +
-	"found. Be concrete about the subject, and leave out commands, file paths, and tool names. Never just say it's still " +
-	'working. "post" is true when someone following along would want to read this: something found, a stage finished, a ' +
-	"change of plan, or a problem. It's false when it's more of the same. Don't repeat what's already been said. Never " +
-	"include a password, token, or key.";
+const PROGRESS_TASK = `Right now you're partway through a job for them, and this is their thread for it. You'll get the job and the newest things that happened. Reply with JSON only: {"status": "...", "message": "..." or null}.
+
+"status" goes on the job's card: a few plain words on where it stands, at most 80 characters.
+
+"message" is what you'd text them right now, or null. Write it in your voice, as the one doing the work: one or two short sentences on what you learned or what changed, and what it means or what's next. Something like "3154's plan holds up, so i'm posting the pickup next" or "the ledger's rejecting this one, looks like the scope is too wide. narrowing it." Never a log line like "Reviewed X", "Started Y", or "Looked up Z". Leave out commands, paths, and tool names.
+
+Use null unless a person would actually want to read it: something found, a snag, a change of plan. More of the same is null. Never repeat what you've already said. Never include a password, token, or key.`;
+
+/** Updates come from the same voice as everything else pclaw says. */
+export function progressPrompt(): string {
+	return `${readPrompt("front").split("# How pclaw works")[0]!.trim()}\n\n${PROGRESS_TASK}`;
+}
 
 const SECRETS = /^.*(password|passwd|token|secret|api[_-]?key|authorization).*$/gim;
 
@@ -468,25 +483,26 @@ export function createJobs(options: JobsOptions) {
 		);
 	}
 
-	/** Ask the front model for a line on new activity, and whether it's worth a message. */
-	async function progressLine(job: Job, activity: string, hint: string | undefined): Promise<{ line?: string; post: boolean }> {
+	/** Ask the front model what it would say about new activity, if anything. */
+	async function progressUpdate(job: Job, activity: string, hint: string | undefined): Promise<{ status?: string; message?: string }> {
 		try {
 			const model = models.getModel(config.provider, config.model);
 			if (model === undefined) throw new Error(`unknown model ${config.provider}/${config.model}`);
 			const minutes = job.lastNoteAt === undefined ? undefined : Math.round((Date.now() - job.lastNoteAt) / 60_000);
 			const quiet =
 				minutes === undefined
-					? "Nothing has been posted yet, so post what it has started on."
-					: `Last update: ${minutes} minutes ago.${minutes >= 2 ? " That's a while, so post unless there's truly nothing new." : ""}`;
-			const content = [`Job: ${job.title}`, `Already said: ${job.told.join(" / ") || "nothing"}`, quiet, ...(hint === undefined ? [] : [hint]), `Newest activity:\n${activity}`].join("\n\n");
-			const reply = await models.completeSimple(model, { systemPrompt: PROGRESS_PROMPT, messages: [{ role: "user", content, timestamp: Date.now() }] }, { reasoning: "low", signal: AbortSignal.timeout(30_000) });
+					? "You haven't said anything in this thread yet, so tell them what you've picked up so far."
+					: `Your last update was ${minutes} minutes ago.${minutes >= 3 ? " That's a while, so say where things stand if there's anything new." : ""}`;
+			const content = [`The job: ${job.title}\n${job.brief.slice(0, 800)}`, `What you've said so far: ${job.told.join(" / ") || "nothing"}`, quiet, ...(hint === undefined ? [] : [hint]), `What just happened:\n${activity}`].join("\n\n");
+			const reply = await models.completeSimple(model, { systemPrompt: progressPrompt(), messages: [{ role: "user", content, timestamp: Date.now() }] }, { reasoning: "low", signal: AbortSignal.timeout(30_000) });
 			const raw = reply.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
-			const parsed = JSON.parse(/\{[\s\S]*\}/.exec(raw)?.[0] ?? "{}") as { line?: string; post?: boolean };
-			const line = parsed.line?.trim().slice(0, 200);
-			return { ...(line ? { line } : {}), post: parsed.post === true && Boolean(line) };
+			const parsed = JSON.parse(/\{[\s\S]*\}/.exec(raw)?.[0] ?? "{}") as { status?: string; message?: string | null };
+			const status = parsed.status?.trim().slice(0, 120);
+			const message = parsed.message?.trim().slice(0, 400);
+			return { ...(status ? { status } : {}), ...(message ? { message } : {}) };
 		} catch (error) {
 			console.error(`[pclaw] job progress ${job.id}: ${error instanceof Error ? error.message : error}`);
-			return { post: false };
+			return {};
 		}
 	}
 
@@ -495,17 +511,18 @@ export function createJobs(options: JobsOptions) {
 		const id = `progress:${job.id}:${job.position}`;
 		const decided = await decisions.ask({ id, site: "progress", job: job.id, timeoutMs: 3_000, state: { recent_activity: activity.slice(-1_500) }, questions: progressQuestions });
 		const hint = decided?.arm === "guided" ? progressGuidance(decided.answers) : undefined;
-		const { line, post } = await progressLine(job, activity, hint);
+		const { status, message } = await progressUpdate(job, activity, hint);
 		job.cardRefreshedAt = Date.now();
-		if (line !== undefined) job.status = line;
-		if (post && line !== undefined && surface.current !== undefined && job.discordThreadId !== undefined) {
-			await surface.current.note(job, line);
+		if (status !== undefined) job.status = status;
+		const posted = message !== undefined && surface.current !== undefined && job.discordThreadId !== undefined;
+		if (posted) {
+			await surface.current!.note(job, message);
 			job.lastNoteAt = Date.now();
-			job.told = [...job.told, line].slice(-5);
+			job.told = [...job.told, message].slice(-5);
 		}
 		store.put(job);
 		await refreshCard(job);
-		decisions.record({ type: "progress", id, job: job.id, arm: decided?.arm ?? "none", milestone: decided === undefined ? undefined : yes(decided.answers.milestone), posted: post });
+		decisions.record({ type: "progress", id, job: job.id, arm: decided?.arm ?? "none", milestone: decided === undefined ? undefined : yes(decided.answers.milestone), posted });
 	}
 
 	/** Mid-turn in T3: keep the card honest, with no wakeup. */
@@ -529,12 +546,12 @@ export function createJobs(options: JobsOptions) {
 		if (worker === undefined) return;
 		if (worker.status !== "working") {
 			if (job.state === "working") {
+				// A normal ending is handled as its report goes in; this is a stop, or a run that ended some other way.
 				job.state = worker.status === "failed" ? "failed" : worker.status === "stopped" ? "stopped" : "done";
-				const where = job.origin.startsWith("discord:channel:") ? " The answer's in the channel." : "";
-				job.status = job.state === "done" ? `Finished.${where}` : job.state === "failed" ? `It failed.${where}` : "Stopped.";
+				job.status = job.state === "done" ? "Done." : job.state === "failed" ? "It failed." : "Stopped.";
 				store.put(job);
-				await surface.current?.note(job, job.status).catch((error: unknown) => console.error(`[pclaw] job note ${job.id}`, error));
 				await refreshCard(job);
+				await setAskReaction(job, REACTION[job.state]!, context);
 			} else if (Date.now() - job.updatedAt > 24 * 60 * 60_000) {
 				job.state = "closed";
 				store.put(job);
@@ -542,11 +559,15 @@ export function createJobs(options: JobsOptions) {
 			}
 			return;
 		}
+		// Its record says working for a moment after the report goes in.
 		if (job.state !== "working") {
+			if (Date.now() - job.updatedAt < REOPEN_MS) return;
 			job.state = "working";
 			job.status = "Back at it.";
+			delete job.closedOut;
 			store.put(job);
 			await refreshCard(job);
+			await setAskReaction(job, job.emoji ?? WORKING, context);
 		}
 		if (Date.now() - (job.cardRefreshedAt ?? job.startedAt) < Math.min(refreshMs, job.lastNoteAt === undefined ? FIRST_UPDATE_MS : refreshMs)) return;
 		const items = workerItems(job.threadId);
@@ -557,11 +578,14 @@ export function createJobs(options: JobsOptions) {
 		await noteProgress(job, activity);
 	}
 
-	/** Show a worker that started in a channel. In a DM there's nothing to do: typing covers it. */
-	async function trackWorker(worker: { name: string; brief: string; sessionId: string; conversationId: ConversationId; ask?: string }, context: Context): Promise<void> {
+	/**
+	 * A worker started in a channel: open its thread and hand back that thread's conversation, which is where the worker
+	 * then lives. In a DM there's no thread to open, and typing covers it.
+	 */
+	async function openSession(worker: { name: string; brief: string; sessionId: string; conversationId: ConversationId; ask?: string }, context: Context): Promise<Conversation | undefined> {
 		const routes = (await harness.current?.snapshot(Routes, context))?.conversations ?? {};
 		const origin = Object.keys(routes).find((address) => routes[address] === worker.conversationId);
-		if (origin === undefined || !/^discord:(channel|thread):/.test(origin)) return;
+		if (origin === undefined || !/^discord:(channel|thread):/.test(origin) || surface.current === undefined) return undefined;
 		const now = Date.now();
 		const job: Job = {
 			id: `${slug(worker.name)}-${randomBytes(2).toString("hex")}`,
@@ -570,7 +594,6 @@ export function createJobs(options: JobsOptions) {
 			threadId: worker.sessionId,
 			worker: { name: worker.name, conversationId: worker.conversationId },
 			machine: hostname().replace(/\..*$/, ""),
-			model: config.workerModel,
 			origin,
 			...(worker.ask === undefined ? {} : { ask: worker.ask }),
 			state: "working",
@@ -580,11 +603,27 @@ export function createJobs(options: JobsOptions) {
 			startedAt: now,
 			updatedAt: now,
 		};
+		const placed = await surface.current.open(job);
+		if (placed === undefined) return undefined;
+		Object.assign(job, placed);
+		const conversation = await surface.current.conversation(job);
+		job.worker = { name: worker.name, conversationId: conversation.id };
 		store.put(job);
-		const placed = await surface.current?.open(job);
-		if (placed !== undefined) store.put(Object.assign(job, placed));
 		decisions.record({ type: "job", event: "start", job: job.id, machine: job.machine, worker: true });
-		console.log(`[pclaw] worker ${worker.name} showing in ${job.discordThreadId ?? "no thread"}`);
+		console.log(`[pclaw] worker ${worker.name} has a session in ${job.discordThreadId}`);
+		return conversation;
+	}
+
+	/** A worker's report is about to go in: the reply is the news, so it should reach them unless they're already here. */
+	async function workerReporting(worker: { name: string; conversationId: ConversationId; ok: boolean }, context: Context): Promise<void> {
+		const job = store.all().find((each) => each.worker?.name === worker.name && each.worker.conversationId === worker.conversationId);
+		if (job === undefined || job.state === "closed") return;
+		job.state = worker.ok ? "done" : "failed";
+		job.status = worker.ok ? "Wrapping up." : "It failed.";
+		job.pingNext = Date.now() - (job.ownerAt ?? 0) > OWNER_HERE_MS;
+		store.put(job);
+		await refreshCard(job);
+		await setAskReaction(job, REACTION[job.state]!, context);
 	}
 
 	async function check(job: Job, refreshMs: number, context: Context): Promise<void> {
@@ -648,6 +687,10 @@ export function createJobs(options: JobsOptions) {
 		if (!decisions.configured) return undefined;
 		const job = input.discordThreadId === undefined ? undefined : store.forThread(input.discordThreadId);
 		const live = store.active().filter((each) => each.state === "working" || each.state === "needs_you");
+		if (job !== undefined) {
+			job.ownerAt = Date.now();
+			store.put(job);
+		}
 		const decided = await decisions.ask({
 			id: `message:${input.id}`,
 			site: "message",
@@ -691,7 +734,14 @@ export function createJobs(options: JobsOptions) {
 		delete job.pingNext;
 		delete job.awaitingReply;
 		job.told = [...job.told, reply.slice(0, 300)].slice(-5);
+		const ended = job.state === "done" || job.state === "failed";
+		if (ended && job.worker !== undefined) job.status = firstLine(reply);
+		if (ended && job.closedOut !== true && job.origin.startsWith("discord:channel:")) {
+			job.closedOut = true;
+			void surface.current?.remember(job, reply).catch((error: unknown) => console.error(`[pclaw] couldn't close out ${job.id}`, error));
+		}
 		store.put(job);
+		if (ended && job.worker !== undefined) void refreshCard(job);
 		decisions.record({ type: "delivery", job: job.id, decision: job.decision, mode, chars: reply.length });
 		return mode;
 	}
@@ -836,7 +886,7 @@ export function createJobs(options: JobsOptions) {
 				execute: async ({ job: id, message }, _api, context) => {
 					if (!config.t3AllowSend) throw new Error("Sending into T3 threads is off (t3AllowSend).");
 					const job = mustGet(id);
-					if (job.worker !== undefined) throw new Error(`${job.title} is a worker, and it can't take messages while it runs. Once it reports, message_worker reaches it from the channel it started in.`);
+					if (job.worker !== undefined) throw new Error(`${job.title} is a worker. Use message_worker with "${job.worker.name}" from its thread once it's reported.`);
 					await backend.send(job.threadId, job.environmentId, message);
 					job.state = "working";
 					job.status = "Picked up a new message.";
@@ -870,22 +920,8 @@ export function createJobs(options: JobsOptions) {
 					return text("Your reply will notify them.");
 				},
 			}),
-			defineTool({
-				name: "share_result",
-				description: "Post a job's outcome in the channel it started from, as a reply to the message that asked for it. For results worth finding later. Write it for someone who didn't read the thread.",
-				parameters: Type.Object({ job: Type.String(), text: Type.String() }),
-				execute: async ({ job: id, text: result }) => {
-					const job = mustGet(id);
-					if (surface.current === undefined || job.discordThreadId === undefined) return text("This job has no channel to post in. Just reply here.");
-					await surface.current.share(job, result);
-					job.told = [...job.told, result.slice(0, 300)].slice(-5);
-					store.put(job);
-					decisions.record({ type: "delivery", job: job.id, decision: job.decision, mode: "shared", chars: result.length });
-					return text("Posted.");
-				},
-			}),
 		],
 	});
 
-	return { extension, store, surface, decisions, guideMessage, delivery, stop, startKeeper, trackWorker, backend };
+	return { extension, store, surface, decisions, guideMessage, delivery, stop, startKeeper, openSession, workerReporting, backend };
 }

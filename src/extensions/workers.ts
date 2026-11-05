@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type } from "@earendil-works/pi-ai";
 import type { Context } from "@earendil-works/chord";
-import { type ConversationId, defineDoc, defineExtension, defineTask, defineTool, type Harness, type TaskId } from "@earendil-works/pi-durable";
+import { type Conversation, type ConversationId, defineDoc, defineExtension, defineTask, defineTool, type Harness, type TaskId, type Tx } from "@earendil-works/pi-durable";
 import type { Config } from "../config.ts";
 import { MUSE, museArgs, musePreamble, museRun, museTranscript } from "../muse.ts";
 import { pairedClient, runT3Turn } from "../t3-client.ts";
@@ -295,13 +295,18 @@ export function reportMessage(name: string, result: WorkerResult, hint = false):
 type RunInput = Partial<Job> & { name: string; sessionId: string; message: string; ask?: string; depth?: Depth };
 type RunState = { phase: "run" } | { phase: "report"; ok: boolean; output: string };
 
-/** Logs each finished run, so workers and jobs can be compared (docs/decision-evals.md). */
 export type WorkerLog = (event: { type: "worker"; name: string; depth?: Depth; provider?: string; ok: boolean; ms?: number }) => void;
 
-/** Told when a new job starts, so a channel can show it. */
-export type WorkerStarted = (worker: { name: string; brief: string; sessionId: string; conversationId: ConversationId; ask?: string }, context: Context) => Promise<void>;
+export type WorkerHooks = {
+	/** Logs each finished run, so workers and jobs can be compared (docs/decision-evals.md). */
+	log?: WorkerLog;
+	/** A new worker is starting. Returns the conversation it should live in, when that's not the one that asked. */
+	session?: (worker: { name: string; brief: string; sessionId: string; conversationId: ConversationId; ask?: string }, context: Context) => Promise<Conversation | undefined>;
+	/** A run ended and its report is about to go in. */
+	reporting?: (worker: { name: string; conversationId: ConversationId; ok: boolean }, context: Context) => Promise<void>;
+};
 
-export function workersExtension(options: WorkerOptions, harness: { current?: Harness }, log?: WorkerLog, started?: WorkerStarted) {
+export function workersExtension(options: WorkerOptions, harness: { current?: Harness }, hooks: WorkerHooks = {}) {
 	const Run = defineTask<RunInput, RunState, null>({
 		name: "pclaw.worker-run",
 		version: 1,
@@ -334,6 +339,7 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 						return undefined;
 					}, context);
 				}
+				await hooks.reporting?.({ name: task.input.name, conversationId: runtime.conversationId, ok }, context).catch((error: unknown) => console.error(`[pclaw] worker report ${task.input.name}`, error));
 				const conversation = await runtime.conversation(runtime.conversationId, context);
 				await conversation?.submit(
 					{
@@ -345,7 +351,7 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 					context,
 				);
 				const startedAt = (await runtime.snapshot(Workers, runtime.conversationId, context))?.workers[task.input.name]?.startedAt;
-				log?.({
+				hooks.log?.({
 					type: "worker",
 					name: task.input.name,
 					...(task.input.depth === undefined ? {} : { depth: task.input.depth }),
@@ -415,35 +421,33 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 				execute: async ({ name, brief, emoji, depth = "quick" }, api, context) => {
 					const ask = await currentAsk(harness.current, api, api.conversationId, context);
 					const badge = emoji !== undefined && isEmoji(emoji.trim()) ? emoji.trim() : WORKING;
-					const began = await api.commit(async (tx) => {
-						if (ask !== undefined) await setReaction(tx, api.conversationId, ask, badge);
-						const doc = await tx.doc(Workers, api.conversationId);
+					const taken = (await api.snapshot(Workers, api.conversationId, context))?.workers[name];
+					if (taken !== undefined && taken.status !== "failed" && taken.status !== "stopped") {
+						throw new Error(`There's already a worker named ${name}. Use message_worker, or pick a new name.`);
+					}
+					const sessionId = taken?.sessionId ?? randomUUID();
+					// In a channel the work lives in its own thread, so its report and any follow-ups land there.
+					const asking = { name, brief, sessionId, conversationId: api.conversationId, ...(ask === undefined ? {} : { ask }) };
+					const session = taken !== undefined ? undefined : await hooks.session?.(asking, context).catch((error: unknown) => {
+						console.error(`[pclaw] couldn't open a session for ${name}`, error);
+						return undefined;
+					});
+					const moved = session !== undefined && session.id !== api.conversationId;
+					const runAsk = moved || ask === undefined ? {} : { ask };
+					const begin = async (tx: Tx, home: ConversationId) => {
+						const doc = await tx.doc(Workers, home);
 						const existing = doc.workers[name];
-						if (existing !== undefined) {
-							// A job that failed or was stopped can be restarted under its name, in its own session.
-							if (existing.status !== "failed" && existing.status !== "stopped") return false;
-							// It stays in the harness its session is in.
-							const job = jobOf(options, existing);
-							existing.run = await tx.createTask(Run, { name, sessionId: existing.sessionId, message: brief, depth, ...job, ...(ask === undefined ? {} : { ask }) }, background);
-							Object.assign(existing, job);
-							existing.status = "working";
-							existing.brief = brief;
-							existing.depth = depth;
-							existing.startedAt = existing.updatedAt = Date.now();
-							return true;
-						}
-						const sessionId = randomUUID();
-						const job = { provider: options.provider, model: options.model };
-						const run = await tx.createTask(Run, { name, sessionId, message: brief, depth, ...job, ...(ask === undefined ? {} : { ask }) }, background);
+						// A job that failed or was stopped restarts in its own session, in the harness that session is in.
+						const job = existing === undefined ? { provider: options.provider, model: options.model } : jobOf(options, existing);
+						const run = await tx.createTask(Run, { name, sessionId, message: brief, depth, ...job, ...runAsk }, background);
 						const now = Date.now();
 						doc.workers[name] = { ...job, sessionId, brief, depth, status: "working", run, startedAt: now, updatedAt: now };
-						return true;
+					};
+					await api.commit(async (tx) => {
+						if (ask !== undefined) await setReaction(tx, api.conversationId, ask, badge);
+						if (!moved) await begin(tx, api.conversationId);
 					}, context);
-					if (!began) throw new Error(`There's already a worker named ${name}. Use message_worker, or pick a new name.`);
-					const sessionId = (await api.snapshot(Workers, api.conversationId, context))?.workers[name]?.sessionId;
-					if (sessionId !== undefined) {
-						await started?.({ name, brief, sessionId, conversationId: api.conversationId, ...(ask === undefined ? {} : { ask }) }, context).catch((error: unknown) => console.error(`[pclaw] couldn't show worker ${name}`, error));
-					}
+					if (moved) await session.commit((tx) => begin(tx, session.id), context);
 					// End the turn here: what was written alongside this call is the reply, with no second request.
 					return { ...text(`${name} is on it.`), control: { terminate: true } };
 				},

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
@@ -41,7 +41,6 @@ const NEEDS_YOU: Answers = {
 	failed: noul(0.05),
 	waiting_on_system: noul(0.1),
 	job_complete: noul(0.05),
-	worth_keeping: noul(0.2),
 	hard_to_undo: noul(0.1),
 };
 
@@ -91,7 +90,7 @@ function fakeSurface(conversation: () => Promise<Awaited<ReturnType<JobSurface["
 		note: async (_job, text) => void notes.push(text),
 		board: async () => undefined,
 		conversation,
-		share: async (_job, text) => void shared.push(text),
+		remember: async (_job, text) => void shared.push(text),
 	};
 	return { surface, cards, shared, notes };
 }
@@ -233,23 +232,24 @@ test("a machine with no projects can still run a scratch job", async () => {
 	await close();
 });
 
-test("a worker in a channel shows up in a thread, with updates when something's worth reading", async () => {
+test("a worker's thread gets updates in its own words, and only when there's something to say", async () => {
 	const parts = setup("worker", { milestone: noul(0.8) });
 	const { backend } = fakeBackend();
-	const seen: string[] = [];
-	const update = (line: string, post: boolean) => (request: ModelContext) => {
-		seen.push(lastMessage(request));
-		return fauxAssistantMessage(JSON.stringify({ line, post }));
+	const seen: ModelContext[] = [];
+	const update = (status: string, message: string | null) => (request: ModelContext) => {
+		seen.push(request);
+		return fauxAssistantMessage(JSON.stringify({ status, message }));
 	};
-	parts.faux.setResponses([update("Found two stuck sessions.", true), update("Reading more of the same.", false)]);
+	parts.faux.setResponses([update("Reading the ledger", "two of these look stuck on docking, checking why."), update("Still on the ledger", null)]);
 	const items: WorkerItem[] = [];
-	const { agent, conversation, notes, cards, keeper, close } = await open("worker", parts, backend, 0, "discord:channel:42", () => items);
+	const { agent, conversation, notes, cards, shared, keeper, close } = await open("worker", parts, backend, 0, "discord:channel:42", () => items);
 	const setStatus = (status: "working" | "idle") =>
 		conversation.commit(async (tx) => {
 			(await tx.doc(Workers, conversation.id)).workers["docking-status"] = { sessionId: "session", brief: "Check docking.", status, updatedAt: 1 };
 		}, context);
 	await setStatus("working");
-	await agent.jobs.trackWorker({ name: "docking-status", brief: "Check docking.", sessionId: "session", conversationId: conversation.id, ask: "discord:9" }, context);
+	const session = await agent.jobs.openSession({ name: "docking-status", brief: "Check docking.", sessionId: "session", conversationId: conversation.id, ask: "discord:9" }, context);
+	assert.equal(session?.id, conversation.id);
 	const job = parts.store.all()[0]!;
 	assert.equal(job.title, "docking status");
 	assert.equal(job.discordThreadId, "777");
@@ -258,31 +258,91 @@ test("a worker in a channel shows up in a thread, with updates when something's 
 	assert.deepEqual(notes, [], "nothing new, nothing to say");
 	items.push({ kind: "tool", at: 1, name: "bash", args: { command: "ledger:status --issue 3117" }, result: "Dock settlement: verified" });
 	await keeper.tick();
-	assert.deepEqual(notes, ["Found two stuck sessions."]);
-	assert.match(seen[0]!, /real step forward/);
-	assert.match(seen[0]!, /Nothing has been posted yet/);
+	assert.deepEqual(notes, ["two of these look stuck on docking, checking why."]);
+	assert.equal(parts.store.get(job.id)!.status, "Reading the ledger");
+	assert.match(JSON.stringify(seen[0]), /texting the user/, "it's pclaw's voice");
+	assert.match(lastMessage(seen[0]!), /real step forward/);
 
 	items.push({ kind: "tool", at: 2, name: "bash", args: { command: "gh issue view 3124" }, result: "open" });
 	await keeper.tick();
 	assert.equal(notes.length, 1, "more of the same stays off the thread");
-	assert.equal(parts.store.get(job.id)!.status, "Reading more of the same.", "but the card keeps up");
-	assert.match(seen[1]!, /Found two stuck sessions/);
+	assert.equal(parts.store.get(job.id)!.status, "Still on the ledger", "but the card keeps up");
+	assert.match(lastMessage(seen[1]!), /stuck on docking/, "it knows what it said");
 
+	await agent.jobs.workerReporting({ name: "docking-status", conversationId: conversation.id, ok: true }, context);
+	assert.equal(parts.store.get(job.id)!.state, "done");
+	assert.equal(agent.jobs.delivery("discord:thread:777", "all clear, none of them are stuck.\nmore detail"), "ping", "the result reaches them");
+	assert.equal(parts.store.get(job.id)!.status, "all clear, none of them are stuck.");
+	assert.deepEqual(shared, ["all clear, none of them are stuck.\nmore detail"], "the channel remembers it");
+	assert.equal(agent.jobs.delivery("discord:thread:777", "anything else?"), "silent");
+	assert.equal(shared.length, 1);
+	assert.equal(cards.at(-1), "done");
 	await setStatus("idle");
 	await keeper.tick();
 	assert.equal(parts.store.get(job.id)!.state, "done");
-	assert.equal(notes.at(-1), "Finished. The answer's in the channel.");
-	assert.equal(cards.at(-1), "done");
-	await keeper.tick();
-	assert.equal(notes.length, 2, "it says so once");
 	await close();
+});
+
+test("a finished worker doesn't ping someone who's already in its thread", async () => {
+	const parts = setup("here", NEEDS_YOU);
+	const { backend } = fakeBackend();
+	const { agent, conversation, close } = await open("here", parts, backend);
+	await agent.jobs.openSession({ name: "w", brief: "b", sessionId: "s", conversationId: conversation.id }, context);
+	await agent.jobs.guideMessage({ id: "1", text: "how's it going", channel: "w", discordThreadId: "777" });
+	await agent.jobs.workerReporting({ name: "w", conversationId: conversation.id, ok: true }, context);
+	assert.equal(agent.jobs.delivery("discord:thread:777", "done"), "silent");
+	await close();
+});
+
+test("delegating in a channel moves the worker into its thread, with its report and follow-ups", async () => {
+	const parts = setup("session", undefined);
+	const { backend } = fakeBackend();
+	const command = join(dir, "fake-pi.sh");
+	await writeFile(command, "#!/bin/sh\necho 'none of them are stuck'\n");
+	await chmod(command, 0o755);
+	const reports: string[] = [];
+	parts.faux.setResponses([
+		fauxAssistantMessage([fauxToolCall("delegate", { name: "docking", brief: "Check docking." })], { stopReason: "toolUse" }),
+		(request) => {
+			reports.push(lastMessage(request));
+			return fauxAssistantMessage("all clear, nothing's stuck");
+		},
+	]);
+	const workers = { command, provider: "xai", model: "w", thinkingLevel: "high", timeoutMs: 10_000, cwd: join(dir, "work"), sessionDir: join(dir, "sessions"), promptFile: join(dir, "w.md"), toolsFile: join(dir, "t.ts"), cliFile: join(dir, "c.ts"), museCommand: "muse", piFallback: { provider: "xai", model: "w" }, quickThinkingLevel: "medium", skills: [] };
+	const agent = await openAgent(
+		await openNodeSqliteStorage(join(dir, "session.sqlite")),
+		{ config, models: parts.models, notes: new Notes(join(dir, "session-notes.md")), decisions: parts.decisions, jobStore: parts.store, jobBackend: backend, workers },
+		context,
+	);
+	const channel = await agent.conversationFor("discord:channel:42", context);
+	const thread = await agent.conversationFor("discord:thread:777", context);
+	const { surface } = fakeSurface(async () => thread);
+	agent.jobs.surface.current = surface;
+	const inChannel: string[] = [];
+	const inThread: string[] = [];
+	const quiet = () => undefined;
+	const channelDelivery = await deliver(agent.harness, channel.id, { send: async (text) => void inChannel.push(text), working: quiet }, context);
+	const threadDelivery = await deliver(agent.harness, thread.id, { send: async (text) => void inThread.push(text), working: quiet }, context);
+
+	await channel.submit({ type: "input", content: "are my sessions stuck?", requestId: "discord:9" }, context);
+	for (let i = 0; i < 500 && inThread.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+
+	assert.deepEqual(inThread, ["all clear, nothing's stuck"]);
+	assert.deepEqual(inChannel, [], "the channel stays clean");
+	assert.match(reports[0]!, /<worker-report worker=\\"docking\\" status=\\"done\\">/);
+	assert.equal((await agent.harness.snapshot(Workers, channel.id, context))?.workers.docking, undefined);
+	assert.equal((await agent.harness.snapshot(Workers, thread.id, context))?.workers.docking?.status, "idle");
+	assert.equal(parts.store.all()[0]!.state, "done");
+	await channelDelivery.stop();
+	await threadDelivery.stop();
+	await agent.harness.close(context);
 });
 
 test("a worker in a DM needs no thread", async () => {
 	const parts = setup("worker-dm", NEEDS_YOU);
 	const { backend } = fakeBackend();
 	const { agent, conversation, close } = await open("worker-dm", parts, backend, 3_600_000, "discord:dm:1");
-	await agent.jobs.trackWorker({ name: "x", brief: "y", sessionId: "s", conversationId: conversation.id }, context);
+	assert.equal(await agent.jobs.openSession({ name: "x", brief: "y", sessionId: "s", conversationId: conversation.id }, context), undefined);
 	assert.equal(parts.store.all().length, 0);
 	await close();
 });
@@ -346,7 +406,7 @@ test("the card refreshes mid-turn without waking anyone, and the turn's end stil
 	const requests: ModelContext[] = [];
 	parts.faux.setResponses([
 		start({ title: "Scratch", brief: "Check something." }),
-		summary("idle", "Asking about tiles."),
+		() => fauxAssistantMessage(JSON.stringify({ status: "Asking about tiles.", message: null })),
 		summary("needs_you", "Needs a call."),
 		(request) => {
 			requests.push(request);
@@ -402,7 +462,7 @@ test("reading a thread finds the agent's last words and who spoke to it last", (
 test("every template a read can pick exists", () => {
 	const templates = parseTemplates(readPrompt("guidance"));
 	const outcomes = ["finished", "needs_owner", "procedural", "blocked", "still_going"].map((name) => `turn.${name}`);
-	const names = [...outcomes, "surface.ping", "surface.note", "surface.card", "place.parent", "place.thread", "no_news", "owner_driving", "caution"];
+	const names = [...outcomes, "surface.ping", "surface.note", "surface.card", "no_news", "owner_driving", "caution"];
 	names.push("message.t3_job", "message.quick_worker", "message.fresh", "message.machine_check", "message.project", "message.voice", "message.thinking_aloud", "message.status", "message.steer", "message.too_loud", "message.too_quiet", "follow_up.wait");
 	for (const name of names) assert.ok(templates[name], `missing template ${name}`);
 });
@@ -481,7 +541,8 @@ test("activity for updates leaves out secrets", () => {
 
 test("the card and board read at a glance", () => {
 	const job: Job = { id: "a", title: "Map proof", brief: "", threadId: "t", machine: "pc1", project: "hexfall", origin: "discord:channel:1", state: "needs_you", status: "Tiles or heightmap?", told: [], startedAt: 1_000_000, updatedAt: 1_000_000, discordThreadId: "9" };
-	assert.match(jobCard(job), /🙋 Needs you · pc1 · hexfall\nTiles or heightmap\?/);
+	assert.match(jobCard(job), /^🙋 Needs you · pc1 · hexfall · started <t:1000:R>\nTiles or heightmap\?$/);
+	assert.match(jobCard({ ...job, worker: { name: "a", conversationId: "1" as never } }), /^🙋 Needs you · started/, "where a worker runs isn't news");
 	const board = jobBoard([job, { ...job, id: "b", title: "Old", state: "done", discordThreadId: "8", updatedAt: 1_000_000 }], 1_000_000);
 	assert.match(board, /🙋 <#9> · pc1/);
 	assert.match(board, /Last 24 hours\*\*\n✅ <#8>/);

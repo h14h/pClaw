@@ -32,12 +32,6 @@ This is the same message as last time, so there's no news here.
 ## owner_driving
 They've been talking to this agent directly, so they've already seen this.
 
-## place.parent
-This result looks worth keeping in the main channel: post it with `share_result`.
-
-## place.thread
-This result looks fine staying in the thread.
-
 ## message.t3_job
 This looks like work they'd want to open and steer: a T3 job (`start_job`).
 

@@ -144,7 +144,6 @@ export const turnQuestions: Questions = {
 	failed: { type: "noul", instructions: "Does this message report that the work failed, or that it can't continue because of an error or missing access?" },
 	waiting_on_system: { type: "noul", instructions: "Does this message say the agent is waiting on an automated check or will continue on its own?" },
 	job_complete: { type: "noul", instructions: "Does this message say all the work is finished, with nothing left to do?" },
-	worth_keeping: { type: "noul", instructions: "Does this message report an outcome someone would want to find later, like something shipped, built, decided, or learned?" },
 	hard_to_undo: { type: "noul", instructions: "Is the agent about to do, or asking to do, something outward-facing and hard to undo: send, buy, book, pay, delete, post, merge, or deploy?" },
 };
 
@@ -178,7 +177,6 @@ export function turnGuidance(answers: Answers, facts: TurnFacts, templates?: Rec
 	if (facts.ownerDriving) picks.push("owner_driving");
 	if (facts.repeat) picks.push("no_news");
 	picks.push(`surface.${surface}`);
-	if (outcome === "finished") picks.push(yes(answers.worth_keeping) >= 0.5 ? "place.parent" : "place.thread");
 	if (yes(answers.hard_to_undo) >= 0.5) picks.push("caution");
 	return renderGuidance(answers, picks, {}, templates);
 }
