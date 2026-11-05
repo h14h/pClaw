@@ -87,7 +87,8 @@ const fakeWorker = join(scratch, "worker.sh");
 writeFileSync(fakeWorker, "#!/bin/sh\nsleep 1\necho 'Done. The report goes here.'\n");
 chmodSync(fakeWorker, 0o755);
 const notes = join(scratch, "notes.md");
-writeFileSync(notes, readFileSync(join(repo, "evals/notes.md"), "utf8"));
+const startingNotes = readFileSync(join(repo, "evals/notes.md"), "utf8");
+writeFileSync(notes, startingNotes);
 
 const agent = await openAgent(
 	await openNodeSqliteStorage(join(scratch, "evals.sqlite")),
@@ -136,6 +137,8 @@ const cases = (JSON.parse(readFileSync(join(repo, holdout ? "evals/holdout.json"
 const results: Run[] = [];
 for (let run = 0; run < runs; run++) {
 	for (const each of cases) {
+		// Every case starts from the same notes, or one that saves something changes the next pass.
+		writeFileSync(notes, startingNotes);
 		const conversation = await agent.conversationFor(`discord:channel:eval-${run}-${each.id}`, context);
 		const started = performance.now();
 		await conversation.submit({ type: "input", content: `[Thu 2026-11-05 14:00 (America/Chicago, UTC-06:00)]\n${each.message}`, requestId: `eval:${run}:${each.id}` }, context);
