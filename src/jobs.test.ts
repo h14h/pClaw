@@ -10,7 +10,7 @@ import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@ear
 import { LiveDoc } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { openAgent } from "./agent.ts";
-import { jobBoard, jobCard } from "./channels/discord.ts";
+import { jobBoard, jobCard, workingUnseen } from "./channels/discord.ts";
 import { type Config, defaults } from "./config.ts";
 import { type Answers, armOf, decisionClient, messageGuidance, messageQuestions, parseTemplates, readTurn, turnGuidance } from "./decisions.ts";
 import { compareLanes, type LogEvent, summarize } from "./decision-report.ts";
@@ -387,6 +387,16 @@ test("arms are stable and split near the holdout", () => {
 	assert.equal(armOf("turn:a:1", 0.2), armOf("turn:a:1", 0.2));
 	const controls = Array.from({ length: 2_000 }, (_, index) => armOf(`event-${index}`, 0.2)).filter((arm) => arm === "control").length;
 	assert.ok(controls > 300 && controls < 500, `${controls} controls`);
+});
+
+test("typing follows work that has nothing else on screen", () => {
+	const here = "discord:dm:1";
+	assert.equal(workingUnseen(here, [{ status: "idle" }], []), false);
+	assert.equal(workingUnseen(here, [{ status: "working" }], []), true);
+	assert.equal(workingUnseen(here, [], [{ origin: here, background: true, state: "working" }]), true);
+	assert.equal(workingUnseen(here, [], [{ origin: here, background: true, state: "done" }]), false);
+	assert.equal(workingUnseen(here, [], [{ origin: "discord:dm:2", background: true, state: "working" }]), false);
+	assert.equal(workingUnseen(here, [], [{ origin: here, state: "working" }]), false, "a full job has its card");
 });
 
 test("the card and board read at a glance", () => {

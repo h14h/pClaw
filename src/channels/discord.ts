@@ -27,6 +27,7 @@ import { type Config, saveConfig } from "../config.ts";
 import { deliver, type Outbox } from "../delivery.ts";
 import type { Job, JobState, JobSurface } from "../extensions/jobs.ts";
 import { Reactions } from "../extensions/reactions.ts";
+import { Workers } from "../extensions/workers.ts";
 import { stamp } from "../time.ts";
 
 const MAX_MESSAGE = 2000;
@@ -49,6 +50,11 @@ const JOB_LABELS: Record<JobState, string> = {
 };
 
 const unix = (ms: number) => Math.floor(ms / 1000);
+
+/** Work with nothing else on screen to show it's alive: a running worker, or a background job. Full jobs have a card. */
+export function workingUnseen(address: string, workers: { status: string }[], jobs: Pick<Job, "origin" | "background" | "state">[]): boolean {
+	return workers.some((worker) => worker.status === "working") || jobs.some((job) => job.origin === address && job.background === true && job.state === "working");
+}
 
 /** A job's status card. `<t:...:R>` renders as "12 minutes ago" and keeps itself current. */
 export function jobCard(job: Job): string {
@@ -453,6 +459,19 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 		}
 	});
 
+	// A run's typing ends when it hands work off, so keep it going for as long as that work is really running.
+	const keepTyping = setInterval(() => {
+		void (async () => {
+			const known = await agent.addresses(context);
+			for (const addr of deliveries.keys()) {
+				const id = known[addr];
+				if (id === undefined) continue;
+				const workers = Object.values((await agent.harness.snapshot(Workers, id, context))?.workers ?? {});
+				if (workingUnseen(addr, workers, jobs.store.active())) await (await target(addr))?.sendTyping();
+			}
+		})().catch((error: unknown) => console.error("[pclaw] typing", error));
+	}, TYPING_REFRESH_MS);
+
 	// Join threads as they open in pclaw's channels, so their messages reliably reach it.
 	client.on(Events.ThreadCreate, async (thread) => {
 		if (thread.parentId !== null && served(thread.parentId) && !thread.joined) {
@@ -481,6 +500,7 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 	return {
 		stop: async () => {
 			for (const delivery of deliveries.values()) await delivery.stop();
+			clearInterval(keepTyping);
 			delete jobs.surface.current;
 			await client.destroy();
 		},
