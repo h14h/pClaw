@@ -34,7 +34,10 @@ const repo = fileURLToPath(new URL("..", import.meta.url));
 const args = process.argv.slice(2);
 const option = (name: string) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
 const name = args[0];
-if (name === undefined || name.startsWith("--")) throw new Error("usage: pnpm evals <profile> [--runs N] [--only a,b] [--holdout] [--no-judge]");
+if (name === undefined || name.startsWith("--")) {
+	console.error("usage: pnpm evals <profile> [--runs N] [--only a,b] [--holdout] [--no-judge]");
+	process.exit(1);
+}
 const runs = Number(option("--runs") ?? 2);
 const only = option("--only")?.split(",");
 const holdout = args.includes("--holdout");
