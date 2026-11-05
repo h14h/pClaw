@@ -8,7 +8,7 @@ When a T3 turn ends, a message arrives, or a follow-up comes due, pclaw asks a d
 
 Every event goes to `~/.pclaw/decisions.jsonl`. `pnpm decisions` reads it. `journalctl --user -u pclaw | grep -E 'decide|job '` shows the same thing as it happens.
 
-Any server that speaks `POST /v1/decisions` works as `decisionUrl`. Today that's d1-2B on mm1: a LaunchAgent (`com.h14h.pclaw.decide`) running agenda's `decide/server.py` on port 8083, separate from agenda's own on-demand copy, with `tailscale serve` putting it on the tailnet.
+Any server that speaks `POST /v1/decisions` works as `decisionUrl`. Today that's d1-2B on mm1: a LaunchAgent (`com.h14h.pclaw.decide`) running agenda's `decide/server.py` on port 8085, separate from agenda's own on-demand copy, with `tailscale serve` putting it on the tailnet.
 
 ## The question
 
@@ -27,6 +27,7 @@ Each one names the number that would change our minds. The targets are guesses t
 | H5 | d1 reads turns correctly | Agreement with the front model on the job's state, and accuracy on labeled turns | 80% or more | Replay: 75% on state, tuned on the same cases |
 | H6 | Background T3 jobs can replace workers | Runs, failures, minutes to a first answer, and how T3 feels with the extra settled threads | Failures and speed no worse than workers | 75 timed worker runs: median 3 minutes, five hit the 30-minute cap |
 | H7 | No activity means nothing's happening | Status checks on running work in channels, and how often new activity becomes an update | Fewer status checks, with updates on about a third of checks or less | Nov 5: "on it" in a channel, then nothing for minutes |
+| H8 | Rambling carries intent that precise wording loses | How often the next message corrects pclaw, for voice vs text, and whether how firm a message reads predicts whether it gets acted on | A question to explore, not a target | None |
 
 H6 decides whether workers stay. Keep them until there's about a month of both, and until it's clear what T3 being down would cost. Claude usage isn't in the log, so check it by hand.
 
@@ -72,6 +73,17 @@ The first replay set is 36 cases from Nov 2: 19 real turns, plus 17 copies with 
 - T3 said `completed` for every turn, even ones ending on a real question, and pclaw's replies said "nothing pending" for several. Only the agent's last message tells these apart.
 - d1-2B judged poorly when asked the whole question ("how should this reach them?"). It did well on small factual questions about the end of a message, combined by a few lines of code.
 
+## Voice against text (H8)
+
+The question: when the owner rambles, do models read their intent better, and does how precise the words sound help gauge how seriously to take them?
+
+Everyday logs can only suggest an answer, because voice and text get used for different things, in different moods. If voice gets corrected less, that may just mean easier requests. Two things sharpen it:
+
+- **Paired prompts.** Now and then, send the same real thing both ways: a memo, then the typed version, in separate threads. Compare what pclaw does with each, ideally without knowing which was which. Twenty pairs would say more than months of logs.
+- **Firmness as a signal.** `thinking_aloud` and `firm_ask` are logged for every message. Check whether acting on low-firmness messages is what draws corrections. On 12 test messages, `thinking_aloud` got all 12 right. On a long rambling memo that ended in clear instructions, one read scored `firm_ask` 0.09, so long memos can't rely on it.
+
+The `message.voice` hint follows the usual 20% holdout, so hinted and unhinted memos can be compared too. Originals stay in `~/.pclaw/voice`, so a transcript error can be told apart from a misread intent.
+
 ## Experiment log
 
 | Date | Change | Why | Result |
@@ -81,3 +93,4 @@ The first replay set is 36 cases from Nov 2: 19 real turns, plus 17 copies with 
 | 2026-11-04 | Added `fresh_check`, and tightened `job_size` so one-off checks and research stop reading as jobs | pclaw answered a question about pc1 from its notes, then a version check became a whole T3 thread | 25 sample messages: `fresh_check` 22, with the 3 misses on build work where it's ignored; job size 22, with the 3 misses simple questions read as research, now behind a higher threshold |
 | 2026-11-04 | Kept workers, and started logging their runs next to jobs | Whether background T3 jobs can replace them should come from usage, not reasoning | Waiting on data |
 | 2026-11-05 | Everything running in a channel gets a thread, with updates written by the front model and d1 as a hint (`milestone`) | The owner couldn't tell "nothing is happening" from "something is happening out of sight" | d1 on 62 windows of real tool activity: high on publishing and ledger status, but noisy. Dropped a `problem` question that fired on harmless commands |
+| 2026-11-05 | Voice memos through Parakeet, with `thinking_aloud`, `firm_ask`, and `corrects` on every message | The owner wants to send memos, and to see whether rambling carries intent | Speech: 1.4% word errors on 90s of synthetic rambling, 9.6 minutes in 4.9s. Real-voice accuracy not measured |

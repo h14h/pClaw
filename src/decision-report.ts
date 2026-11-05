@@ -34,6 +34,9 @@ export type LogEvent = {
 	adopted?: boolean;
 	worker?: boolean;
 	posted?: boolean;
+	modality?: string;
+	words?: number;
+	channel?: string;
 };
 
 type Arm = { turns: number; followed: number; quiet: number; notes: number; pings: number };
@@ -72,6 +75,34 @@ export function compareLanes(events: LogEvent[]): Record<"worker" | "background"
 		background: jobLane(true),
 		job: jobLane(false),
 	};
+}
+
+type Modality = { messages: number; medianWords: number; thinkingAloud: number; firmAsks: number; corrected: number };
+
+/**
+ * Text against voice. "Corrected" is the owner's next message in that place correcting pclaw, soon after: the nearest
+ * thing to a measure of whether pclaw understood. See H8 for why this can only ever be suggestive.
+ */
+export function compareModalities(events: LogEvent[]): Record<string, Modality> {
+	const answers = new Map(events.filter((event) => event.type === "decision" && event.site === "message" && event.ok === true).map((event) => [event.id, event.answers]));
+	const messages = events.filter((event) => event.type === "message");
+	const result: Record<string, Modality> = {};
+	for (const modality of new Set(messages.map((event) => event.modality ?? "text"))) {
+		const mine = messages.filter((event) => (event.modality ?? "text") === modality);
+		const read = (name: string, event: LogEvent) => yes(answers.get(event.id)?.[name]);
+		const corrected = mine.filter((event) => {
+			const next = messages.find((other) => other.channel === event.channel && Date.parse(other.at) > Date.parse(event.at));
+			return next !== undefined && Date.parse(next.at) - Date.parse(event.at) < RESPONSE_MS && read("corrects", next) >= 0.5;
+		});
+		result[modality] = {
+			messages: mine.length,
+			medianWords: percentile(mine.map((event) => event.words ?? 0), 0.5),
+			thinkingAloud: mine.filter((event) => read("thinking_aloud", event) >= 0.7).length,
+			firmAsks: mine.filter((event) => read("firm_ask", event) >= 0.5).length,
+			corrected: corrected.length,
+		};
+	}
+	return result;
 }
 
 export function summarize(events: LogEvent[]) {
@@ -134,6 +165,7 @@ export function summarize(events: LogEvent[]) {
 		outcomeAgreement: compared === 0 ? undefined : { agree, compared },
 		templates: [...new Set(decisions.map((event) => event.templates))],
 		lanes: compareLanes(events),
+		modalities: compareModalities(events),
 		updates: { checked: events.filter((event) => event.type === "progress").length, posted: events.filter((event) => event.type === "progress" && event.posted === true).length },
 	};
 }
@@ -151,6 +183,10 @@ function print(report: ReturnType<typeof summarize>): void {
 	}
 	const agreement = report.outcomeAgreement;
 	console.log(`\nd1 vs the front model on the job's state (H5): ${agreement === undefined ? "n/a" : share(agreement.agree, agreement.compared)}`);
+	console.log("\nText vs voice (H8)");
+	for (const [name, each] of Object.entries(report.modalities)) {
+		console.log(`  ${name}: ${each.messages} messages, median ${each.medianWords} words, thinking aloud ${share(each.thinkingAloud, each.messages)}, firm asks ${share(each.firmAsks, each.messages)}, then corrected ${share(each.corrected, each.messages)}`);
+	}
 	console.log("\nWorkers vs T3 (H6): runs, failures, minutes to a first answer");
 	for (const [name, each] of Object.entries(report.lanes)) console.log(`  ${name}: ${each.runs} runs, ${each.failed} failed, median ${each.p50min}, p90 ${each.p90min}`);
 }

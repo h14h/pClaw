@@ -53,6 +53,12 @@ This depends on how one of their machines is right now, so don't answer from mem
 ## message.project
 If this becomes a job, the likely project is {project} on {machine}.
 
+## message.voice
+This came in as a voice memo, so it may ramble. Read for what they keep coming back to and where they land at the end, more than any one word. A long memo can mix thinking out loud with real asks: pick out the asks, and treat the rest as context.
+
+## message.thinking_aloud
+This reads as thinking out loud, not a request. Think it through with them, and don't start work unless they ask.
+
 ## message.status
 They seem to be asking how a job is going. Check it with `list_jobs` before answering, and never guess.
 

@@ -642,8 +642,10 @@ export function createJobs(options: JobsOptions) {
 	}
 
 	/** A hint for the owner's message, or nothing. Runs before the message reaches the front model, so it's kept quick. */
-	async function guideMessage(input: { id: string; text: string; channel: string; discordThreadId?: string }): Promise<string | undefined> {
-		if (!decisions.configured || input.text.trim() === "") return undefined;
+	async function guideMessage(input: { id: string; text: string; channel: string; discordThreadId?: string; voice?: boolean }): Promise<string | undefined> {
+		if (input.text.trim() === "") return undefined;
+		decisions.record({ type: "message", id: `message:${input.id}`, modality: input.voice === true ? "voice" : "text", words: input.text.trim().split(/\s+/).length, channel: input.discordThreadId ?? input.channel });
+		if (!decisions.configured) return undefined;
 		const job = input.discordThreadId === undefined ? undefined : store.forThread(input.discordThreadId);
 		const live = store.active().filter((each) => each.state === "working" || each.state === "needs_you");
 		const decided = await decisions.ask({
@@ -651,7 +653,7 @@ export function createJobs(options: JobsOptions) {
 			site: "message",
 			timeoutMs: 1_500,
 			...(job === undefined ? {} : { job: job.id }),
-			state: { channel: input.channel, message: input.text.slice(0, 4_000), active_jobs: live.slice(0, 10).map((each) => each.title), ...(job === undefined ? {} : { this_job: job.title, card_says: job.status }) },
+			state: { channel: input.channel, message: input.text.slice(-4_000), active_jobs: live.slice(0, 10).map((each) => each.title), ...(job === undefined ? {} : { this_job: job.title, card_says: job.status }) },
 			questions: messageQuestions(job !== undefined),
 		});
 		if (decided === undefined) return undefined;
@@ -668,6 +670,7 @@ export function createJobs(options: JobsOptions) {
 		const words = input.text.toLowerCase().split(/\W+/);
 		const guidance = messageGuidance(decided.answers, {
 			liveJobs: live.length > 0,
+			...(input.voice === true ? { voice: true } : {}),
 			namesMachine: words.some((word) => names.includes(word)),
 			...(project === undefined ? {} : { project }),
 		});

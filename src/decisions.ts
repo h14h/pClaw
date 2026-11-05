@@ -201,6 +201,9 @@ export function messageQuestions(inJobThread: boolean): Questions {
 			instructions: "Would a correct answer depend on how something is right now, outside this conversation? Examples: a live system, what's installed or running, a price, opening hours, a schedule, a score, the weather, news, or a recent release. Answer no for timeless facts, explanations, opinions, and chat.",
 		},
 		asks_status: { type: "noul", instructions: "Is the owner asking how something running is going, or whether it finished?" },
+		thinking_aloud: { type: "noul", instructions: "Is the owner thinking out loud or floating an idea, rather than asking for something to be done now?" },
+		firm_ask: { type: "noul", instructions: "Does this message contain a clear, firm request to do something?" },
+		corrects: { type: "noul", instructions: "Is the owner correcting the assistant, or saying it misunderstood them?" },
 		noise_feedback: {
 			type: "choice",
 			instructions: "Is the owner commenting on how much the assistant notifies them?",
@@ -225,6 +228,8 @@ export type MessageFacts = {
 	liveJobs?: boolean;
 	/** The message names one of the owner's machines. */
 	namesMachine?: boolean;
+	/** It was spoken. One read of a long memo can miss an ask at the end, so it gets its own hint. */
+	voice?: boolean;
 	project?: { project: string; machine: string };
 };
 
@@ -239,6 +244,8 @@ export function messageGuidance(answers: Answers, facts: MessageFacts = {}, temp
 	// A question about running work mentions the work, so it reads as new work unless this comes first.
 	if ((yes(answers.asks_status) >= 0.5 && facts.liveJobs === true) || inJob === "status") picks.push("message.status");
 	else if (inJob === "steer") picks.push("message.steer");
+	else if (facts.voice === true) picks.push("message.voice");
+	else if (yes(answers.thinking_aloud) >= 0.7 && yes(answers.firm_ask) < 0.3) picks.push("message.thinking_aloud");
 	else if (size.choice === "t3_job" && size.p >= 0.5) {
 		picks.push("message.t3_job");
 		if (facts.project !== undefined) picks.push("message.project");

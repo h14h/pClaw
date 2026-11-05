@@ -14,12 +14,13 @@ import { jobBoard, jobCard, typingTargets } from "./channels/discord.ts";
 import { type Config, defaults } from "./config.ts";
 import type { WorkerItem } from "./dashboard/types.ts";
 import { type Answers, armOf, decisionClient, messageGuidance, messageQuestions, parseTemplates, readTurn, turnGuidance } from "./decisions.ts";
-import { compareLanes, type LogEvent, summarize } from "./decision-report.ts";
+import { compareLanes, compareModalities, type LogEvent, summarize } from "./decision-report.ts";
 import { deliver } from "./delivery.ts";
 import { describeActivity, type Job, type JobBackend, JobStore, type JobSurface, readItems, type ThreadItem, type ThreadView, turnEnded } from "./extensions/jobs.ts";
 import { Workers } from "./extensions/workers.ts";
 import { Notes } from "./extensions/notes.ts";
 import { readPrompt } from "./prompts.ts";
+import { memoLabel, transcribe } from "./speech.ts";
 
 const context = BACKGROUND_CONTEXT;
 const config: Config = { ...defaults, provider: "faux", model: "faux-1", thinkingLevel: "off", timeZone: "America/Chicago", t3AllowSend: true };
@@ -402,7 +403,7 @@ test("every template a read can pick exists", () => {
 	const templates = parseTemplates(readPrompt("guidance"));
 	const outcomes = ["finished", "needs_owner", "procedural", "blocked", "still_going"].map((name) => `turn.${name}`);
 	const names = [...outcomes, "surface.ping", "surface.note", "surface.card", "place.parent", "place.thread", "no_news", "owner_driving", "caution"];
-	names.push("message.t3_job", "message.quick_worker", "message.fresh", "message.machine_check", "message.project", "message.status", "message.steer", "message.too_loud", "message.too_quiet", "follow_up.wait");
+	names.push("message.t3_job", "message.quick_worker", "message.fresh", "message.machine_check", "message.project", "message.voice", "message.thinking_aloud", "message.status", "message.steer", "message.too_loud", "message.too_quiet", "follow_up.wait");
 	for (const name of names) assert.ok(templates[name], `missing template ${name}`);
 });
 
@@ -437,6 +438,12 @@ test("hints reflect the read, and stay out of the way when nothing stands out", 
 	assert.match(messageGuidance({ ...chat, fresh_check: noul(0.9) }, { namesMachine: true })!, /background: true/);
 	assert.doesNotMatch(messageGuidance({ ...chat, job_size: choice("t3_job"), fresh_check: noul(0.7) })!, /right now/, "build work isn't a lookup");
 	assert.equal(messageGuidance({ ...chat, job_size: choice("quick_worker", 0.6) }), undefined, "a simple question can read as research");
+	const musing = { ...chat, job_size: choice("t3_job"), thinking_aloud: noul(0.9), firm_ask: noul(0.05) };
+	assert.match(messageGuidance(musing)!, /thinking out loud/);
+	assert.doesNotMatch(messageGuidance(musing)!, /open and steer/, "an idea isn't a job");
+	const memo = messageGuidance(musing, { voice: true })!;
+	assert.match(memo, /pick out the asks/);
+	assert.doesNotMatch(memo, /don't start work/, "a rambling memo can end in a real ask");
 	assert.ok("in_job" in messageQuestions(true));
 	assert.ok(!("in_job" in messageQuestions(false)));
 });
@@ -479,6 +486,37 @@ test("the card and board read at a glance", () => {
 	assert.match(board, /🙋 <#9> · pc1/);
 	assert.match(board, /Last 24 hours\*\*\n✅ <#8>/);
 	assert.match(jobBoard([], 1_000_000), /Nothing running/);
+});
+
+test("voice memos go to the speech server, and a failure says so", async () => {
+	const sent: unknown[] = [];
+	const server = (async (_url: string, init: RequestInit) => {
+		sent.push(init.body);
+		return new Response(JSON.stringify({ text: "keep going on the dialog", seconds: 83.4, ms: 90 }), { status: 200 });
+	}) as unknown as typeof fetch;
+	const heard = await transcribe("http://speech.test/", new Uint8Array([1, 2]), server);
+	assert.equal(heard.text, "keep going on the dialog");
+	assert.equal(sent.length, 1);
+	assert.match(memoLabel(heard.seconds), /voice memo, 1m 23s/);
+	assert.match(memoLabel(9), /voice memo, 9s/);
+	const down = (async () => new Response("boom", { status: 500 })) as unknown as typeof fetch;
+	await assert.rejects(transcribe("http://speech.test", new Uint8Array([1]), down), /returned 500/);
+});
+
+test("the report compares text and voice", () => {
+	const at = (minutes: number) => new Date(1_800_000_000_000 + minutes * 60_000).toISOString();
+	const decision = (id: string, answers: Answers): LogEvent => ({ type: "decision", id, site: "message", ok: true, at: at(0), answers });
+	const lanes = compareModalities([
+		{ type: "message", id: "a", modality: "voice", words: 300, channel: "general", at: at(0) },
+		decision("a", { thinking_aloud: noul(0.9), firm_ask: noul(0.1), corrects: noul(0) }),
+		{ type: "message", id: "b", modality: "text", words: 8, channel: "general", at: at(5) },
+		decision("b", { thinking_aloud: noul(0.1), firm_ask: noul(0.9), corrects: noul(0.9) }),
+		{ type: "message", id: "c", modality: "text", words: 4, channel: "general", at: at(600) },
+		decision("c", { thinking_aloud: noul(0.1), firm_ask: noul(0.9), corrects: noul(0.9) }),
+	]);
+	assert.deepEqual(lanes.voice, { messages: 1, medianWords: 300, thinkingAloud: 1, firmAsks: 0, corrected: 1 });
+	assert.equal(lanes.text!.messages, 2);
+	assert.equal(lanes.text!.corrected, 0, "a correction hours later isn't about this message");
 });
 
 test("the report compares workers with background and full jobs", () => {

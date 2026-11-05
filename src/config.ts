@@ -21,6 +21,8 @@ export const paths = {
 	jobs: join(home, "jobs.json"),
 	/** Every decision-model call, what was shown, and what happened next. See docs/decision-evals.md. */
 	decisions: join(home, "decisions.jsonl"),
+	/** Voice memos as they were sent, so a transcript can be checked or redone. */
+	voice: join(home, "voice"),
 };
 
 export type Config = {
@@ -93,6 +95,8 @@ export type Config = {
 	discordBoardChannel?: string;
 	/** A decision model's `/v1/decisions` server. Unset: no hints, and the front model decides alone. */
 	decisionUrl?: string;
+	/** A speech-to-text server (deploy/speech-server.py). Unset: voice memos can't be heard. */
+	speechUrl?: string;
 	/** Share of decisions asked and logged but not shown, for comparing behavior with and without hints. */
 	decisionHoldout: number;
 };

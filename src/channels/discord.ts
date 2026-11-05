@@ -1,3 +1,5 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import {
@@ -23,11 +25,12 @@ import {
 	ThreadAutoArchiveDuration,
 } from "discord.js";
 import type { Agent } from "../agent.ts";
-import { type Config, saveConfig } from "../config.ts";
+import { type Config, paths, saveConfig } from "../config.ts";
 import { deliver, type Outbox } from "../delivery.ts";
 import type { Job, JobState, JobSurface } from "../extensions/jobs.ts";
 import { Reactions } from "../extensions/reactions.ts";
 import { Workers } from "../extensions/workers.ts";
+import { type Heard, memoLabel, transcribe } from "../speech.ts";
 import { stamp } from "../time.ts";
 
 const MAX_MESSAGE = 2000;
@@ -123,11 +126,15 @@ export function splitMessage(text: string, limit = MAX_MESSAGE): string[] {
 
 const clip = (text: string) => (text.length > QUOTE_LIMIT ? `${text.slice(0, QUOTE_LIMIT)}…` : text);
 
-async function toInput(message: Message, timeZone: string, context: string[]): Promise<UserInput> {
+async function toInput(message: Message, timeZone: string, context: string[], memo?: Heard): Promise<UserInput> {
 	const parts: (TextContent | ImageContent)[] = [];
-	const notes: string[] = [];
+	const notes: string[] = memo === undefined ? [] : [memoLabel(memo.seconds), memo.text];
 	for (const attachment of message.attachments.values()) {
 		const type = attachment.contentType ?? "";
+		if (type.startsWith("audio/")) {
+			if (memo === undefined) notes.push("[sent a voice memo, but pclaw couldn't transcribe it]");
+			continue;
+		}
 		if (type.startsWith("image/") && attachment.size <= MAX_IMAGE_BYTES) {
 			const response = await fetch(attachment.url);
 			if (response.ok) {
@@ -328,6 +335,30 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 		return undefined;
 	}
 
+	/** The first audio attachment as text, or undefined. A failure leaves a note for the front model to pass on. */
+	async function hear(message: Message): Promise<Heard | undefined> {
+		const attachment = message.attachments.find((each) => each.contentType?.startsWith("audio/") === true);
+		if (attachment === undefined || config.speechUrl === undefined) return undefined;
+		const id = `message:${message.id}`;
+		try {
+			if (message.channel.isSendable()) await message.channel.sendTyping();
+			const download = await fetch(attachment.url);
+			if (!download.ok) throw new Error(`Discord returned ${download.status}`);
+			const audio = new Uint8Array(await download.arrayBuffer());
+			mkdirSync(paths.voice, { recursive: true, mode: 0o700 });
+			writeFileSync(join(paths.voice, `${message.id}.ogg`), audio, { mode: 0o600 });
+			const heard = await transcribe(config.speechUrl, audio);
+			jobs.decisions.record({ type: "voice", id, ok: true, seconds: heard.seconds, ms: heard.ms, words: heard.text.split(/\s+/).filter(Boolean).length });
+			console.log(`[pclaw] heard a ${Math.round(heard.seconds)}s voice memo in ${heard.ms}ms`);
+			return heard;
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error);
+			jobs.decisions.record({ type: "voice", id, ok: false, error: reason });
+			console.error(`[pclaw] couldn't hear a voice memo: ${reason}`);
+			return undefined;
+		}
+	}
+
 	const cardControls = (job: Job) => {
 		const row = new ActionRowBuilder<ButtonBuilder>();
 		if (job.link !== undefined) row.addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel("Open in T3").setURL(job.link));
@@ -422,18 +453,20 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 			const route = await conversationFor(message);
 			if (route === undefined) return;
 			await attach(route.addr, route.conversation);
+			const memo = await hear(message);
 			const guidance = await jobs.guideMessage({
 				id: message.id,
-				text: message.content,
+				text: [message.content, memo?.text].filter(Boolean).join("\n"),
 				channel: "name" in message.channel && message.channel.name !== null ? message.channel.name : "direct message",
 				...(message.channel.isThread() ? { discordThreadId: message.channelId } : {}),
+				...(memo === undefined ? {} : { voice: true }),
 			});
 			const extra = [...route.extra, ...(await replyContext(message, client.user!.id, config.timeZone)), ...(guidance === undefined ? [] : [guidance])];
 			// Messages sent while pclaw is working join the current run at its next step, like a person cutting in.
 			await route.conversation.submit(
 				{
 					type: "input",
-					content: await toInput(message, config.timeZone, extra),
+					content: await toInput(message, config.timeZone, extra, memo),
 					whenBusy: "steer",
 					requestId: `discord:${message.id}`,
 				},

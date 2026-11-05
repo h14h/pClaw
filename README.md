@@ -20,7 +20,7 @@ It's early. Today it can talk, remember, follow up on its own, and hand real wor
 - Runs work you'd want to open later as jobs: `start_job` opens a T3 Code thread on any machine T3 can reach, with no time limit. In a channel the job also gets a Discord thread under your message, with a status card that updates itself. Replies there land silently unless pclaw decides you should be interrupted. One-off checks on a machine run as background jobs, and their T3 threads settle themselves.
 - Takes hints from a small decision model when one's configured (`decisionUrl`). The hints are advice the front model can ignore, and they're logged so behavior can be measured. See [docs/decision-evals.md](docs/decision-evals.md).
 - Builds simple web pages (an itinerary, a comparison, a checklist) from one standard template and publishes them privately at `<dashboard>/pages/<slug>/`.
-- Sees images you send it.
+- Sees images you send it, and hears voice memos, transcribed by a local speech model (`speechUrl`). Originals are kept in `~/.pclaw/voice`.
 
 ## Setup
 
@@ -78,6 +78,7 @@ To try it without Discord, `pnpm chat` opens a conversation in the terminal. It 
 | `jobPollSeconds` | | `15` |
 | `jobProgressSeconds` | | `45` |
 | `decisionUrl` | | unset (no hints; the front model decides alone) |
+| `speechUrl` | | unset (voice memos can't be heard) |
 | `decisionHoldout` | | `0.2` (share of decisions logged but not shown) |
 | `dashboardPort` | `PCLAW_DASHBOARD_PORT` | `7421` |
 | `pagesUrl` | | the dashboard's `/pages` |
