@@ -27,3 +27,7 @@ Scores move by about 2 from noise alone at two passes. The two round 3 failures 
 - A voice memo's machine check still sometimes runs as a full job (1/10 in the last count). Not tuned, rounds ran out.
 - The send and post line in `voice.md` states a fact about pclaw, not this model. If email or posting is ever added, it goes stale.
 - Replies still use em dashes and curly quotes, where `voice.md`'s examples use " - ". Not tuned.
+
+## Final check on the fixed evals
+
+Three passes, after the shared-notes bug and two eval cases were fixed: 51/51 on cases, 24/24 on holdout, voice 4.9/5, median 3.2s. Open: "thanks!" still often gets "you're welcome!".

@@ -26,7 +26,7 @@ That's a copy of the source profile with a different model, and no code changes.
 - `evals/cases.json`: what tuning works against.
 - `evals/holdout.json`: never read these while tuning. They catch fixes that only work on the cases.
 
-Results land in `~/.pclaw/evals/runs/<profile>/`. A run is two passes because a single reply proves little.
+Results land in `~/.pclaw/evals/runs/<profile>/`. A run is two passes because a single reply proves little, and scores still drift about 2 points on noise, so use `--runs 3` to compare profiles. Every case starts from the same notes. If a result looks surprising, suspect the eval as well as the model.
 
 ## The tuning loop
 
