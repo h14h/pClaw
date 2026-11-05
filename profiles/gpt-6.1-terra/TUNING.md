@@ -31,3 +31,5 @@ Scores move by about 2 from noise alone at two passes. The two round 3 failures 
 ## Final check on the fixed evals
 
 Three passes, after the shared-notes bug and two eval cases were fixed: 51/51 on cases, 24/24 on holdout, voice 4.9/5, median 3.2s. Open: "thanks!" still often gets "you're welcome!".
+
+The limit on sending moved to the shared `front.md`, since it describes pclaw, not this model. On the slimmer prompt: 51/51 on cases and 24/24 on holdout once a check for a curly apostrophe was fixed, voice 4.8/5, median 3.2s. It now sometimes drops "sound right?".

@@ -202,7 +202,7 @@
 			],
 			"reply": "text",
 			"match": [
-				"\\?|can't|cannot|from you"
+				"\\?|can['’]t|cannot|from you"
 			]
 		}
 	},
