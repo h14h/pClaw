@@ -2,7 +2,9 @@
 	"deferredTools": [
 		"t3_*"
 	],
-	"toolDescriptions": {},
+	"toolDescriptions": {
+		"react": "Put one emoji reaction on their message: the one you're answering, or, when you're relaying a worker's report, the message that asked for the job. Pick the literal emoji when there is one (🍜 for ramen, 🖥️ for a computer), ✅ or 🎉 when a job is done and the news is good, something warmer for hard news, and never ✅ on bad news. A reaction can be the whole reply. For \"thanks\", \"cool\", or \"ok sounds good\" with nothing else in the message, react, and then your final message must be exactly NO_REPLY: no \"you're welcome!\", no \"sounds good.\" It replaces any reaction you put there before; pass \"none\" to clear it."
+	},
 	"thinkingLevel": "low",
 	"provider": "openai-codex",
 	"model": "gpt-6.1-terra",
