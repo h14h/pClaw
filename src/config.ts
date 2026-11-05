@@ -91,8 +91,10 @@ export type Config = {
 	jobProgressSeconds: number;
 	/** T3 model for jobs unless the front model picks another. */
 	jobModel: string;
-	/** A channel for one always-current message listing every job. Unset: no board. */
+	/** A channel for one always-current message listing every job. It's for reading only: pclaw never answers there. */
 	discordBoardChannel?: string;
+	/** For test instances: never mention the owner or add them to a thread. */
+	discordQuiet?: boolean;
 	/** A decision model's `/v1/decisions` server. Unset: no hints, and the front model decides alone. */
 	decisionUrl?: string;
 	/** A speech-to-text server (deploy/speech-server.py). Unset: voice memos can't be heard. */

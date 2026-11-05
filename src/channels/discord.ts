@@ -54,6 +54,12 @@ const JOB_LABELS: Record<JobState, string> = {
 
 const unix = (ms: number) => Math.floor(ms / 1000);
 
+/** Whether pclaw answers in a channel. The board never counts, so nothing there can pull the owner's attention. */
+export function serves(channelId: string, listed: Set<string>, category: string | undefined, board: string | undefined): boolean {
+	if (channelId === board) return false;
+	return listed.has(channelId) || category?.toLowerCase() === PROJECTS_CATEGORY;
+}
+
 /**
  * Where to show typing, so that no activity means nothing is happening: the thread of anything running, or, with no
  * thread (a DM), the conversation it started in.
@@ -189,9 +195,9 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 
 	/** Whether pclaw answers in this channel: it's on the list, or it sits in the Projects category. */
 	function served(channelId: string): boolean {
-		if (channels.has(channelId)) return true;
 		const channel = client.channels.cache.get(channelId);
-		return channel !== undefined && "parent" in channel && channel.parent?.name.toLowerCase() === PROJECTS_CATEGORY;
+		const category = channel !== undefined && "parent" in channel ? channel.parent?.name : undefined;
+		return serves(channelId, channels, category, config.discordBoardChannel);
 	}
 
 	async function target(addr: string): Promise<SendableChannels | undefined> {
@@ -211,7 +217,7 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 				// About a job: silent unless the front model asked to notify, and then only the first message does.
 				const mode = jobs.delivery(addr, text);
 				for (const [index, chunk] of splitMessage(text).entries()) {
-					const ping = mode === "ping" && index === 0;
+					const ping = mode === "ping" && index === 0 && config.discordQuiet !== true;
 					const message = await channel.send({
 						content: ping ? `<@${ownerId}> ${chunk}`.slice(0, MAX_MESSAGE) : chunk,
 						...(mode === "silent" || (mode === "ping" && !ping) ? { flags: MessageFlags.SuppressNotifications } : {}),
@@ -391,7 +397,7 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 			}
 			if (thread === undefined) return undefined;
 			const card = await thread.send({ content: jobCard(job), components: cardControls(job), flags: MessageFlags.SuppressNotifications });
-			if (ownerId !== undefined) await thread.members.add(ownerId).catch((error: unknown) => console.error("[pclaw] couldn't add the owner to a job thread", error));
+			if (ownerId !== undefined && config.discordQuiet !== true) await thread.members.add(ownerId).catch((error: unknown) => console.error("[pclaw] couldn't add the owner to a job thread", error));
 			return { discordThreadId: thread.id, cardMessageId: card.id };
 		},
 		async card(job) {
@@ -409,12 +415,10 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 			if (channel === null || !channel.isSendable() || !("messages" in channel)) return;
 			const content = jobBoard(all);
 			const existing = jobs.store.boardMessageId === undefined ? undefined : await channel.messages.fetch(jobs.store.boardMessageId).catch(() => undefined);
-			if (existing !== undefined) await existing.edit(content);
-			else {
-				const board = await channel.send({ content, flags: MessageFlags.SuppressNotifications });
-				jobs.store.boardMessageId = board.id;
-				await board.pin().catch((error: unknown) => console.error("[pclaw] couldn't pin the board", error));
-			}
+			// It's only ever read on purpose: nothing here may mention anyone or leave a notice.
+			const allowedMentions = { parse: [] };
+			if (existing !== undefined) await existing.edit({ content, allowedMentions });
+			else jobs.store.boardMessageId = (await channel.send({ content, allowedMentions, flags: MessageFlags.SuppressNotifications })).id;
 		},
 		async conversation(job) {
 			const thread = await threadOf(job);

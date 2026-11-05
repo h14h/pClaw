@@ -10,7 +10,7 @@ import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@ear
 import { LiveDoc } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { openAgent } from "./agent.ts";
-import { jobBoard, jobCard, typingTargets } from "./channels/discord.ts";
+import { jobBoard, jobCard, serves, typingTargets } from "./channels/discord.ts";
 import { type Config, defaults } from "./config.ts";
 import type { WorkerItem } from "./dashboard/types.ts";
 import { type Answers, armOf, decisionClient, messageGuidance, messageQuestions, parseTemplates, readTurn, turnGuidance } from "./decisions.ts";
@@ -526,6 +526,15 @@ test("typing shows wherever work is running, so silence means nothing is", () =>
 	const worker = { origin: channel, state: "working" as const, discordThreadId: "9", worker: { name: "a", conversationId: "1" as never } };
 	assert.deepEqual(typingTargets([{ address: channel, workers: [{ status: "working" }] }], [worker]), ["discord:thread:9"], "the thread, not the channel too");
 	assert.deepEqual(typingTargets([{ address: channel, workers: [{ status: "working" }] }], []), [channel], "with no thread, the channel");
+});
+
+test("the board channel is never served, whatever else says so", () => {
+	const listed = new Set(["board", "span"]);
+	assert.equal(serves("span", listed, undefined, "board"), true);
+	assert.equal(serves("board", listed, undefined, "board"), false);
+	assert.equal(serves("board", listed, "Projects", "board"), false);
+	assert.equal(serves("game", listed, "Projects", "board"), true);
+	assert.equal(serves("other", listed, "Text Channels", "board"), false);
 });
 
 test("activity for updates leaves out secrets", () => {

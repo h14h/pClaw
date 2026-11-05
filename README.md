@@ -73,7 +73,7 @@ To try it without Discord, `pnpm chat` opens a conversation in the terminal. It 
 | `summarizeAtTokens` | | `60000` |
 | `keepRecentTokens` | | `16000` |
 | `discordChannels` | | `[]` (DMs only; text channels in a category named Projects count too) |
-| `discordBoardChannel` | | unset (a channel for one always-current list of jobs) |
+| `discordBoardChannel` | | unset (a channel for one always-current list of jobs; pclaw never answers or mentions anyone there) |
 | `jobModel` | | `claude-opus-5-5` |
 | `jobPollSeconds` | | `15` |
 | `jobProgressSeconds` | | `45` |

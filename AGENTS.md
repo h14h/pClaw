@@ -9,6 +9,8 @@
 - The front model (talks to the person) stays fast and tool-light. Real work goes through `delegate` to workers (pi subprocesses, `src/extensions/workers.ts`).
 - Real work on code or a named machine runs as a job: a T3 thread with a Discord thread and status card (`src/extensions/jobs.ts`). Job state is in `~/.pclaw/jobs.json`.
 - No activity should mean nothing is happening. In a channel, delegated work (a worker or a job) gets a thread that works like a session: a card, typing, updates, the result, and follow-ups all stay in it. A DM stays like texting: typing, then the answer.
+- The board channel is for reading on purpose. Nothing may pull the owner's attention there: no mentions, no threads, no replies, no pins.
+- Live tests of Discord behavior use a separate `PCLAW_HOME` with `discordQuiet: true`, so they can't ping the owner.
 - The decision model only supplies hints (`src/decisions.ts`, `src/prompts/guidance.md`); it never decides what pclaw does. Before changing its questions, run the replay, and log what changed in `docs/decision-evals.md`.
 - Agent tests use pi-ai's faux provider and a fake pi script (`src/agent.test.ts`). Don't spend real model calls in tests.
 - The dashboard UI is `web/` (Vite + React + Tailwind + TanStack Router + Query). Its API shapes live in `src/dashboard/types.ts`; the web app imports them with `import type`. Keep it quiet and dense: Henry asked for no extraneous UI. After UI changes, `pnpm --filter pclaw-web build` makes them live; no restart needed.
