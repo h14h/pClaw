@@ -68,5 +68,11 @@ This sounds like they wanted to hear sooner. Save what you learned with `remembe
 ## caution
 This may be hard to undo. It needs their explicit yes, whatever else this says.
 
+## progress.milestone
+This looks like a real step forward.
+
+## progress.routine
+This looks like more of the same.
+
 ## follow_up.wait
 This may not be a good moment for this follow-up. Decide whether it's still worth sending now.

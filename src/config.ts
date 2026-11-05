@@ -85,8 +85,8 @@ export type Config = {
 	t3PollSeconds: number;
 	/** How often jobs are checked in T3. */
 	jobPollSeconds: number;
-	/** How often a running job's status card can refresh. */
-	jobCardMinutes: number;
+	/** How often a running job's card can refresh and its thread can get an update. */
+	jobProgressSeconds: number;
 	/** T3 model for jobs unless the front model picks another. */
 	jobModel: string;
 	/** A channel for one always-current message listing every job. Unset: no board. */
@@ -123,8 +123,8 @@ export const defaults: Config = {
 	t3Url: "http://127.0.0.1:3773",
 	t3AllowSend: false,
 	t3PollSeconds: 60,
-	jobPollSeconds: 30,
-	jobCardMinutes: 3,
+	jobPollSeconds: 15,
+	jobProgressSeconds: 45,
 	jobModel: "claude-opus-5-5",
 	decisionHoldout: 0.2,
 };

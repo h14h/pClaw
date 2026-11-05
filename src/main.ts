@@ -147,7 +147,7 @@ async function start(): Promise<void> {
 	const discord = await startDiscord(agent, config, context);
 	const dashboard = await startDashboard({ agent, config, models, notes, workers, port: config.dashboardPort }, context);
 	const contextKeeper = startContextKeeper(agent, config.summarizeAtTokens, context);
-	const jobKeeper = agent.jobs.startKeeper(context, config.jobPollSeconds * 1000, config.jobCardMinutes * 60_000);
+	const jobKeeper = agent.jobs.startKeeper(context, config.jobPollSeconds * 1000, config.jobProgressSeconds * 1000);
 	console.log(`[pclaw] jobs on, decision model ${config.decisionUrl ?? "off"}`);
 
 	let stopping = false;

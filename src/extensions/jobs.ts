@@ -4,21 +4,26 @@ import { hostname } from "node:os";
 import type { Context } from "@earendil-works/chord";
 import { Type } from "@earendil-works/pi-ai";
 import type { Models } from "@earendil-works/pi-ai/models";
-import { type Conversation, defineExtension, defineTool, type Harness } from "@earendil-works/pi-durable";
+import { type Conversation, type ConversationId, defineExtension, defineTool, type Harness } from "@earendil-works/pi-durable";
 import { type Config, writePrivate } from "../config.ts";
-import { type Decided, type Decisions, messageGuidance, messageQuestions, pick, projectQuestion, readTurn, TURN_TAIL, turnGuidance, turnQuestions } from "../decisions.ts";
+import type { WorkerItem } from "../dashboard/types.ts";
+import { type Decided, type Decisions, messageGuidance, messageQuestions, pick, progressGuidance, progressQuestions, projectQuestion, readTurn, TURN_TAIL, turnGuidance, turnQuestions, yes } from "../decisions.ts";
 import { Routes } from "../routes.ts";
 import { pairedClient } from "../t3-client.ts";
 import { stamp } from "../time.ts";
 import { currentAsk, isEmoji, setReaction, WORKING } from "./reactions.ts";
+import { Workers } from "./workers.ts";
 
 /**
  * Jobs: real work done in T3 Code threads, on any machine T3 can reach. The person can open a job's thread from any T3
  * client; in a Discord channel it also gets a thread under their message, with a status card that's edited in place.
+ * Workers are tracked here too when they run in a channel, so everything running in one is visible the same way: no
+ * activity means nothing is happening. DMs stay like texting, with typing and then the answer.
  *
- * A keeper polls each job. When a T3 turn ends it refreshes the card (edits don't notify anyone), asks the decision
- * model for a read, and wakes the conversation with a `<job-update>`. What happens next is the front model's call:
- * replies in a job thread land silently unless it calls `ping_owner` first.
+ * A keeper polls each job. While it runs, new activity refreshes the card, and a short update goes in the thread when
+ * something's worth reading. When a T3 turn ends the keeper asks the decision model for a read and wakes the
+ * conversation with a `<job-update>`. What happens next is the front model's call: replies in a job thread land
+ * silently unless it calls `ping_owner` first.
  */
 
 export type JobState = "working" | "needs_you" | "idle" | "blocked" | "done" | "failed" | "stopped" | "closed";
@@ -33,8 +38,10 @@ export type Job = {
 	project?: string;
 	model?: string;
 	link?: string;
-	/** A one-off with nothing to open later: no Discord thread, and its T3 thread settles itself. */
+	/** A one-off with nothing to open later: its T3 thread settles itself. */
 	background?: boolean;
+	/** A pclaw worker rather than a T3 thread. `threadId` holds its session id. */
+	worker?: { name: string; conversationId: ConversationId };
 	/** The conversation the job started in, by address, and the message that asked for it. */
 	origin: string;
 	ask?: string;
@@ -52,6 +59,8 @@ export type Job = {
 	/** The agent's last words so far: a mid-turn refresh can read them before the turn ends. */
 	lastMessage?: string;
 	cardRefreshedAt?: number;
+	/** When an update last went in the thread. */
+	lastNoteAt?: number;
 	/** What the owner has actually been sent about this job. */
 	told: string[];
 	pingNext?: boolean;
@@ -149,6 +158,8 @@ export type JobSurface = {
 	/** Make the job's thread and card. Returns nothing when the origin can't have a thread (a DM). */
 	open(job: Job): Promise<Pick<Job, "discordThreadId" | "cardMessageId"> | undefined>;
 	card(job: Job): Promise<void>;
+	/** A silent update in the job's thread. */
+	note(job: Job, text: string): Promise<void>;
 	board(jobs: Job[]): Promise<void>;
 	/** The conversation updates go to: the job's thread if it has one. */
 	conversation(job: Job): Promise<Conversation>;
@@ -158,6 +169,8 @@ export type JobSurface = {
 
 /** Public, and registered as a universal link for /threads/*, so it reaches the app without the tailnet. */
 const HOSTED_T3 = "https://app.t3.codes";
+/** The first update comes sooner than the rest: that's when silence is most confusing. */
+const FIRST_UPDATE_MS = 20_000;
 const PROJECTS_MS = 10 * 60_000;
 const CLIENT_MS = 10 * 60_000;
 const READ_PAGE = 100;
@@ -312,6 +325,30 @@ const SUMMARY_PROMPT =
 	'needed. "done" means the job it was given is complete. "line" is one plain sentence of at most 140 characters about ' +
 	"where things stand, written for someone glancing at their phone. No preamble and no jargon.";
 
+const PROGRESS_PROMPT =
+	"You watch an agent working a job, for someone following along in a chat thread on their phone. Reply with JSON only: " +
+	'{"line": "...", "post": true | false}. "line" is one plain sentence of at most 140 characters on what it just did or ' +
+	"found. Be concrete about the subject, and leave out commands, file paths, and tool names. Never just say it's still " +
+	'working. "post" is true when someone following along would want to read this: something found, a stage finished, a ' +
+	"change of plan, or a problem. It's false when it's more of the same. Don't repeat what's already been said. Never " +
+	"include a password, token, or key.";
+
+const SECRETS = /^.*(password|passwd|token|secret|api[_-]?key|authorization).*$/gim;
+
+/** What a worker did, as plain lines for the model that writes updates. */
+export function describeActivity(items: WorkerItem[]): string {
+	return items
+		.flatMap((item) => {
+			if (item.kind === "text") return [`said: ${item.text.slice(0, 600)}`];
+			if (item.kind !== "tool") return [];
+			const command = (item.args as { command?: unknown } | undefined)?.command;
+			const result = (item.result ?? "").replace(SECRETS, "[hidden]").slice(0, 300);
+			return [`${item.isError === true ? "failed" : "ran"} ${typeof command === "string" ? command.replace(SECRETS, "[hidden]").slice(0, 200) : item.name}\nresult: ${result}`];
+		})
+		.join("\n")
+		.slice(-3_000);
+}
+
 export type JobsOptions = {
 	store: JobStore;
 	backend: JobBackend;
@@ -319,12 +356,14 @@ export type JobsOptions = {
 	models: Models;
 	config: Config;
 	harness: { current?: Harness };
+	/** A worker's transcript so far. */
+	workerItems?: (sessionId: string) => WorkerItem[];
 };
 
 export type Jobs = ReturnType<typeof createJobs>;
 
 export function createJobs(options: JobsOptions) {
-	const { store, backend, decisions, models, config, harness } = options;
+	const { store, backend, decisions, models, config, harness, workerItems = () => [] } = options;
 	const surface: { current?: JobSurface } = {};
 	const text = (value: string) => ({ output: [{ type: "text" as const, text: value }] });
 
@@ -429,21 +468,127 @@ export function createJobs(options: JobsOptions) {
 		);
 	}
 
-	/** Mid-turn: keep the card honest, with no message and no wakeup. */
+	/** Ask the front model for a line on new activity, and whether it's worth a message. */
+	async function progressLine(job: Job, activity: string, hint: string | undefined): Promise<{ line?: string; post: boolean }> {
+		try {
+			const model = models.getModel(config.provider, config.model);
+			if (model === undefined) throw new Error(`unknown model ${config.provider}/${config.model}`);
+			const minutes = job.lastNoteAt === undefined ? undefined : Math.round((Date.now() - job.lastNoteAt) / 60_000);
+			const quiet =
+				minutes === undefined
+					? "Nothing has been posted yet, so post what it has started on."
+					: `Last update: ${minutes} minutes ago.${minutes >= 2 ? " That's a while, so post unless there's truly nothing new." : ""}`;
+			const content = [`Job: ${job.title}`, `Already said: ${job.told.join(" / ") || "nothing"}`, quiet, ...(hint === undefined ? [] : [hint]), `Newest activity:\n${activity}`].join("\n\n");
+			const reply = await models.completeSimple(model, { systemPrompt: PROGRESS_PROMPT, messages: [{ role: "user", content, timestamp: Date.now() }] }, { reasoning: "low", signal: AbortSignal.timeout(30_000) });
+			const raw = reply.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
+			const parsed = JSON.parse(/\{[\s\S]*\}/.exec(raw)?.[0] ?? "{}") as { line?: string; post?: boolean };
+			const line = parsed.line?.trim().slice(0, 200);
+			return { ...(line ? { line } : {}), post: parsed.post === true && Boolean(line) };
+		} catch (error) {
+			console.error(`[pclaw] job progress ${job.id}: ${error instanceof Error ? error.message : error}`);
+			return { post: false };
+		}
+	}
+
+	/** New activity while it runs: always refresh the card, and post in the thread when it's worth reading. */
+	async function noteProgress(job: Job, activity: string): Promise<void> {
+		const id = `progress:${job.id}:${job.position}`;
+		const decided = await decisions.ask({ id, site: "progress", job: job.id, timeoutMs: 3_000, state: { recent_activity: activity.slice(-1_500) }, questions: progressQuestions });
+		const hint = decided?.arm === "guided" ? progressGuidance(decided.answers) : undefined;
+		const { line, post } = await progressLine(job, activity, hint);
+		job.cardRefreshedAt = Date.now();
+		if (line !== undefined) job.status = line;
+		if (post && line !== undefined && surface.current !== undefined && job.discordThreadId !== undefined) {
+			await surface.current.note(job, line);
+			job.lastNoteAt = Date.now();
+			job.told = [...job.told, line].slice(-5);
+		}
+		store.put(job);
+		await refreshCard(job);
+		decisions.record({ type: "progress", id, job: job.id, arm: decided?.arm ?? "none", milestone: decided === undefined ? undefined : yes(decided.answers.milestone), posted: post });
+	}
+
+	/** Mid-turn in T3: keep the card honest, with no wakeup. */
 	async function refreshRunning(job: Job): Promise<void> {
 		const { items, position } = await backend.read(job.threadId, job.environmentId, job.position ?? 0);
 		const { lastMessage } = readItems(items);
 		job.position = position;
 		job.cardRefreshedAt = Date.now();
-		if (lastMessage !== undefined) {
-			job.lastMessage = tail(lastMessage, 6_000);
-			job.status = (await summarize(job, lastMessage)).line;
+		if (lastMessage === undefined) {
+			store.put(job);
+			return;
 		}
+		job.lastMessage = tail(lastMessage, 6_000);
+		await noteProgress(job, tail(lastMessage, 3_000));
+	}
+
+	/** A worker in a channel. The worker's own record says whether it's running, so a restart can't strand this. */
+	async function checkWorker(job: Job, refreshMs: number, context: Context): Promise<void> {
+		const { name, conversationId } = job.worker!;
+		const worker = (await harness.current?.snapshot(Workers, conversationId, context))?.workers[name];
+		if (worker === undefined) return;
+		if (worker.status !== "working") {
+			if (job.state === "working") {
+				job.state = worker.status === "failed" ? "failed" : worker.status === "stopped" ? "stopped" : "done";
+				const where = job.origin.startsWith("discord:channel:") ? " The answer's in the channel." : "";
+				job.status = job.state === "done" ? `Finished.${where}` : job.state === "failed" ? `It failed.${where}` : "Stopped.";
+				store.put(job);
+				await surface.current?.note(job, job.status).catch((error: unknown) => console.error(`[pclaw] job note ${job.id}`, error));
+				await refreshCard(job);
+			} else if (Date.now() - job.updatedAt > 24 * 60 * 60_000) {
+				job.state = "closed";
+				store.put(job);
+				await refreshCard(job);
+			}
+			return;
+		}
+		if (job.state !== "working") {
+			job.state = "working";
+			job.status = "Back at it.";
+			store.put(job);
+			await refreshCard(job);
+		}
+		if (Date.now() - (job.cardRefreshedAt ?? job.startedAt) < Math.min(refreshMs, job.lastNoteAt === undefined ? FIRST_UPDATE_MS : refreshMs)) return;
+		const items = workerItems(job.threadId);
+		const fresh = items.slice(job.position ?? 0);
+		const activity = describeActivity(fresh);
+		if (activity === "") return;
+		job.position = items.length;
+		await noteProgress(job, activity);
+	}
+
+	/** Show a worker that started in a channel. In a DM there's nothing to do: typing covers it. */
+	async function trackWorker(worker: { name: string; brief: string; sessionId: string; conversationId: ConversationId; ask?: string }, context: Context): Promise<void> {
+		const routes = (await harness.current?.snapshot(Routes, context))?.conversations ?? {};
+		const origin = Object.keys(routes).find((address) => routes[address] === worker.conversationId);
+		if (origin === undefined || !/^discord:(channel|thread):/.test(origin)) return;
+		const now = Date.now();
+		const job: Job = {
+			id: `${slug(worker.name)}-${randomBytes(2).toString("hex")}`,
+			title: worker.name.replace(/[-_]+/g, " "),
+			brief: worker.brief,
+			threadId: worker.sessionId,
+			worker: { name: worker.name, conversationId: worker.conversationId },
+			machine: hostname().replace(/\..*$/, ""),
+			model: config.workerModel,
+			origin,
+			...(worker.ask === undefined ? {} : { ask: worker.ask }),
+			state: "working",
+			status: "Starting up.",
+			told: [],
+			position: workerItems(worker.sessionId).length,
+			startedAt: now,
+			updatedAt: now,
+		};
 		store.put(job);
-		await refreshCard(job);
+		const placed = await surface.current?.open(job);
+		if (placed !== undefined) store.put(Object.assign(job, placed));
+		decisions.record({ type: "job", event: "start", job: job.id, machine: job.machine, worker: true });
+		console.log(`[pclaw] worker ${worker.name} showing in ${job.discordThreadId ?? "no thread"}`);
 	}
 
 	async function check(job: Job, refreshMs: number, context: Context): Promise<void> {
+		if (job.worker !== undefined) return checkWorker(job, refreshMs, context);
 		const view = await backend.peek(job.threadId, job.environmentId);
 		if (view.settled && job.state !== "working") {
 			job.state = "closed";
@@ -467,7 +612,7 @@ export function createJobs(options: JobsOptions) {
 			await refreshCard(job);
 			await setAskReaction(job, job.emoji ?? WORKING, context);
 		}
-		if (view.itemCount !== job.itemCount && Date.now() - (job.cardRefreshedAt ?? job.startedAt) >= refreshMs) {
+		if (view.itemCount !== job.itemCount && Date.now() - (job.cardRefreshedAt ?? job.startedAt) >= Math.min(refreshMs, job.lastNoteAt === undefined ? FIRST_UPDATE_MS : refreshMs)) {
 			job.itemCount = view.itemCount;
 			await refreshRunning(job);
 		}
@@ -550,6 +695,11 @@ export function createJobs(options: JobsOptions) {
 
 	async function stop(id: string, context: Context): Promise<void> {
 		const job = mustGet(id);
+		if (job.worker !== undefined) {
+			const run = (await harness.current?.snapshot(Workers, job.worker.conversationId, context))?.workers[job.worker.name]?.run;
+			if (run !== undefined) await harness.current?.abortTask(run, context);
+			return;
+		}
 		await backend.interrupt(job.threadId, job.environmentId);
 		job.state = "stopped";
 		job.status = "Stopped.";
@@ -568,7 +718,7 @@ export function createJobs(options: JobsOptions) {
 			defineTool({
 				name: "start_job",
 				description:
-					"Start work in a T3 Code thread, on any machine, with no time limit. For work they'd want to open and steer: changing code, building something, long runs. In a Discord channel it gets a thread under their message with a status card. For a one-off check on a machine, pass background: true: no Discord thread, and the T3 thread settles itself. The agent can't see this conversation, so the brief must stand alone. Pass thread_id to keep an eye on a T3 thread that already exists.",
+					"Start work in a T3 Code thread, on any machine, with no time limit. For work they'd want to open and steer: changing code, building something, long runs. In a Discord channel it gets a thread under their message with a status card. For a one-off check on a machine, pass background: true, and the T3 thread settles itself. The agent can't see this conversation, so the brief must stand alone. Pass thread_id to keep an eye on a T3 thread that already exists.",
 				parameters: Type.Object({
 					title: Type.String({ description: "Short name, shown on the thread and the card." }),
 					brief: Type.Optional(Type.String({ description: "Self-contained brief: the goal and why, relevant facts, constraints, and what done looks like. Required unless thread_id is given." })),
@@ -644,7 +794,7 @@ export function createJobs(options: JobsOptions) {
 					}
 					store.put(job);
 					if (ask !== undefined) await api.commit((tx) => setReaction(tx, api.conversationId, ask, emoji ?? WORKING), context);
-					const placed = args.background === true ? undefined : await surface.current?.open(job).catch((error: unknown) => {
+					const placed = await surface.current?.open(job).catch((error: unknown) => {
 						console.error(`[pclaw] couldn't open a Discord thread for ${job.id}`, error);
 						return undefined;
 					});
@@ -683,6 +833,7 @@ export function createJobs(options: JobsOptions) {
 				execute: async ({ job: id, message }, _api, context) => {
 					if (!config.t3AllowSend) throw new Error("Sending into T3 threads is off (t3AllowSend).");
 					const job = mustGet(id);
+					if (job.worker !== undefined) throw new Error(`${job.title} is a worker, and it can't take messages while it runs. Once it reports, message_worker reaches it from the channel it started in.`);
 					await backend.send(job.threadId, job.environmentId, message);
 					job.state = "working";
 					job.status = "Picked up a new message.";
@@ -733,5 +884,5 @@ export function createJobs(options: JobsOptions) {
 		],
 	});
 
-	return { extension, store, surface, decisions, guideMessage, delivery, stop, startKeeper, backend };
+	return { extension, store, surface, decisions, guideMessage, delivery, stop, startKeeper, trackWorker, backend };
 }

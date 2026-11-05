@@ -15,9 +15,9 @@ It's early. Today it can talk, remember, follow up on its own, and hand real wor
 - Schedules its own follow-ups ("how did the interview go?") and reminders you ask for. They survive restarts.
 - Answers one-lookup questions (hours, a time, a price) itself with a quick web search, in a few seconds.
 - Hands research, comparisons, and anything with files or many steps to a worker, then tells you what came back. Quick jobs run with less reasoning than deep ones.
-- Shows it's typing for as long as a worker or background job is running.
+- Shows what's running. In a DM that's a typing indicator until the answer lands. In a channel, anything running gets a thread under your message, with a card, typing while it works, and a short update whenever something interesting happens.
 - Uses reactions as status: your message gets a badge while a worker is on it (⏳ or a topical emoji) and a closing one when the report is back (✅, 🎉, or something that fits bad news; ⚠️ if the job failed). It can answer "thanks" with just a reaction, and your reactions on its messages reach it as input.
-- Runs work you'd want to open later as jobs: `start_job` opens a T3 Code thread on any machine T3 can reach, with no time limit. In a channel the job also gets a Discord thread under your message, with a status card that updates itself. Replies there land silently unless pclaw decides you should be interrupted. One-off checks on a machine run as background jobs, with no Discord thread, and their T3 threads settle themselves.
+- Runs work you'd want to open later as jobs: `start_job` opens a T3 Code thread on any machine T3 can reach, with no time limit. In a channel the job also gets a Discord thread under your message, with a status card that updates itself. Replies there land silently unless pclaw decides you should be interrupted. One-off checks on a machine run as background jobs, and their T3 threads settle themselves.
 - Takes hints from a small decision model when one's configured (`decisionUrl`). The hints are advice the front model can ignore, and they're logged so behavior can be measured. See [docs/decision-evals.md](docs/decision-evals.md).
 - Builds simple web pages (an itinerary, a comparison, a checklist) from one standard template and publishes them privately at `<dashboard>/pages/<slug>/`.
 - Sees images you send it.
@@ -75,8 +75,8 @@ To try it without Discord, `pnpm chat` opens a conversation in the terminal. It 
 | `discordChannels` | | `[]` (DMs only; text channels in a category named Projects count too) |
 | `discordBoardChannel` | | unset (a channel for one always-current list of jobs) |
 | `jobModel` | | `claude-opus-5-5` |
-| `jobPollSeconds` | | `30` |
-| `jobCardMinutes` | | `3` |
+| `jobPollSeconds` | | `15` |
+| `jobProgressSeconds` | | `45` |
 | `decisionUrl` | | unset (no hints; the front model decides alone) |
 | `decisionHoldout` | | `0.2` (share of decisions logged but not shown) |
 | `dashboardPort` | `PCLAW_DASHBOARD_PORT` | `7421` |

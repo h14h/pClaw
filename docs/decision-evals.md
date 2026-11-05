@@ -26,6 +26,7 @@ Each one names the number that would change our minds. The targets are guesses t
 | H4 | Hints change behavior | Quiet, note, and ping rates, hinted vs control | A visible gap | None |
 | H5 | d1 reads turns correctly | Agreement with the front model on the job's state, and accuracy on labeled turns | 80% or more | Replay: 75% on state, tuned on the same cases |
 | H6 | Background T3 jobs can replace workers | Runs, failures, minutes to a first answer, and how T3 feels with the extra settled threads | Failures and speed no worse than workers | 75 timed worker runs: median 3 minutes, five hit the 30-minute cap |
+| H7 | No activity means nothing's happening | Status checks on running work in channels, and how often new activity becomes an update | Fewer status checks, with updates on about a third of checks or less | Nov 5: "on it" in a channel, then nothing for minutes |
 
 H6 decides whether workers stay. Keep them until there's about a month of both, and until it's clear what T3 being down would cost. Claude usage isn't in the log, so check it by hand.
 
@@ -79,3 +80,4 @@ The first replay set is 36 cases from Nov 2: 19 real turns, plus 17 copies with 
 | 2026-11-04 | Small factual questions on the last 1,200 characters, combined in `readTurn` with whether the owner is driving and whether the message repeats | d1 is built for simple reads | State 75%, surface 92%, pings caught 6 of 9 with none wrong (same cases as tuning) |
 | 2026-11-04 | Added `fresh_check`, and tightened `job_size` so one-off checks and research stop reading as jobs | pclaw answered a question about pc1 from its notes, then a version check became a whole T3 thread | 25 sample messages: `fresh_check` 22, with the 3 misses on build work where it's ignored; job size 22, with the 3 misses simple questions read as research, now behind a higher threshold |
 | 2026-11-04 | Kept workers, and started logging their runs next to jobs | Whether background T3 jobs can replace them should come from usage, not reasoning | Waiting on data |
+| 2026-11-05 | Everything running in a channel gets a thread, with updates written by the front model and d1 as a hint (`milestone`) | The owner couldn't tell "nothing is happening" from "something is happening out of sight" | d1 on 62 windows of real tool activity: high on publishing and ledger status, but noisy. Dropped a `problem` question that fired on harmless commands |

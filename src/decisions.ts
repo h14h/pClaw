@@ -18,7 +18,7 @@ export type Question =
 export type Questions = Record<string, Question>;
 export type Answer = { noul?: number; probability?: number; choice?: string; confidence?: number; probabilities?: Record<string, number> };
 export type Answers = Record<string, Answer>;
-export type Site = "job-turn" | "message" | "project" | "follow-up";
+export type Site = "job-turn" | "message" | "project" | "follow-up" | "progress";
 export type Arm = "guided" | "control";
 export type Decided = { id: string; site: Site; arm: Arm; answers: Answers };
 
@@ -260,6 +260,18 @@ export const projectQuestion = (projects: { title: string; machine: string }[]):
 		},
 	},
 });
+
+// Decision set: a running job did something new.
+
+export const progressQuestions: Questions = {
+	milestone: {
+		type: "noul",
+		instructions: "Does this activity show something a person following along would want to hear: a finding, a stage finished, a change of direction, or something that worked? Answer no for routine listing, searching, or reading that hasn't turned anything up yet.",
+	},
+};
+
+export const progressGuidance = (answers: Answers, templates?: Record<string, string>): string | undefined =>
+	renderGuidance(answers, [yes(answers.milestone) >= 0.5 ? "progress.milestone" : "progress.routine"], {}, templates);
 
 // Decision set: a follow-up came due.
 

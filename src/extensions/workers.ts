@@ -5,7 +5,8 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type } from "@earendil-works/pi-ai";
-import { defineDoc, defineExtension, defineTask, defineTool, type Harness, type TaskId } from "@earendil-works/pi-durable";
+import type { Context } from "@earendil-works/chord";
+import { type ConversationId, defineDoc, defineExtension, defineTask, defineTool, type Harness, type TaskId } from "@earendil-works/pi-durable";
 import type { Config } from "../config.ts";
 import { MUSE, museArgs, musePreamble, museRun, museTranscript } from "../muse.ts";
 import { pairedClient, runT3Turn } from "../t3-client.ts";
@@ -297,7 +298,10 @@ type RunState = { phase: "run" } | { phase: "report"; ok: boolean; output: strin
 /** Logs each finished run, so workers and jobs can be compared (docs/decision-evals.md). */
 export type WorkerLog = (event: { type: "worker"; name: string; depth?: Depth; provider?: string; ok: boolean; ms?: number }) => void;
 
-export function workersExtension(options: WorkerOptions, harness: { current?: Harness }, log?: WorkerLog) {
+/** Told when a new job starts, so a channel can show it. */
+export type WorkerStarted = (worker: { name: string; brief: string; sessionId: string; conversationId: ConversationId; ask?: string }, context: Context) => Promise<void>;
+
+export function workersExtension(options: WorkerOptions, harness: { current?: Harness }, log?: WorkerLog, started?: WorkerStarted) {
 	const Run = defineTask<RunInput, RunState, null>({
 		name: "pclaw.worker-run",
 		version: 1,
@@ -340,14 +344,14 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 					},
 					context,
 				);
-				const started = (await runtime.snapshot(Workers, runtime.conversationId, context))?.workers[task.input.name]?.startedAt;
+				const startedAt = (await runtime.snapshot(Workers, runtime.conversationId, context))?.workers[task.input.name]?.startedAt;
 				log?.({
 					type: "worker",
 					name: task.input.name,
 					...(task.input.depth === undefined ? {} : { depth: task.input.depth }),
 					...(task.input.provider === undefined ? {} : { provider: task.input.provider }),
 					ok,
-					...(started === undefined ? {} : { ms: runtime.now() - started }),
+					...(startedAt === undefined ? {} : { ms: runtime.now() - startedAt }),
 				});
 				await runtime.commit(async (tx) => {
 					const worker = (await tx.doc(Workers, runtime.conversationId)).workers[task.input.name];
@@ -411,7 +415,7 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 				execute: async ({ name, brief, emoji, depth = "quick" }, api, context) => {
 					const ask = await currentAsk(harness.current, api, api.conversationId, context);
 					const badge = emoji !== undefined && isEmoji(emoji.trim()) ? emoji.trim() : WORKING;
-					const started = await api.commit(async (tx) => {
+					const began = await api.commit(async (tx) => {
 						if (ask !== undefined) await setReaction(tx, api.conversationId, ask, badge);
 						const doc = await tx.doc(Workers, api.conversationId);
 						const existing = doc.workers[name];
@@ -435,7 +439,11 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 						doc.workers[name] = { ...job, sessionId, brief, depth, status: "working", run, startedAt: now, updatedAt: now };
 						return true;
 					}, context);
-					if (!started) throw new Error(`There's already a worker named ${name}. Use message_worker, or pick a new name.`);
+					if (!began) throw new Error(`There's already a worker named ${name}. Use message_worker, or pick a new name.`);
+					const sessionId = (await api.snapshot(Workers, api.conversationId, context))?.workers[name]?.sessionId;
+					if (sessionId !== undefined) {
+						await started?.({ name, brief, sessionId, conversationId: api.conversationId, ...(ask === undefined ? {} : { ask }) }, context).catch((error: unknown) => console.error(`[pclaw] couldn't show worker ${name}`, error));
+					}
 					// End the turn here: what was written alongside this call is the reply, with no second request.
 					return { ...text(`${name} is on it.`), control: { terminate: true } };
 				},

@@ -10,12 +10,14 @@ import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@ear
 import { LiveDoc } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { openAgent } from "./agent.ts";
-import { jobBoard, jobCard, workingUnseen } from "./channels/discord.ts";
+import { jobBoard, jobCard, typingTargets } from "./channels/discord.ts";
 import { type Config, defaults } from "./config.ts";
+import type { WorkerItem } from "./dashboard/types.ts";
 import { type Answers, armOf, decisionClient, messageGuidance, messageQuestions, parseTemplates, readTurn, turnGuidance } from "./decisions.ts";
 import { compareLanes, type LogEvent, summarize } from "./decision-report.ts";
 import { deliver } from "./delivery.ts";
-import { type Job, type JobBackend, JobStore, type JobSurface, readItems, type ThreadItem, type ThreadView, turnEnded } from "./extensions/jobs.ts";
+import { describeActivity, type Job, type JobBackend, JobStore, type JobSurface, readItems, type ThreadItem, type ThreadView, turnEnded } from "./extensions/jobs.ts";
+import { Workers } from "./extensions/workers.ts";
 import { Notes } from "./extensions/notes.ts";
 import { readPrompt } from "./prompts.ts";
 
@@ -81,14 +83,16 @@ function fakeBackend() {
 function fakeSurface(conversation: () => Promise<Awaited<ReturnType<JobSurface["conversation"]>>>) {
 	const cards: string[] = [];
 	const shared: string[] = [];
+	const notes: string[] = [];
 	const surface: JobSurface = {
-		open: async () => ({ discordThreadId: "777", cardMessageId: "778" }),
+		open: async (job) => (job.origin.startsWith("discord:dm:") ? undefined : { discordThreadId: "777", cardMessageId: "778" }),
 		card: async (job) => void cards.push(job.state),
+		note: async (_job, text) => void notes.push(text),
 		board: async () => undefined,
 		conversation,
 		share: async (_job, text) => void shared.push(text),
 	};
-	return { surface, cards, shared };
+	return { surface, cards, shared, notes };
 }
 
 function setup(name: string, answers: Answers | undefined, holdout = 0) {
@@ -104,13 +108,13 @@ const lastMessage = (request: ModelContext) => JSON.stringify(request.messages.a
 const summary = (state: string, line: string) => () => fauxAssistantMessage(JSON.stringify({ state, line }));
 const start = (args: Parameters<typeof fauxToolCall>[1]) => fauxAssistantMessage([fauxText("on it"), fauxToolCall("start_job", args)], { stopReason: "toolUse" });
 
-async function open(name: string, parts: ReturnType<typeof setup>, backend: JobBackend, refreshMs = 3_600_000) {
+async function open(name: string, parts: ReturnType<typeof setup>, backend: JobBackend, refreshMs = 3_600_000, address = "discord:channel:42", workerItems?: () => WorkerItem[]) {
 	const agent = await openAgent(
 		await openNodeSqliteStorage(join(dir, `${name}.sqlite`)),
-		{ config, models: parts.models, notes: new Notes(join(dir, `${name}-notes.md`)), decisions: parts.decisions, jobStore: parts.store, jobBackend: backend },
+		{ config, models: parts.models, notes: new Notes(join(dir, `${name}-notes.md`)), decisions: parts.decisions, jobStore: parts.store, jobBackend: backend, ...(workerItems === undefined ? {} : { workerItems }) },
 		context,
 	);
-	const conversation = await agent.conversationFor("discord:channel:42", context);
+	const conversation = await agent.conversationFor(address, context);
 	const replies: string[] = [];
 	const outbox = {
 		async send(text: string) {
@@ -120,7 +124,7 @@ async function open(name: string, parts: ReturnType<typeof setup>, backend: JobB
 		working() {},
 	};
 	const delivery = await deliver(agent.harness, conversation.id, outbox, context);
-	const { surface, cards, shared } = fakeSurface(async () => conversation);
+	const { surface, cards, shared, notes } = fakeSurface(async () => conversation);
 	agent.jobs.surface.current = surface;
 	const keeper = agent.jobs.startKeeper(context, 3_600_000, refreshMs);
 	/** Wait out everything submitted so far. */
@@ -136,7 +140,7 @@ async function open(name: string, parts: ReturnType<typeof setup>, backend: JobB
 		await delivery.stop();
 		await agent.harness.close(context);
 	};
-	return { agent, conversation, replies, cards, shared, keeper, idle, close };
+	return { agent, conversation, replies, cards, shared, notes, keeper, idle, close };
 }
 
 test("a job launches in T3, stays quiet while running, and wakes the model with a hint when a turn ends", async () => {
@@ -228,7 +232,61 @@ test("a machine with no projects can still run a scratch job", async () => {
 	await close();
 });
 
-test("a background job gets no Discord thread, reports where it started, and settles its T3 thread", async () => {
+test("a worker in a channel shows up in a thread, with updates when something's worth reading", async () => {
+	const parts = setup("worker", { milestone: noul(0.8) });
+	const { backend } = fakeBackend();
+	const seen: string[] = [];
+	const update = (line: string, post: boolean) => (request: ModelContext) => {
+		seen.push(lastMessage(request));
+		return fauxAssistantMessage(JSON.stringify({ line, post }));
+	};
+	parts.faux.setResponses([update("Found two stuck sessions.", true), update("Reading more of the same.", false)]);
+	const items: WorkerItem[] = [];
+	const { agent, conversation, notes, cards, keeper, close } = await open("worker", parts, backend, 0, "discord:channel:42", () => items);
+	const setStatus = (status: "working" | "idle") =>
+		conversation.commit(async (tx) => {
+			(await tx.doc(Workers, conversation.id)).workers["docking-status"] = { sessionId: "session", brief: "Check docking.", status, updatedAt: 1 };
+		}, context);
+	await setStatus("working");
+	await agent.jobs.trackWorker({ name: "docking-status", brief: "Check docking.", sessionId: "session", conversationId: conversation.id, ask: "discord:9" }, context);
+	const job = parts.store.all()[0]!;
+	assert.equal(job.title, "docking status");
+	assert.equal(job.discordThreadId, "777");
+
+	await keeper.tick();
+	assert.deepEqual(notes, [], "nothing new, nothing to say");
+	items.push({ kind: "tool", at: 1, name: "bash", args: { command: "ledger:status --issue 3117" }, result: "Dock settlement: verified" });
+	await keeper.tick();
+	assert.deepEqual(notes, ["Found two stuck sessions."]);
+	assert.match(seen[0]!, /real step forward/);
+	assert.match(seen[0]!, /Nothing has been posted yet/);
+
+	items.push({ kind: "tool", at: 2, name: "bash", args: { command: "gh issue view 3124" }, result: "open" });
+	await keeper.tick();
+	assert.equal(notes.length, 1, "more of the same stays off the thread");
+	assert.equal(parts.store.get(job.id)!.status, "Reading more of the same.", "but the card keeps up");
+	assert.match(seen[1]!, /Found two stuck sessions/);
+
+	await setStatus("idle");
+	await keeper.tick();
+	assert.equal(parts.store.get(job.id)!.state, "done");
+	assert.equal(notes.at(-1), "Finished. The answer's in the channel.");
+	assert.equal(cards.at(-1), "done");
+	await keeper.tick();
+	assert.equal(notes.length, 2, "it says so once");
+	await close();
+});
+
+test("a worker in a DM needs no thread", async () => {
+	const parts = setup("worker-dm", NEEDS_YOU);
+	const { backend } = fakeBackend();
+	const { agent, conversation, close } = await open("worker-dm", parts, backend, 3_600_000, "discord:dm:1");
+	await agent.jobs.trackWorker({ name: "x", brief: "y", sessionId: "s", conversationId: conversation.id }, context);
+	assert.equal(parts.store.all().length, 0);
+	await close();
+});
+
+test("a background job in a DM gets no Discord thread, reports where it started, and settles its T3 thread", async () => {
 	const parts = setup("background", { ...NEEDS_YOU, asks_owner: noul(0.05), job_complete: noul(0.9) });
 	const { state, backend, running } = fakeBackend();
 	state.items = [{ type: "assistant_message", text: "Godot 4.7.2." }];
@@ -241,7 +299,7 @@ test("a background job gets no Discord thread, reports where it started, and set
 			return fauxAssistantMessage("it's 4.7.2");
 		},
 	]);
-	const { conversation, keeper, idle, close } = await open("background", parts, backend);
+	const { conversation, keeper, idle, close } = await open("background", parts, backend, 3_600_000, "discord:dm:1");
 	await conversation.submit({ type: "input", content: "what godot is on pc1", requestId: "discord:9" }, context);
 	await idle();
 	const job = parts.store.all()[0]!;
@@ -389,14 +447,29 @@ test("arms are stable and split near the holdout", () => {
 	assert.ok(controls > 300 && controls < 500, `${controls} controls`);
 });
 
-test("typing follows work that has nothing else on screen", () => {
-	const here = "discord:dm:1";
-	assert.equal(workingUnseen(here, [{ status: "idle" }], []), false);
-	assert.equal(workingUnseen(here, [{ status: "working" }], []), true);
-	assert.equal(workingUnseen(here, [], [{ origin: here, background: true, state: "working" }]), true);
-	assert.equal(workingUnseen(here, [], [{ origin: here, background: true, state: "done" }]), false);
-	assert.equal(workingUnseen(here, [], [{ origin: "discord:dm:2", background: true, state: "working" }]), false);
-	assert.equal(workingUnseen(here, [], [{ origin: here, state: "working" }]), false, "a full job has its card");
+test("typing shows wherever work is running, so silence means nothing is", () => {
+	const dm = "discord:dm:1";
+	const channel = "discord:channel:2";
+	const none = [{ address: dm, workers: [{ status: "idle" }] }];
+	assert.deepEqual(typingTargets(none, []), []);
+	assert.deepEqual(typingTargets([{ address: dm, workers: [{ status: "working" }] }], []), [dm]);
+	assert.deepEqual(typingTargets([], [{ origin: dm, background: true, state: "working" }]), [dm]);
+	assert.deepEqual(typingTargets([], [{ origin: dm, background: true, state: "done" }]), []);
+	assert.deepEqual(typingTargets([], [{ origin: channel, state: "working", discordThreadId: "9" }]), ["discord:thread:9"], "a job's thread, even a full job");
+	const worker = { origin: channel, state: "working" as const, discordThreadId: "9", worker: { name: "a", conversationId: "1" as never } };
+	assert.deepEqual(typingTargets([{ address: channel, workers: [{ status: "working" }] }], [worker]), ["discord:thread:9"], "the thread, not the channel too");
+	assert.deepEqual(typingTargets([{ address: channel, workers: [{ status: "working" }] }], []), [channel], "with no thread, the channel");
+});
+
+test("activity for updates leaves out secrets", () => {
+	const activity = describeActivity([
+		{ kind: "tool", at: 1, name: "bash", args: { command: "ledger:status" }, result: "docked\nAPI_KEY=abc123\nok" },
+		{ kind: "from-pclaw", at: 2, text: "brief" },
+		{ kind: "thinking", at: 3, text: "hmm" },
+	]);
+	assert.match(activity, /ran ledger:status/);
+	assert.match(activity, /docked/);
+	assert.doesNotMatch(activity, /abc123|brief|hmm/);
 });
 
 test("the card and board read at a glance", () => {

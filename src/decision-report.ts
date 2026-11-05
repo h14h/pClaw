@@ -32,6 +32,8 @@ export type LogEvent = {
 	event?: string;
 	background?: boolean;
 	adopted?: boolean;
+	worker?: boolean;
+	posted?: boolean;
 };
 
 type Arm = { turns: number; followed: number; quiet: number; notes: number; pings: number };
@@ -55,7 +57,7 @@ function lane(durations: number[], failed: number): Lane {
 /** Workers against background and full jobs: how often each is used, how long a first answer takes, how often it fails. */
 export function compareLanes(events: LogEvent[]): Record<"worker" | "background" | "job", Lane> {
 	const workers = events.filter((event) => event.type === "worker");
-	const starts = events.filter((event) => event.type === "job" && event.event === "start" && event.adopted !== true);
+	const starts = events.filter((event) => event.type === "job" && event.event === "start" && event.adopted !== true && event.worker !== true);
 	const wakes = events.filter((event) => event.type === "wake");
 	const jobLane = (background: boolean) => {
 		const mine = starts.filter((start) => (start.background === true) === background);
@@ -132,6 +134,7 @@ export function summarize(events: LogEvent[]) {
 		outcomeAgreement: compared === 0 ? undefined : { agree, compared },
 		templates: [...new Set(decisions.map((event) => event.templates))],
 		lanes: compareLanes(events),
+		updates: { checked: events.filter((event) => event.type === "progress").length, posted: events.filter((event) => event.type === "progress" && event.posted === true).length },
 	};
 }
 
@@ -141,6 +144,7 @@ function print(report: ReturnType<typeof summarize>): void {
 	console.log(`\nInterruptions (H1): ${report.pings} pings over ${report.wakes} turns in ${report.jobs} jobs = ${report.pingsPerWake.toFixed(2)} per turn`);
 	console.log(`Ping value (H2): answered or liked within 2h ${share(report.pingsAnswered, report.pings)}, reactions +${report.positiveReactions} -${report.negativeReactions}`);
 	console.log(`Felt noise (H3): status checks ${report.statusAsks}, "too loud" ${report.tooLoud}, "too quiet" ${report.tooQuiet}`);
+	console.log(`Progress updates (H7): posted ${share(report.updates.posted, report.updates.checked)} of new activity`);
 	console.log("\nDoes a hint change anything? (H4)");
 	for (const [name, arm] of Object.entries(report.arms)) {
 		console.log(`  ${name}: ${arm.turns} turns, quiet ${share(arm.quiet, arm.turns)}, note ${share(arm.notes, arm.turns)}, ping ${share(arm.pings, arm.turns)}, matched d1's pick ${share(arm.followed, arm.turns)}`);

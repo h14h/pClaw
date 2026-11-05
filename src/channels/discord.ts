@@ -51,9 +51,17 @@ const JOB_LABELS: Record<JobState, string> = {
 
 const unix = (ms: number) => Math.floor(ms / 1000);
 
-/** Work with nothing else on screen to show it's alive: a running worker, or a background job. Full jobs have a card. */
-export function workingUnseen(address: string, workers: { status: string }[], jobs: Pick<Job, "origin" | "background" | "state">[]): boolean {
-	return workers.some((worker) => worker.status === "working") || jobs.some((job) => job.origin === address && job.background === true && job.state === "working");
+/**
+ * Where to show typing, so that no activity means nothing is happening: the thread of anything running, or, with no
+ * thread (a DM), the conversation it started in.
+ */
+export function typingTargets(conversations: { address: string; workers: { status: string }[] }[], jobs: Pick<Job, "origin" | "background" | "state" | "worker" | "discordThreadId">[]): string[] {
+	const running = jobs.filter((job) => job.state === "working");
+	const inThreads = running.flatMap((job) => (job.discordThreadId === undefined ? [] : [`discord:thread:${job.discordThreadId}`]));
+	const shown = (address: string) => running.some((job) => job.origin === address && job.worker !== undefined && job.discordThreadId !== undefined);
+	const workers = conversations.filter(({ address, workers }) => workers.some((worker) => worker.status === "working") && !shown(address)).map(({ address }) => address);
+	const background = running.filter((job) => job.background === true && job.discordThreadId === undefined).map((job) => job.origin);
+	return [...new Set([...inThreads, ...workers, ...background])];
 }
 
 /** A job's status card. `<t:...:R>` renders as "12 minutes ago" and keeps itself current. */
@@ -359,6 +367,9 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 			const card = await thread?.messages.fetch(job.cardMessageId);
 			await card?.edit({ content: jobCard(job), components: cardControls(job) });
 		},
+		async note(job, text) {
+			await (await threadOf(job))?.send({ content: text, flags: MessageFlags.SuppressNotifications });
+		},
 		async board(all) {
 			if (config.discordBoardChannel === undefined) return;
 			const channel = await client.channels.fetch(config.discordBoardChannel).catch(() => null);
@@ -463,12 +474,13 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 	const keepTyping = setInterval(() => {
 		void (async () => {
 			const known = await agent.addresses(context);
-			for (const addr of deliveries.keys()) {
-				const id = known[addr];
-				if (id === undefined) continue;
-				const workers = Object.values((await agent.harness.snapshot(Workers, id, context))?.workers ?? {});
-				if (workingUnseen(addr, workers, jobs.store.active())) await (await target(addr))?.sendTyping();
-			}
+			const conversations = await Promise.all(
+				[...deliveries.keys()].flatMap((address) => {
+					const id = known[address];
+					return id === undefined ? [] : [agent.harness.snapshot(Workers, id, context).then((doc) => ({ address, workers: Object.values(doc?.workers ?? {}) }))];
+				}),
+			);
+			for (const addr of typingTargets(conversations, jobs.store.active())) await (await target(addr))?.sendTyping();
 		})().catch((error: unknown) => console.error("[pclaw] typing", error));
 	}, TYPING_REFRESH_MS);
 

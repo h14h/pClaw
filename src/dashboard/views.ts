@@ -1,6 +1,9 @@
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { AssistantMessage, Message, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 import { AssistantEntry, type EntryRecord, type LiveState, ToolResultEntry, UserEntry } from "@earendil-works/pi-durable";
 import { SILENT } from "../delivery.ts";
+import { parseMuseSession } from "../muse.ts";
 import { NotesUpdate } from "../extensions/memory.ts";
 import type { LiveStatus, TimelineItem, Usage, WorkerItem } from "./types.ts";
 
@@ -206,6 +209,14 @@ export function parseWorkerSession(jsonl: string): WorkerItem[] {
 		}
 	}
 	return items;
+}
+
+/** A worker's transcript so far, in whichever harness it ran. */
+export function workerItems(sessionDir: string, sessionId: string): WorkerItem[] {
+	if (!existsSync(sessionDir)) return [];
+	const name = readdirSync(sessionDir).find((file) => file.endsWith(`_${sessionId}.jsonl`));
+	if (name === undefined) return [];
+	return (name.startsWith("muse_") ? parseMuseSession : parseWorkerSession)(readFileSync(join(sessionDir, name), "utf8"));
 }
 
 /** read_page calls in one worker session file, and the ones that failed. */
