@@ -90,6 +90,10 @@ const notes = join(scratch, "notes.md");
 const startingNotes = readFileSync(join(repo, "evals/notes.md"), "utf8");
 writeFileSync(notes, startingNotes);
 
+// The job the update cases are about, so tools that act on it work.
+const jobStore = new JobStore(join(scratch, "jobs.json"));
+jobStore.put({ id: "map-proof-a1b2", title: "map proof", brief: "Prove the map importer.", threadId: "eval", machine: "pc1", origin: "discord:channel:eval", state: "needs_you", status: "Needs a call.", told: [], startedAt: 0, updatedAt: 0 });
+
 const agent = await openAgent(
 	await openNodeSqliteStorage(join(scratch, "evals.sqlite")),
 	{
@@ -97,7 +101,7 @@ const agent = await openAgent(
 		models,
 		notes: new Notes(notes),
 		jobBackend: backend,
-		jobStore: new JobStore(join(scratch, "jobs.json")),
+		jobStore,
 		decisions: decisionClient({ logFile: join(scratch, "decisions.jsonl") }),
 		workers: { command: fakeWorker, provider: "xai", model: "w", thinkingLevel: "high", timeoutMs: 20_000, cwd: join(scratch, "work"), sessionDir: join(scratch, "sessions"), promptFile: join(scratch, "w.md"), toolsFile: join(scratch, "t.ts"), cliFile: join(scratch, "c.ts"), museCommand: "muse", piFallback: { provider: "xai", model: "w" }, quickThinkingLevel: "medium", skills: [] },
 	},
