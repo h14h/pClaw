@@ -9,6 +9,7 @@
 - Anything that changes with the model lives in `profiles/<name>/`, never in code. Adding a model is `pnpm profiles new`; judge changes with `pnpm evals`.
 - The front model (talks to the person) stays fast and tool-light. Real work goes through `delegate` to workers (pi subprocesses, `src/extensions/workers.ts`).
 - Real work on code or a named machine runs as a job: a T3 thread with a Discord thread and status card (`src/extensions/jobs.ts`). Job state is in `~/.pclaw/jobs.json`.
+- T3 going down must never cost the owner a request or a debugging chore: a job asked for while it's down waits (`T3Down` in `src/t3-client.ts`) and the keeper starts it when T3 answers. T3 runs as `t3code.service` on mp1 and restarts itself.
 - No activity should mean nothing is happening. In a channel, delegated work (a worker or a job) gets a thread that works like a session: a card, typing, updates, the result, and follow-ups all stay in it. A DM stays like texting: typing, then the answer.
 - The board channel is for reading on purpose. Nothing may pull the owner's attention there: no mentions, no threads, no replies, no pins.
 - Live tests of Discord behavior use a separate `PCLAW_HOME` with `discordQuiet: true`, so they can't ping the owner.

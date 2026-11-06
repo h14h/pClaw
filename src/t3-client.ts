@@ -111,10 +111,10 @@ export type OAuthServer = { authorizationEndpoint: string; tokenEndpoint: string
 
 /** OAuth + protected-resource discovery (RFC 8414 / RFC 9728), as advertised by T3's 401 response. */
 export async function discoverOAuth(t3Url: string, fetchFn: typeof fetch = fetch): Promise<OAuthServer> {
-	const resourceResponse = await fetchFn(`${t3Url}/.well-known/oauth-protected-resource/mcp`);
+	const resourceResponse = await reach(fetchFn, `${t3Url}/.well-known/oauth-protected-resource/mcp`);
 	if (!resourceResponse.ok) throw new Error(`T3 resource discovery failed: HTTP ${resourceResponse.status}`);
 	const resourceMeta = (await resourceResponse.json()) as { resource?: string };
-	const serverResponse = await fetchFn(`${t3Url}/.well-known/oauth-authorization-server`);
+	const serverResponse = await reach(fetchFn, `${t3Url}/.well-known/oauth-authorization-server`);
 	if (!serverResponse.ok) throw new Error(`T3 OAuth discovery failed: HTTP ${serverResponse.status}`);
 	const meta = (await serverResponse.json()) as { authorization_endpoint: string; token_endpoint: string; registration_endpoint?: string };
 	return {
@@ -228,7 +228,7 @@ async function refreshIfNeeded(t3Url: string, storeFile: string): Promise<string
 	if (store.accessToken === undefined) throw new Error("pclaw isn't paired with T3 yet.");
 	if (store.expiresAt === undefined || store.expiresAt > Date.now() + 60_000 || store.refreshToken === undefined || store.clientId === undefined) return store.accessToken;
 	const server = await discoverOAuth(t3Url);
-	const response = await fetch(server.tokenEndpoint, {
+	const response = await reach(fetch, server.tokenEndpoint, {
 		method: "POST",
 		headers: { "Content-Type": "application/x-www-form-urlencoded" },
 		body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: store.refreshToken, client_id: store.clientId, resource: server.resource }),
@@ -416,6 +416,27 @@ function parseRpcBody(text: string, contentType: string): RpcResult {
 	return JSON.parse(text) as RpcResult;
 }
 
+/** T3 isn't answering at all, as opposed to answering with an error. The request never reached it, so it's safe to try again later. */
+export class T3Down extends Error {}
+
+const NEVER_CONNECTED = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "EHOSTUNREACH", "ENETUNREACH", "ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT"]);
+
+/** `fetch`, with failures that say what happened. Node's own message is only "fetch failed". */
+async function reach(fetchFn: typeof fetch, url: string, init?: RequestInit): Promise<Response> {
+	const host = new URL(url).host;
+	let response: Response;
+	try {
+		response = await fetchFn(url, init);
+	} catch (error) {
+		const code = (error as { cause?: { code?: string } }).cause?.code;
+		if (code !== undefined && NEVER_CONNECTED.has(code)) throw new T3Down(`T3 isn't answering at ${host} (${code}).`, { cause: error });
+		throw new Error(`A request to T3 at ${host} failed partway (${code ?? (error instanceof Error ? error.message : String(error))}).`, { cause: error });
+	}
+	// What Tailscale's proxy sends when T3 behind it is down.
+	if (response.status === 502 || response.status === 503) throw new T3Down(`T3 isn't answering at ${host} (HTTP ${response.status}).`);
+	return response;
+}
+
 export class T3Client {
 	readonly #url: string;
 	readonly #token: string;
@@ -431,7 +452,7 @@ export class T3Client {
 	}
 
 	async #rpc(method: string, params?: Record<string, unknown>, notification = false): Promise<unknown> {
-		const response = await this.#fetchFn(this.#url, {
+		const response = await reach(this.#fetchFn, this.#url, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
@@ -441,6 +462,13 @@ export class T3Client {
 			},
 			body: JSON.stringify({ jsonrpc: "2.0", ...(notification ? {} : { id: Math.floor(Math.random() * 1_000_000_000) }), method, ...(params === undefined ? {} : { params }) }),
 		});
+		// T3 forgets sessions when it restarts. Nothing ran, so start a new one and ask again.
+		if (response.status === 404 && this.#sessionId !== undefined) {
+			this.#sessionId = undefined;
+			this.#ready = undefined;
+			await this.#ensureReady();
+			return this.#rpc(method, params, notification);
+		}
 		this.#sessionId = response.headers.get("mcp-session-id") ?? this.#sessionId;
 		const text = await response.text();
 		if (!response.ok) throw new Error(`T3 MCP ${method} failed: HTTP ${response.status} ${text.slice(0, 300)}`);

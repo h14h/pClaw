@@ -42,6 +42,7 @@ const RESYNC_ON_ATTACH = 10;
 const PROJECTS_CATEGORY = "projects";
 
 const JOB_LABELS: Record<JobState, string> = {
+	waiting: "🕓 Waiting",
 	working: "🟡 Working",
 	needs_you: "🙋 Needs you",
 	idle: "💤 Paused",

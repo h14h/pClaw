@@ -26,7 +26,7 @@ type Expect = {
 	maxChars?: number;
 	judge?: boolean;
 };
-type Case = { id: string; message: string; raw?: boolean; tags: string[]; expect: Expect };
+type Case = { id: string; message: string; raw?: boolean; t3Down?: boolean; tags: string[]; expect: Expect };
 type Run = { id: string; run: number; ok: boolean; failures: string[]; tools: string[]; reply: string; ms: number; outputTokens: number; judge?: { score: number; why: string } };
 
 const home = join(homedir(), ".pclaw");
@@ -55,6 +55,7 @@ const { AssistantEntry, LiveDoc } = await import("@earendil-works/pi-durable");
 const { openNodeSqliteStorage } = await import("@earendil-works/pi-durable/storage/sqlite/node");
 const { openAgent } = await import("./agent.ts");
 const { loadConfig } = await import("./config.ts");
+const { T3Down } = await import("./t3-client.ts");
 const { FileCredentialStore } = await import("./credentials.ts");
 const { decisionClient } = await import("./decisions.ts");
 const { JobStore } = await import("./extensions/jobs.ts");
@@ -67,19 +68,32 @@ const models = createModels({ credentials: new FileCredentialStore(config.authFi
 models.setProvider(metaProvider());
 await registerProfiles(models, listProfiles().map((each) => loadProfile(each)));
 
+let t3Down = false;
+const answering = () => {
+	if (t3Down) throw new T3Down("T3 isn't answering at mp1.test:8445 (ECONNREFUSED).");
+};
 const backend: JobBackend = {
-	launch: async () => ({ threadId: "eval" }),
+	launch: async () => {
+		answering();
+		return { threadId: "eval" };
+	},
 	peek: async () => ({ status: "running", activeRunId: "r", latestRunId: "r", pendingRequestCount: 0, runCount: 1, itemCount: 1, settled: false }),
 	read: async (_thread, _environment, from) => ({ items: [], position: from }),
 	pending: async () => [],
 	send: async () => undefined,
 	interrupt: async () => undefined,
 	settle: async () => undefined,
-	projects: async () => [
-		{ id: "p1", title: "hexfall", machine: "pc1", environmentId: "e1", hasRepo: true },
-		{ id: "p2", title: "span", machine: "mp1", hasRepo: true },
-	],
-	machines: async () => [{ machine: "mp1" }, { machine: "pc1", environmentId: "e1" }, { machine: "mm1", environmentId: "e2" }],
+	projects: async () => {
+		answering();
+		return [
+			{ id: "p1", title: "hexfall", machine: "pc1", environmentId: "e1", hasRepo: true },
+			{ id: "p2", title: "span", machine: "mp1", hasRepo: true },
+		];
+	},
+	machines: async () => {
+		answering();
+		return [{ machine: "mp1" }, { machine: "pc1", environmentId: "e1" }, { machine: "mm1", environmentId: "e2" }];
+	},
 	linkFor: async (thread) => `https://example.test/${thread}`,
 };
 
@@ -143,6 +157,7 @@ for (let run = 0; run < runs; run++) {
 	for (const each of cases) {
 		// Every case starts from the same notes, or one that saves something changes the next pass.
 		writeFileSync(notes, startingNotes);
+		t3Down = each.t3Down === true;
 		const conversation = await agent.conversationFor(`discord:channel:eval-${run}-${each.id}`, context);
 		const started = performance.now();
 		await conversation.submit({ type: "input", content: `[Thu 2026-11-05 14:00 (America/Chicago, UTC-06:00)]\n${each.message}`, requestId: `eval:${run}:${each.id}` }, context);

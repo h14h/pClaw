@@ -10,7 +10,7 @@ import type { WorkerItem } from "../dashboard/types.ts";
 import { type Decided, type Decisions, messageGuidance, messageQuestions, pick, progressGuidance, progressQuestions, projectQuestion, readTurn, TURN_TAIL, turnGuidance, turnQuestions, yes } from "../decisions.ts";
 import { readPrompt } from "../prompts.ts";
 import { Routes } from "../routes.ts";
-import { pairedClient } from "../t3-client.ts";
+import { pairedClient, T3Down } from "../t3-client.ts";
 import { stamp } from "../time.ts";
 import { currentAsk, isEmoji, setReaction, WORKING } from "./reactions.ts";
 import { Workers } from "./workers.ts";
@@ -26,20 +26,28 @@ import { Workers } from "./workers.ts";
  * something's worth reading. When a T3 turn ends the keeper asks the decision model for a read and wakes the
  * conversation with a `<job-update>`. What happens next is the front model's call: replies in a job thread land
  * silently unless it calls `ping_owner` first.
+ *
+ * A job asked for while T3 is down isn't lost: it waits on the card and the keeper starts it once T3 answers again.
  */
 
-export type JobState = "working" | "needs_you" | "idle" | "blocked" | "done" | "failed" | "stopped" | "closed";
+export type JobState = "waiting" | "working" | "needs_you" | "idle" | "blocked" | "done" | "failed" | "stopped" | "closed";
+
+/** What a job was asked to be. Where it runs is worked out from this, which needs T3 to be up. */
+export type StartRequest = { title: string; brief?: string; project?: string; machine?: string; workspace?: "worktree" | "root"; base_ref?: string };
 
 export type Job = {
 	id: string;
 	title: string;
 	brief: string;
+	/** Empty until a `waiting` job has started. */
 	threadId: string;
 	environmentId?: string;
 	machine: string;
 	project?: string;
 	model?: string;
 	link?: string;
+	/** What a `waiting` job needs to start. */
+	start?: StartRequest;
 	/** A one-off with nothing to open later: its T3 thread settles itself. */
 	background?: boolean;
 	/** A pclaw worker rather than a T3 thread. `threadId` holds its session id. */
@@ -185,6 +193,8 @@ const ACK_MS = 8_000;
 const REOPEN_MS = 30_000;
 /** They spoke in the thread this recently, so they're there. */
 const OWNER_HERE_MS = 5 * 60_000;
+/** A waiting job gives up after this: by then it's better to ask again than to start out of the blue. */
+const WAIT_MS = 24 * 60 * 60_000;
 const PROJECTS_MS = 10 * 60_000;
 const CLIENT_MS = 10 * 60_000;
 const READ_PAGE = 100;
@@ -273,7 +283,10 @@ export function t3Backend(t3Url: string, storeFile: string): JobBackend {
 			if (projects !== undefined && Date.now() - projects.at < PROJECTS_MS) return projects.value;
 			const found = await Promise.all(
 				(await machines()).map(async ({ machine, environmentId }) => {
-					const listed = await call("t3_project_list", { ...environmentArg(environmentId), limit: 100 }).catch(() => ({ projects: [] }) as Record<string, unknown>);
+					const listed = await call("t3_project_list", { ...environmentArg(environmentId), limit: 100 }).catch((error: unknown) => {
+						if (error instanceof T3Down) throw error;
+						return { projects: [] } as Record<string, unknown>;
+					});
 					return ((listed.projects ?? []) as Record<string, unknown>[])
 						.filter((project) => project.title !== "No project" && project.archivedAt == null)
 						.map((project): Project => ({ id: String(project.id), title: String(project.title), machine, ...(environmentId === undefined ? {} : { environmentId }), hasRepo: project.repositoryIdentity != null }));
@@ -296,6 +309,13 @@ export const JOB_NOTE =
 	"Keep going without them while you can. When you stop, your last message should say plainly where the job stands: " +
 	"done, blocked on what, or the exact question you need answered. Before anything outward-facing and hard to undo " +
 	"(send, buy, book, pay, delete, post, or deploy for real), stop and ask.";
+
+const startFields = ({ project, machine, workspace, base_ref }: Omit<StartRequest, "title" | "brief">) => ({
+	...(project === undefined ? {} : { project }),
+	...(machine === undefined ? {} : { machine }),
+	...(workspace === undefined ? {} : { workspace }),
+	...(base_ref === undefined ? {} : { base_ref }),
+});
 
 const slug = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 32) || "job";
 const tail = (text: string, limit: number) => (text.length > limit ? `…${text.slice(-limit)}` : text);
@@ -630,8 +650,71 @@ export function createJobs(options: JobsOptions) {
 		await setAskReaction(job, REACTION[job.state]!, context);
 	}
 
+	/** Find where a job runs: T3 knows the projects and machines. */
+	async function place(request: StartRequest): Promise<{ machine: string; environmentId?: string; project?: Project }> {
+		const wanted = request.machine?.toLowerCase();
+		const named = (project: Project) => project.title.toLowerCase() === request.project!.toLowerCase() && (wanted === undefined || project.machine.toLowerCase() === wanted);
+		const project = request.project === undefined ? undefined : (await backend.projects()).find(named);
+		if (request.project !== undefined && project === undefined) {
+			throw new Error(`No project ${request.project}${wanted === undefined ? "" : ` on ${wanted}`}. Use list_projects.`);
+		}
+		if (project !== undefined) return { machine: project.machine, ...environmentArg(project.environmentId), project };
+		if (wanted === undefined) return { machine: hostname().replace(/\..*$/, "") };
+		const found = (await backend.machines()).find((each) => each.machine.toLowerCase() === wanted);
+		if (found === undefined) throw new Error(`Can't reach ${request.machine} through T3. Reachable: ${(await backend.machines()).map((each) => each.machine).join(", ")}.`);
+		return found;
+	}
+
+	async function launch(request: StartRequest, where: Awaited<ReturnType<typeof place>>, model: string): Promise<string> {
+		const { project, environmentId } = where;
+		const workspace = request.workspace ?? (project?.hasRepo === true ? "worktree" : "root");
+		const launched = await backend.launch({
+			title: request.title,
+			...environmentArg(environmentId),
+			...(project === undefined ? { scratch: true } : { projectId: project.id, workspaceStrategy: workspace === "worktree" ? { type: "worktree", baseRef: request.base_ref ?? "main" } : { type: "root" } }),
+			message: `${JOB_NOTE}\n\n${request.brief}`,
+			modelSelection: modelSelection(model),
+			runtimeMode: "full-access",
+		});
+		return launched.threadId;
+	}
+
+	/** T3 was down when this job was asked for. Start it if T3's back; if it can't start at all, say so. */
+	async function startWaiting(job: Job, context: Context): Promise<void> {
+		try {
+			const where = await place(job.start!);
+			const threadId = await launch(job.start!, where, job.model!);
+			// Saved before anything else can fail, so the keeper can't launch it twice.
+			store.put(Object.assign(job, { threadId, machine: where.machine, ...environmentArg(where.environmentId), ...(where.project === undefined ? {} : { project: where.project.title }), state: "working", status: "Starting up.", startedAt: Date.now(), start: undefined }));
+			job.link = await backend.linkFor(threadId, where.environmentId).catch(() => undefined);
+			store.put(job);
+			await refreshCard(job);
+			await setAskReaction(job, job.emoji ?? WORKING, context);
+			decisions.record({ type: "job", event: "start", job: job.id, machine: job.machine, project: job.project, model: job.model, adopted: false, background: job.background === true, waited: true });
+			console.log(`[pclaw] job ${job.id} started on ${job.machine} after waiting for T3`);
+		} catch (error) {
+			const down = error instanceof T3Down;
+			if (down && Date.now() - job.startedAt < WAIT_MS) return;
+			const reason = down ? "T3 stayed down for a day, so this never started." : `It couldn't start: ${error instanceof Error ? error.message : String(error)}`;
+			store.put(Object.assign(job, { state: "failed", status: reason.slice(0, 200), start: undefined }));
+			await refreshCard(job);
+			await setAskReaction(job, REACTION.failed!, context);
+			const conversation = await surface.current?.conversation(job);
+			await conversation?.submit(
+				{
+					type: "input",
+					content: [`[${stamp(Date.now(), config.timeZone)}]`, `<job-update job="${job.id}" title="${job.title.replaceAll('"', "'")}" card="failed">`, reason, "</job-update>"].join("\n"),
+					whenBusy: "followUp",
+					requestId: `job:${job.id}:never-started`,
+				},
+				context,
+			);
+		}
+	}
+
 	async function check(job: Job, refreshMs: number, context: Context): Promise<void> {
 		if (job.worker !== undefined) return checkWorker(job, refreshMs, context);
+		if (job.state === "waiting") return startWaiting(job, context);
 		const view = await backend.peek(job.threadId, job.environmentId);
 		if (view.settled && job.state !== "working") {
 			job.state = "closed";
@@ -765,7 +848,8 @@ export function createJobs(options: JobsOptions) {
 			if (run !== undefined) await harness.current?.abortTask(run, context);
 			return;
 		}
-		await backend.interrupt(job.threadId, job.environmentId);
+		if (job.state !== "waiting") await backend.interrupt(job.threadId, job.environmentId);
+		job.start = undefined;
 		job.state = "stopped";
 		job.status = "Stopped.";
 		store.put(job);
@@ -801,58 +885,47 @@ export function createJobs(options: JobsOptions) {
 					const routes = (await api.snapshot(Routes, context))?.conversations ?? {};
 					const origin = Object.keys(routes).find((address) => routes[address] === api.conversationId);
 					if (origin === undefined) throw new Error("This conversation has no address, so a job here couldn't report back.");
-					const wanted = args.machine?.toLowerCase();
-					const named = (project: Project) => project.title.toLowerCase() === args.project!.toLowerCase() && (wanted === undefined || project.machine.toLowerCase() === wanted);
-					const project = args.project === undefined ? undefined : (await backend.projects()).find(named);
-					if (args.project !== undefined && project === undefined) {
-						throw new Error(`No project ${args.project}${wanted === undefined ? "" : ` on ${wanted}`}. Use list_projects.`);
-					}
-					let machine = project?.machine ?? hostname().replace(/\..*$/, "");
-					let environmentId = project?.environmentId;
-					if (project === undefined && wanted !== undefined) {
-						const found = (await backend.machines()).find((each) => each.machine.toLowerCase() === wanted);
-						if (found === undefined) throw new Error(`Can't reach ${args.machine} through T3. Reachable: ${(await backend.machines()).map((each) => each.machine).join(", ")}.`);
-						({ machine, environmentId } = found);
-					}
+					if (args.thread_id === undefined && args.brief === undefined) throw new Error("A new job needs a brief.");
 					const model = args.model ?? config.jobModel;
+					let where: Awaited<ReturnType<typeof place>> | undefined;
 					let threadId = args.thread_id;
-					if (threadId === undefined) {
-						if (args.brief === undefined) throw new Error("A new job needs a brief.");
-						const workspace = args.workspace ?? (project?.hasRepo === true ? "worktree" : "root");
-						const launched = await backend.launch({
-							title: args.title,
-							...environmentArg(environmentId),
-							...(project === undefined ? { scratch: true } : { projectId: project.id, workspaceStrategy: workspace === "worktree" ? { type: "worktree", baseRef: args.base_ref ?? "main" } : { type: "root" } }),
-							message: `${JOB_NOTE}\n\n${args.brief}`,
-							modelSelection: modelSelection(model),
-							runtimeMode: "full-access",
-						});
-						threadId = launched.threadId;
+					try {
+						where = await place(args);
+						threadId ??= await launch(args, where, model);
+					} catch (error) {
+						// Watching an existing thread has nothing to hold on to, so only a new job can wait.
+						if (!(error instanceof T3Down) || args.thread_id !== undefined) throw error;
+						console.error(`[pclaw] ${error.message} Holding "${args.title}" until it's back.`);
 					}
+					const waiting = threadId === undefined;
+					const machine = where?.machine ?? args.machine ?? hostname().replace(/\..*$/, "");
+					const environmentId = where?.environmentId;
+					const projectName = where?.project?.title ?? args.project;
 					const emoji = args.emoji !== undefined && isEmoji(args.emoji.trim()) ? args.emoji.trim() : undefined;
 					const now = Date.now();
 					const job: Job = {
 						id: `${slug(args.title)}-${randomBytes(2).toString("hex")}`,
 						title: args.title,
 						brief: args.brief ?? "(an existing T3 thread)",
-						threadId,
+						threadId: threadId ?? "",
 						...environmentArg(environmentId),
 						machine,
-						...(project === undefined ? {} : { project: project.title }),
+						...(projectName === undefined ? {} : { project: projectName }),
 						model,
 						origin,
 						...(ask === undefined ? {} : { ask }),
 						...(emoji === undefined ? {} : { emoji }),
 						...(args.background === true ? { background: true } : {}),
-						link: await backend.linkFor(threadId, environmentId),
-						state: "working",
-						status: args.thread_id === undefined ? "Starting up." : "Watching.",
+						...(threadId === undefined ? {} : { link: await backend.linkFor(threadId, environmentId) }),
+						...(waiting ? { start: { title: args.title, brief: args.brief!, ...startFields(args) } } : {}),
+						state: waiting ? "waiting" : "working",
+						status: waiting ? "Waiting for T3 to come back." : args.thread_id === undefined ? "Starting up." : "Watching.",
 						told: [],
 						startedAt: now,
 						updatedAt: now,
 					};
 					if (args.thread_id !== undefined) {
-						const view = await backend.peek(threadId, environmentId);
+						const view = await backend.peek(args.thread_id, environmentId);
 						job.handled = turnKey(view);
 						job.position = Math.max(0, view.itemCount - 1);
 						job.state = turnEnded(view) ? "idle" : "working";
@@ -864,8 +937,10 @@ export function createJobs(options: JobsOptions) {
 						return undefined;
 					});
 					if (placed !== undefined) store.put(Object.assign(job, placed));
-					decisions.record({ type: "job", event: "start", job: job.id, machine, project: project?.title, model, adopted: args.thread_id !== undefined, background: args.background === true });
-					console.log(`[pclaw] job ${job.id} started on ${machine}${project === undefined ? "" : ` in ${project.title}`}`);
+					// Still this turn's to explain: nothing's running, and "on it" alone would say otherwise.
+					if (waiting) return text(`T3 isn't answering, so nothing has started. ${job.id} is saved and starts itself when T3 is back.`);
+					decisions.record({ type: "job", event: "start", job: job.id, machine, project: projectName, model, adopted: args.thread_id !== undefined, background: args.background === true });
+					console.log(`[pclaw] job ${job.id} started on ${machine}${projectName === undefined ? "" : ` in ${projectName}`}`);
 					// End the turn here: what was written alongside this call is the reply.
 					return { ...text(`Job ${job.id} is running in T3 on ${machine}. ${job.link ?? ""}`.trim()), control: { terminate: true } };
 				},
@@ -876,9 +951,14 @@ export function createJobs(options: JobsOptions) {
 				parameters: Type.Object({}),
 				replay: "safe",
 				execute: async () => {
-					const projects = await backend.projects();
-					const lines = projects.map((project) => `${project.title} (${project.machine})${project.hasRepo ? "" : ", no git repo"}`);
-					return text([`Machines: ${(await backend.machines()).map((each) => each.machine).join(", ")}`, ...lines].join("\n"));
+					try {
+						const projects = await backend.projects();
+						const lines = projects.map((project) => `${project.title} (${project.machine})${project.hasRepo ? "" : ", no git repo"}`);
+						return text([`Machines: ${(await backend.machines()).map((each) => each.machine).join(", ")}`, ...lines].join("\n"));
+					} catch (error) {
+						if (!(error instanceof T3Down)) throw error;
+						return text(`${error.message} That's T3 itself, on this machine, so it isn't about any one project or machine. It restarts on its own. start_job still works: a job waits and starts itself when T3 is back.`);
+					}
 				},
 			}),
 			defineTool({
@@ -899,6 +979,11 @@ export function createJobs(options: JobsOptions) {
 					if (!config.t3AllowSend) throw new Error("Sending into T3 threads is off (t3AllowSend).");
 					const job = mustGet(id);
 					if (job.worker !== undefined) throw new Error(`${job.title} is a worker. Use message_worker with "${job.worker.name}" from its thread once it's reported.`);
+					if (job.start !== undefined) {
+						job.start.brief = `${job.start.brief}\n\n${message}`;
+						store.put(job);
+						return text(`${job.title} hasn't started yet, so this is added to its brief.`);
+					}
 					await backend.send(job.threadId, job.environmentId, message);
 					job.state = "working";
 					job.status = "Picked up a new message.";

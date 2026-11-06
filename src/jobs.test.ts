@@ -23,6 +23,7 @@ import { Notes } from "./extensions/notes.ts";
 import { applyProfile, createProfile, listProfiles, loadProfile, profileFor } from "./profiles.ts";
 import { frontPrompt, readPrompt, useProfile } from "./prompts.ts";
 import { memoLabel, transcribe } from "./speech.ts";
+import { T3Client, T3Down } from "./t3-client.ts";
 
 const context = BACKGROUND_CONTEXT;
 const config: Config = { ...defaults, provider: "faux", model: "faux-1", thinkingLevel: "off", timeZone: "America/Chicago", t3AllowSend: true };
@@ -63,9 +64,14 @@ function fakeBackend() {
 		sent: [] as string[],
 		interrupted: 0,
 		settled: 0,
+		down: false,
+	};
+	const up = () => {
+		if (state.down) throw new T3Down("T3 isn't answering at t3.test (ECONNREFUSED).");
 	};
 	const backend: JobBackend = {
 		launch: async (args) => {
+			up();
 			state.launched.push(args);
 			return { threadId: "t3-thread" };
 		},
@@ -75,8 +81,14 @@ function fakeBackend() {
 		send: async (_thread, _env, message) => void state.sent.push(message),
 		interrupt: async () => void state.interrupted++,
 		settle: async () => void state.settled++,
-		projects: async () => [{ id: "p-game", title: "hexfall", machine: "pc1", environmentId: "env-pc1", hasRepo: true }],
-		machines: async () => [{ machine: "mp1" }, { machine: "pc1", environmentId: "env-pc1" }, { machine: "mm1", environmentId: "env-mm1" }],
+		projects: async () => {
+			up();
+			return [{ id: "p-game", title: "hexfall", machine: "pc1", environmentId: "env-pc1", hasRepo: true }];
+		},
+		machines: async () => {
+			up();
+			return [{ machine: "mp1" }, { machine: "pc1", environmentId: "env-pc1" }, { machine: "mm1", environmentId: "env-mm1" }];
+		},
 		linkFor: async (thread) => `https://t3.example/${thread}`,
 	};
 	return { state, backend, running };
@@ -678,4 +690,125 @@ test("a profile's prompt overrides the shared one, and anything else falls throu
 	assert.match(readPrompt("voice"), /texting the user/);
 	assert.doesNotMatch(frontPrompt(), /Grok/);
 	rmSync(dir, { recursive: true, force: true });
+});
+
+test("a job asked for while T3 is down waits, then starts itself once, with its project and machine", async () => {
+	const parts = setup("t3-down", undefined);
+	const { state, backend } = fakeBackend();
+	state.down = true;
+	const results: string[] = [];
+	parts.faux.setResponses([
+		fauxAssistantMessage([fauxToolCall("list_projects", {})], { stopReason: "toolUse" }),
+		(request) => {
+			results.push(lastMessage(request));
+			return start({ title: "Brewer designs", brief: "Sketch brewers.", project: "hexfall", machine: "pc1" });
+		},
+		(request) => {
+			results.push(lastMessage(request));
+			return fauxAssistantMessage("t3 is down on mp1, so this is queued");
+		},
+	]);
+	const { conversation, cards, keeper, idle, close } = await open("t3-down", parts, backend);
+	await conversation.submit({ type: "input", content: "design some brewers on pc1", requestId: "discord:9" }, context);
+	await idle();
+
+	assert.doesNotMatch(results[0]!, /fetch failed|"isError":true/);
+	assert.match(results[0]!, /T3 isn't answering/);
+	assert.match(results[1]!, /starts (by )?itself/);
+	const job = parts.store.all()[0]!;
+	assert.equal(job.state, "waiting");
+	assert.equal(job.machine, "pc1");
+	assert.equal(job.discordThreadId, "777");
+	assert.equal(state.launched.length, 0);
+
+	await keeper.tick();
+	assert.equal(parts.store.get(job.id)!.state, "waiting", "still down, so still waiting");
+
+	state.down = false;
+	await keeper.tick();
+	await keeper.tick();
+	const started = parts.store.get(job.id)!;
+	assert.equal(started.state, "working");
+	assert.equal(started.threadId, "t3-thread");
+	assert.equal(started.environmentId, "env-pc1");
+	assert.equal(started.link, "https://t3.example/t3-thread");
+	assert.equal(state.launched.length, 1);
+	assert.equal(state.launched[0]!.projectId, "p-game");
+	assert.ok(cards.includes("working"));
+	await close();
+});
+
+test("a waiting job that can't start after all says so, and stopping one never touches T3", async () => {
+	const parts = setup("t3-gone", undefined);
+	const { state, backend } = fakeBackend();
+	state.down = true;
+	const wakes: string[] = [];
+	parts.faux.setResponses([
+		start({ title: "Lost", brief: "Do it.", project: "nothing-called-this" }),
+		fauxAssistantMessage("queued"),
+		start({ title: "Dropped", brief: "Do it." }),
+		fauxAssistantMessage("queued"),
+		(request) => {
+			wakes.push(lastMessage(request));
+			return fauxAssistantMessage("that project doesn't exist");
+		},
+	]);
+	const { agent, conversation, keeper, idle, close } = await open("t3-gone", parts, backend);
+	await conversation.submit({ type: "input", content: "one", requestId: "discord:1" }, context);
+	await idle();
+	await conversation.submit({ type: "input", content: "two", requestId: "discord:2" }, context);
+	await idle();
+	const lost = parts.store.all().find((job) => job.title === "Lost");
+	const dropped = parts.store.all().find((job) => job.title === "Dropped");
+
+	await agent.jobs.stop(dropped!.id, context);
+	assert.equal(parts.store.get(dropped!.id)!.state, "stopped");
+	assert.equal(state.interrupted, 0);
+
+	state.down = false;
+	await keeper.tick();
+	await idle();
+	assert.equal(parts.store.get(lost!.id)!.state, "failed");
+	assert.match(wakes[0]!, /nothing-called-this/);
+	assert.equal(state.launched.length, 0);
+	await close();
+});
+
+test("a job's card and the typing rule treat waiting as nothing happening", () => {
+	const job = { id: "j", title: "Brewer", brief: "", threadId: "", machine: "pc1", origin: "discord:channel:1", discordThreadId: "2", state: "waiting", status: "Waiting for T3 to come back.", told: [], startedAt: 0, updatedAt: 0 } satisfies Job;
+	assert.match(jobCard(job), /Waiting/);
+	assert.deepEqual(typingTargets([], [job]), []);
+});
+
+test("the T3 client names a down server, and picks up a session T3 forgot in a restart", async () => {
+	const refused = (async () => {
+		throw new TypeError("fetch failed", { cause: { code: "ECONNREFUSED" } });
+	}) as typeof fetch;
+	await assert.rejects(new T3Client("https://t3.test:8445", "token", refused).callTool("t3_project_list"), (error: Error) => error instanceof T3Down && /t3\.test:8445/.test(error.message));
+
+	const badGateway = (async () => new Response("bad gateway", { status: 502 })) as typeof fetch;
+	await assert.rejects(new T3Client("https://t3.test:8445", "token", badGateway).callTool("t3_project_list"), T3Down);
+
+	const dropped = (async () => {
+		throw new TypeError("fetch failed", { cause: { code: "UND_ERR_SOCKET" } });
+	}) as typeof fetch;
+	await assert.rejects(new T3Client("https://t3.test:8445", "token", dropped).callTool("t3_project_list"), (error: Error) => !(error instanceof T3Down) && /UND_ERR_SOCKET/.test(error.message));
+
+	let session = "first";
+	const seen: string[] = [];
+	const restarts = (async (_url: string, init: RequestInit) => {
+		const { method, id } = JSON.parse(String(init.body)) as { method: string; id?: number };
+		const sent = new Headers(init.headers).get("mcp-session-id");
+		seen.push(method);
+		if (method === "initialize") return new Response(JSON.stringify({ jsonrpc: "2.0", id, result: {} }), { headers: { "mcp-session-id": session, "content-type": "application/json" } });
+		if (method === "notifications/initialized") return new Response("", { status: 202 });
+		if (sent !== session) return new Response("", { status: 404 });
+		return new Response(JSON.stringify({ jsonrpc: "2.0", id, result: { structuredContent: { ok: true } } }), { headers: { "content-type": "application/json" } });
+	}) as typeof fetch;
+	const client = new T3Client("https://t3.test:8445", "token", restarts);
+	assert.deepEqual(await client.callTool("t3_project_list"), { ok: true });
+	session = "after-restart";
+	seen.length = 0;
+	assert.deepEqual(await client.callTool("t3_project_list"), { ok: true });
+	assert.deepEqual(seen, ["tools/call", "initialize", "notifications/initialized", "tools/call"]);
 });

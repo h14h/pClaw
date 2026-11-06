@@ -295,5 +295,56 @@
 			],
 			"reply": "any"
 		}
+	},
+	{
+		"id": "t3-down-job",
+		"message": "can you kick off a new t3 job on pc1 to sketch some coffee brewer designs? i want to be able to steer it",
+		"t3Down": true,
+		"tags": [
+			"routing",
+			"failure"
+		],
+		"expect": {
+			"toolsAll": [
+				"start_job"
+			],
+			"reply": "text",
+			"match": [
+				"t3"
+			],
+			"avoid": [
+				"try opening",
+				"open t3",
+				"check whether",
+				"see whether",
+				"can you (check|restart)",
+				"(you|try) (should |can |could )?restart"
+			]
+		}
+	},
+	{
+		"id": "t3-down-ask",
+		"message": "what projects do you have on pc1?",
+		"t3Down": true,
+		"tags": [
+			"failure"
+		],
+		"expect": {
+			"toolsNone": [
+				"start_job"
+			],
+			"reply": "text",
+			"match": [
+				"t3"
+			],
+			"avoid": [
+				"try opening",
+				"open t3",
+				"check whether",
+				"see whether",
+				"can you (check|restart)",
+				"(you|try) (should |can |could )?restart"
+			]
+		}
 	}
 ]
