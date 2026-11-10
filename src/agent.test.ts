@@ -442,6 +442,37 @@ test("the memory pass updates the notes once the conversation goes quiet", async
 	await agent.harness.close(context);
 });
 
+test("a note saved mid-conversation reaches the model as a change, not another copy of the notes", async () => {
+	const { faux, models } = setup();
+	const notes = new Notes(join(dir, "notes-delta.md"));
+	notes.add("Likes oat milk");
+	const requests: ModelContext[] = [];
+	faux.setResponses([
+		(request) => {
+			requests.push(request);
+			return fauxAssistantMessage("noted");
+		},
+		(request) => {
+			requests.push(request);
+			return fauxAssistantMessage("got it");
+		},
+	]);
+	const agent = await openAgent(await openNodeSqliteStorage(join(dir, "notes-delta.sqlite")), { config, models, notes, workers: await fakeWorkers() }, context);
+	const conversation = await agent.conversationFor("test:notes-delta", context);
+	await (await conversation.submit({ type: "input", content: "hi" }, context)).wait(context);
+	notes.add("Sister Maya has surgery Tuesday");
+	await (await conversation.submit({ type: "input", content: "anything else?" }, context)).wait(context);
+
+	const shown = (await conversation.context(context)).entries.flatMap((entry) => {
+		const sections = (entry.model?.[0] as { sections?: Record<string, string | null> } | undefined)?.sections;
+		return sections === undefined ? [] : [sections];
+	});
+	assert.equal(shown.filter((sections) => typeof sections.notes === "string").length, 1);
+	assert.match(shown.at(-1)?.["notes-changes"] ?? "", /Added:\n- Sister Maya has surgery Tuesday/);
+	assert.match(JSON.stringify(requests[1]), /Sister Maya/);
+	await agent.harness.close(context);
+});
+
 test("a thread forks its channel's conversation at the message it started on", async () => {
 	const { faux, models } = setup();
 	const requests: ModelContext[] = [];

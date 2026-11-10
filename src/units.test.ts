@@ -10,7 +10,7 @@ import { splitMessage } from "./channels/discord.ts";
 import { readAssistantReply, replyCollector } from "./delivery.ts";
 import { serviceNote } from "./dashboard/views.ts";
 import { nextOccurrence } from "./extensions/follow-ups.ts";
-import { Notes } from "./extensions/notes.ts";
+import { Notes, notesView } from "./extensions/notes.ts";
 import { quickSearchExtension } from "./extensions/quick-search.ts";
 import { isEmoji } from "./extensions/reactions.ts";
 import { search } from "./extensions/recall.ts";
@@ -225,4 +225,17 @@ test("prose lab: Discord checks allow emphasis but catch bold sections, tables, 
 	assert.deepEqual(rules("<https://a.example> and <https://b.example>"), []);
 	assert.deepEqual(rules("https://a.example and [b](https://b.example)"), ["links"]);
 	assert.deepEqual(rules("just one https://a.example"), []);
+});
+
+test("the notes view keeps the copy in view and lists changes since", () => {
+	assert.deepEqual(notesView("- a\n- b\n", undefined), { notes: "- a\n- b" });
+	assert.deepEqual(notesView("- a\n- b\n", "<notes>\n- a\n- b\n</notes>"), { notes: "- a\n- b" });
+	const changed = notesView("- a\n- c\n", "<notes>\n- a\n- b\n</notes>");
+	assert.equal(changed.notes, "- a\n- b");
+	assert.match(changed.changes ?? "", /Added:\n- c/);
+	assert.match(changed.changes ?? "", /Removed[^\n]*\n- b/);
+	// Starting from nothing, or after many changes, the full notes are sent again.
+	assert.deepEqual(notesView("- a\n", "<notes>\n(nothing yet)\n</notes>"), { notes: "- a" });
+	const many = Array.from({ length: 25 }, (_, index) => `- n${index}`).join("\n");
+	assert.deepEqual(notesView(many, "<notes>\n- a\n</notes>"), { notes: many });
 });

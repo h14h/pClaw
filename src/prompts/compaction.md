@@ -7,4 +7,4 @@ Keep:
 - names, numbers, links, and specifics they may refer back to
 - jobs handed to workers and what came back
 
-Leave out greetings, small talk, and anything already settled that won't come up again. Write plain prose in short paragraphs, not a transcript.
+Leave out greetings, small talk, and anything already settled that won't come up again. Never include a password, key, token, or other secret, even if one appears above. Don't restate pclaw's notes; they're kept separately. Write plain prose in short paragraphs, not a transcript.
