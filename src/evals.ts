@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
  *   pnpm evals muse-spark-1.3                         every case, twice
  *   pnpm evals gpt-6.1-terra --runs 3 --only build,fix
  *   pnpm evals muse-spark-1.3 --holdout               the cases tuning never sees
+ *   pnpm evals gpt-6.1-terra --cases ./probe.json     a case file of your own, for checking one thing
  *
  * Results go to ~/.pclaw/evals/runs/<profile>/. See docs/tuning-profiles.md.
  */
@@ -35,12 +36,13 @@ const args = process.argv.slice(2);
 const option = (name: string) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
 const name = args[0];
 if (name === undefined || name.startsWith("--")) {
-	console.error("usage: pnpm evals <profile> [--runs N] [--only a,b] [--holdout] [--no-judge]");
+	console.error("usage: pnpm evals <profile> [--runs N] [--only a,b] [--holdout | --cases file.json] [--no-judge]");
 	process.exit(1);
 }
 const runs = Number(option("--runs") ?? 2);
 const only = option("--only")?.split(",");
 const holdout = args.includes("--holdout");
+const casesFile = option("--cases");
 const judging = !args.includes("--no-judge");
 
 // config.ts reads this on import, so it's set first: nothing here touches the live pclaw's data.
@@ -151,7 +153,7 @@ function grade(expect: Expect, tools: string[], reply: string, silent: boolean, 
 	return failures;
 }
 
-const cases = (JSON.parse(readFileSync(join(repo, holdout ? "evals/holdout.json" : "evals/cases.json"), "utf8")) as Case[]).filter((each) => only === undefined || only.includes(each.id));
+const cases = (JSON.parse(readFileSync(casesFile ?? join(repo, holdout ? "evals/holdout.json" : "evals/cases.json"), "utf8")) as Case[]).filter((each) => only === undefined || only.includes(each.id));
 const results: Run[] = [];
 for (let run = 0; run < runs; run++) {
 	for (const each of cases) {
@@ -200,7 +202,7 @@ const summary = {
 	profile: name,
 	model: config.model,
 	thinkingLevel: config.thinkingLevel,
-	set: holdout ? "holdout" : "cases",
+	set: casesFile ?? (holdout ? "holdout" : "cases"),
 	passed,
 	total: results.length,
 	medianSeconds: Math.round(times[Math.floor(times.length / 2)]! / 100) / 10,
@@ -209,7 +211,7 @@ const summary = {
 };
 const dir = join(home, "evals", "runs", name);
 if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-const file = join(dir, `${new Date().toISOString().replaceAll(":", "-").slice(0, 19)}${holdout ? "-holdout" : ""}.json`);
+const file = join(dir, `${new Date().toISOString().replaceAll(":", "-").slice(0, 19)}${holdout ? "-holdout" : casesFile === undefined ? "" : "-custom"}.json`);
 writeFileSync(file, `${JSON.stringify({ summary, results }, null, "\t")}\n`, { mode: 0o600 });
 console.log(`\n${name}: ${passed}/${results.length} passed, median ${summary.medianSeconds}s, ${summary.outputTokens} output tokens${summary.judgeAverage === undefined ? "" : `, voice ${summary.judgeAverage}/5`}\n${file}`);
 rmSync(scratch, { recursive: true, force: true });

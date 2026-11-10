@@ -33,3 +33,15 @@ Scores move by about 2 from noise alone at two passes. The two round 3 failures 
 Three passes, after the shared-notes bug and two eval cases were fixed: 51/51 on cases, 24/24 on holdout, voice 4.9/5, median 3.2s. Open: "thanks!" still often gets "you're welcome!".
 
 The limit on sending moved to the shared `front.md`, since it describes pclaw, not this model. On the slimmer prompt: 51/51 on cases and 24/24 on holdout once a check for a curly apostrophe was fixed, voice 4.8/5, median 3.2s. It now sometimes drops "sound right?".
+
+## Wordiness (2026-11-09)
+
+The owner found Terra's replies wordier than they want to read. In real Discord replies since the switch, Terra's median was 73 words against Muse 1.3's 49. Relays of a worker's report were the worst: median 164 words against 66, and often four paragraphs with a caveat on every option, a list of what the research couldn't confirm, and a closing paragraph that restated the pick with a hedge. The evals have no relay case, so `pnpm evals --cases` was added to run a scratch set: six long synthetic worker reports and four direct questions, three passes each.
+
+| Round | Change | Relay words (median) | Direct words (median) | Voice |
+|---|---|---|---|---|
+| Baseline | None | 86 | 83 | 4.8 |
+| 1 | `voice.md`: lean short, "two to four sentences", the Discord limits are a ceiling. A report is material, not a draft: the answer, the deciding reason, one catch. One caveat at most, no closing hedge or recap. Two real long replies as Avoid and Prefer | 72 | 71 | 5.0 |
+| 2 | "under about 60 words" on the length line | 70 | 57 | 4.8 |
+
+After round 2: 57/57 on cases, voice 4.9, median 3.3s; 24/24 on holdout, voice 5.0. The scratch relays are one-shot, so they run shorter than real relays deep in a long thread. Recheck against real Discord replies after a few days.

@@ -1,0 +1,9 @@
+{
+	"deferredTools": [
+		"t3_*"
+	],
+	"toolDescriptions": {},
+	"thinkingLevel": "medium",
+	"provider": "meta",
+	"model": "muse-ember-1.0"
+}
