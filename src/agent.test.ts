@@ -17,6 +17,7 @@ import { Notes } from "./extensions/notes.ts";
 import { Reactions } from "./extensions/reactions.ts";
 import { type WorkerOptions, Workers } from "./extensions/workers.ts";
 import { museTranscript, parseMuseSession } from "./muse.ts";
+import { cleanupNotes, daySince } from "./notes-cleanup.ts";
 
 const context = BACKGROUND_CONTEXT;
 const config: Config = { ...defaults, provider: "faux", model: "faux-1", thinkingLevel: "off", timeZone: "America/Los_Angeles" };
@@ -556,6 +557,42 @@ test("a failed job marks its ask with a warning", async () => {
 	await conversation.submit({ type: "input", content: "do the thing", requestId: "discord:200" }, context);
 	await until(2);
 	assert.equal((await agent.harness.snapshot(Reactions, conversation.id, context))?.asks["discord:200"], "⚠️");
+	await delivery.stop();
+	await agent.harness.close(context);
+});
+
+test("the nightly cleanup reads the day, checks notes saved in it, and archives what it retires", async () => {
+	const { faux, models } = setup();
+	const notes = new Notes(join(dir, "notes-cleanup.md"));
+	notes.add("Has a sister, Maya");
+	let cleanupInput = "";
+	faux.setResponses([
+		fauxAssistantMessage(fauxToolCall("remember", { note: "Chose the Node 304 case" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage("the node 304 fits that board"),
+		(request) => {
+			cleanupInput = JSON.stringify(request.messages);
+			return fauxAssistantMessage('{"merge": [], "update": [], "retire": [{"id": "n2", "why": "pclaw suggested it; they didn\'t choose"}]}');
+		},
+	]);
+	const started = Date.now();
+	const agent = await openAgent(await openNodeSqliteStorage(join(dir, "cleanup.sqlite")), { config, models, notes, workers: await fakeWorkers() }, context);
+	const conversation = await agent.conversationFor("test:dm", context);
+	const { outbox, until } = inbox();
+	const delivery = await deliver(agent.harness, conversation.id, outbox, context);
+	await conversation.submit({ type: "input", content: "which case fits an itx board?" }, context);
+	await until(1);
+
+	const day = await daySince(agent, started - 1_000, context);
+	assert.deepEqual([...day.saved], ["Chose the Node 304 case"]);
+	assert.match(day.conversation, /## test:dm[\s\S]*them: which case fits an itx board\?[\s\S]*pclaw: the node 304 fits that board/);
+	assert.equal((await daySince(agent, Date.now() + 60_000, context)).conversation, "");
+
+	const archive = join(dir, "notes-cleanup-archive.md");
+	const result = await cleanupNotes({ models, config, notes, archive }, day, "2026-11-10");
+	assert.match(cleanupInput, /\[n1\] Has a sister, Maya.*\[n2\] \(new\) Chose the Node 304 case/);
+	assert.equal(result.changes.length, 1);
+	assert.equal(notes.read(), "- Has a sister, Maya\n");
+	assert.match(await readFile(archive, "utf8"), /retired \(pclaw suggested it; they didn't choose\): Chose the Node 304 case/);
 	await delivery.stop();
 	await agent.harness.close(context);
 });

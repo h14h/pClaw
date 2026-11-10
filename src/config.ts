@@ -13,6 +13,10 @@ export const paths = {
 	db: join(home, "pclaw.sqlite"),
 	chatDb: join(home, "chat.sqlite"),
 	notes: join(home, "notes.md"),
+	/** Notes the nightly cleanup retired or replaced, with when and why. Never shown to models. */
+	notesArchive: join(home, "notes-archive.md"),
+	/** When the nightly notes cleanup last ran. */
+	notesCleanup: join(home, "notes-cleanup.json"),
 	/** Where workers run and leave files. */
 	work: join(home, "work"),
 	workerSessions: join(home, "worker-sessions"),

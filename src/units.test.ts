@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +11,7 @@ import { readAssistantReply, replyCollector } from "./delivery.ts";
 import { serviceNote } from "./dashboard/views.ts";
 import { nextOccurrence } from "./extensions/follow-ups.ts";
 import { Notes, notesView } from "./extensions/notes.ts";
+import { applyCleanup, cleanupInput, parseCleanup } from "./notes-cleanup.ts";
 import { quickSearchExtension } from "./extensions/quick-search.ts";
 import { isEmoji } from "./extensions/reactions.ts";
 import { search } from "./extensions/recall.ts";
@@ -238,4 +239,35 @@ test("the notes view keeps the copy in view and lists changes since", () => {
 	assert.deepEqual(notesView("- a\n", "<notes>\n(nothing yet)\n</notes>"), { notes: "- a" });
 	const many = Array.from({ length: 25 }, (_, index) => `- n${index}`).join("\n");
 	assert.deepEqual(notesView(many, "<notes>\n- a\n</notes>"), { notes: many });
+});
+
+test("the nightly cleanup changes notes in place, archives what it takes out, and skips a suspect night", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pclaw-cleanup-"));
+	try {
+		const notes = new Notes(join(dir, "notes.md"));
+		const archive = join(dir, "archive.md");
+		writeFileSync(notes.file, "- Sister Maya\n- Dune tickets Oct 3\n- Ships Friday\n- Shipping moved to Monday\n- Likes short replies\n");
+		const { input, lines } = cleanupInput(notes.read(), { conversation: "them: hi", saved: new Set(["Likes short replies"]) }, "2026-11-10");
+		assert.match(input, /\[n5\] \(new\) Likes short replies/);
+		assert.match(input, /\[n1\] Sister Maya/);
+		const reply = parseCleanup('```json\n{"merge": [{"ids": ["n3", "n4"], "text": "Ships Monday (moved from Friday)"}], "update": [{"id": "n5", "text": "Likes short, plain replies"}, {"id": "n3", "text": "already merged"}], "retire": [{"id": "n2", "why": "show was Oct 3"}, {"id": "n99"}], "tier": []}\n```');
+		// The person edited this note after the input was built, so its change is left alone.
+		notes.replace("Likes short replies", "Likes short replies, no emoji");
+		const result = applyCleanup(notes, lines, reply, "2026-11-10", archive);
+		assert.equal(notes.read(), "- Sister Maya\n- Ships Monday (moved from Friday)\n- Likes short replies, no emoji\n");
+		assert.equal(result.changes.length, 2);
+		const archived = readFileSync(archive, "utf8");
+		assert.match(archived, /2026-11-10 merged into "Ships Monday \(moved from Friday\)": Ships Friday/);
+		assert.match(archived, /2026-11-10 retired \(show was Oct 3\): Dune tickets Oct 3/);
+
+		// Dropping more than a quarter of the notes (and more than 5) at once looks like a bad reply, not a cleanup.
+		writeFileSync(notes.file, Array.from({ length: 12 }, (_, index) => `- note ${index}`).join("\n"));
+		const many = cleanupInput(notes.read(), { conversation: "", saved: new Set() }, "2026-11-10");
+		const before = notes.read();
+		const skipped = applyCleanup(notes, many.lines, { merge: [], update: [], retire: many.lines.map((_, index) => ({ id: `n${index + 1}`, why: "" })) }, "2026-11-10", archive);
+		assert.match(skipped.skipped ?? "", /would drop 12 of 12/);
+		assert.equal(notes.read(), before);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
 });

@@ -32,6 +32,21 @@ export class Notes {
 		return true;
 	}
 
+	/**
+	 * Replace the note that matches `note` exactly (with or without its "- ") in place, or remove it when `next` is
+	 * undefined. Returns whether one matched.
+	 */
+	replace(note: string, next: string | undefined): boolean {
+		const target = note.replace(/^-\s*/, "").trim();
+		const lines = this.read().split("\n");
+		const index = lines.findIndex((line) => line.replace(/^-\s*/, "").trim() === target);
+		if (target === "" || index === -1) return false;
+		if (next === undefined) lines.splice(index, 1);
+		else lines[index] = `- ${next.replace(/\s*\n\s*/g, " ").trim()}`;
+		writePrivate(this.file, lines.join("\n"));
+		return true;
+	}
+
 	/** Remove every line containing `text` (case-insensitive). Returns the removed lines. */
 	remove(text: string): string[] {
 		const needle = text.trim().toLowerCase();

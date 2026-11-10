@@ -11,7 +11,7 @@ It's early. Today it can talk, remember, follow up on its own, and hand real wor
 - Talks to you in Discord DMs, and in server channels you list in `discordChannels`. It answers only you; the first person to DM it becomes its owner.
 - Threads in those channels branch the conversation: a thread starts from the channel's history up to the message it was started on, then goes its own way. Replying to an older message quotes it back into the conversation.
 - Keeps context small: once a conversation's prompt passes 60K tokens, older messages are summarized and the last ~16K tokens stay word for word. A `recall` tool searches everything said before, summarized or not.
-- Remembers things about you in `~/.pclaw/notes.md`. Once a conversation has been quiet for 20 minutes, a background pass reads what was said and updates the notes. You can edit the file and it sees the change on the next message.
+- Remembers things about you in `~/.pclaw/notes.md`. Once a conversation has been quiet for 20 minutes, a background pass reads what was said and updates the notes. You can edit the file and it sees the change on the next message. Each night around 4am a cleanup checks the day's new notes against what was said, merges duplicates, and retires what's out of date; what it takes out goes to `~/.pclaw/notes-archive.md`.
 - Schedules its own follow-ups ("how did the interview go?") and reminders you ask for. They survive restarts.
 - Answers one-lookup questions (hours, a time, a price) itself with a quick web search, in a few seconds.
 - Hands research, comparisons, and anything with files or many steps to a worker, then tells you what came back. Quick jobs run with less reasoning than deep ones.

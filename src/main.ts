@@ -12,6 +12,7 @@ import { startDiscord } from "./channels/discord.ts";
 import { chatInTerminal } from "./channels/terminal.ts";
 import { type Config, ensureHome, loadConfig, paths, saveConfig } from "./config.ts";
 import { startContextKeeper } from "./context-keeper.ts";
+import { startNotesCleanup } from "./notes-cleanup.ts";
 import { FileCredentialStore } from "./credentials.ts";
 import { startDashboard } from "./dashboard/server.ts";
 import { Notes } from "./extensions/notes.ts";
@@ -152,6 +153,7 @@ async function start(): Promise<void> {
 	const discord = await startDiscord(agent, config, context);
 	const dashboard = await startDashboard({ agent, config, models, notes, workers, port: config.dashboardPort }, context);
 	const contextKeeper = startContextKeeper(agent, config.summarizeAtTokens, context);
+	const notesCleanup = startNotesCleanup(agent, { models, config, notes, archive: paths.notesArchive, stateFile: paths.notesCleanup }, context);
 	const jobKeeper = agent.jobs.startKeeper(context, config.jobPollSeconds * 1000, config.jobProgressSeconds * 1000);
 	console.log(`[pclaw] jobs on, decision model ${config.decisionUrl ?? "off"}`);
 
@@ -161,6 +163,7 @@ async function start(): Promise<void> {
 		stopping = true;
 		console.log("[pclaw] stopping");
 		contextKeeper.stop();
+		notesCleanup.stop();
 		jobKeeper.stop();
 		await discord.stop();
 		await dashboard.stop();

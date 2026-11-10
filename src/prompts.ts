@@ -48,6 +48,13 @@ export const prompts = {
 		name: "Notes pass",
 		description: "How the background pass decides what from a conversation goes into the notes.",
 	},
+	cleanup: {
+		get file() {
+			return resolved("cleanup.md");
+		},
+		name: "Nightly notes cleanup",
+		description: "How the notes are tidied each night: checking new notes against the day's conversation, merging, and retiring what's out of date.",
+	},
 	compaction: {
 		get file() {
 			return resolved("compaction.md");
