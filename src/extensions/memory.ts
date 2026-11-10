@@ -83,21 +83,29 @@ export function parseChanges(reply: string): { add: string[]; remove: string[] }
 	return { add: strings(value.add), remove: strings(value.remove) };
 }
 
+/** One memory pass over a stretch of conversation: what to add to the notes and what to remove. `pnpm evals:memory` runs this too. */
+export async function reviewNotes(
+	models: Models,
+	config: Pick<Config, "provider" | "model">,
+	current: string,
+	lines: string[],
+	signal?: AbortSignal,
+): Promise<{ add: string[]; remove: string[] }> {
+	const model = models.getModel(config.provider, config.model);
+	if (model === undefined) throw new Error(`memory pass: unknown model ${config.provider}/${config.model}`);
+	const input = `Current notes:\n\n${current.trim() || "(none yet)"}\n\nConversation since the last pass:\n\n${lines.join("\n\n")}`;
+	const reply = await models.completeSimple(
+		model,
+		{ systemPrompt: readPrompt("memory"), messages: [{ role: "user", content: input, timestamp: Date.now() }] },
+		{ reasoning: "low", ...(signal === undefined ? {} : { signal }) },
+	);
+	if (reply.stopReason === "error") throw new Error(`memory pass: ${reply.errorMessage ?? "model error"}`);
+	return parseChanges(textOf(reply));
+}
+
 export function memoryExtension(options: { notes: Notes; models: Models; config: Config; quietMs: number }) {
 	const { notes, models, config } = options;
-
-	async function review(lines: string[], signal: AbortSignal | undefined): Promise<{ add: string[]; remove: string[] }> {
-		const model = models.getModel(config.provider, config.model);
-		if (model === undefined) throw new Error(`memory pass: unknown model ${config.provider}/${config.model}`);
-		const input = `Current notes:\n\n${notes.read().trim() || "(none yet)"}\n\nConversation since the last pass:\n\n${lines.join("\n\n")}`;
-		const reply = await models.completeSimple(
-			model,
-			{ systemPrompt: readPrompt("memory"), messages: [{ role: "user", content: input, timestamp: Date.now() }] },
-			{ reasoning: "low", ...(signal === undefined ? {} : { signal }) },
-		);
-		if (reply.stopReason === "error") throw new Error(`memory pass: ${reply.errorMessage ?? "model error"}`);
-		return parseChanges(textOf(reply));
-	}
+	const review = (lines: string[], signal: AbortSignal | undefined) => reviewNotes(models, config, notes.read(), lines, signal);
 
 	const Keeper = defineTask<null, { phase: "watch"; tick: number }, null>({
 		name: "pclaw.memory-keeper",
