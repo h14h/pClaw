@@ -1,8 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { hostname } from "node:os";
-import type { Context } from "@earendil-works/chord";
-import { Type } from "@earendil-works/pi-ai";
+import type { Context } from "@earendil-works/chord/context";
+import { bool, lit, obj, opt, str, union } from "@earendil-works/pi-schema";
 import type { Models } from "@earendil-works/pi-ai/models";
 import { type Conversation, type ConversationId, defineExtension, defineTool, type Harness } from "@earendil-works/pi-durable";
 import { type Config, writePrivate } from "../config.ts";
@@ -868,18 +868,18 @@ export function createJobs(options: JobsOptions) {
 				name: "start_job",
 				description:
 					"Start work in a T3 Code thread, on any machine, with no time limit. For work they'd want to open and steer: changing code, building something, long runs. In a Discord channel it gets a thread under their message with a status card. For a one-off check on a machine, pass background: true, and the T3 thread settles itself. The agent can't see this conversation, so the brief must stand alone. Pass thread_id to keep an eye on a T3 thread that already exists.",
-				parameters: Type.Object({
-					title: Type.String({ description: "Short name, shown on the thread and the card." }),
-					brief: Type.Optional(Type.String({ description: "Self-contained brief: the goal and why, relevant facts, constraints, and what done looks like. Required unless thread_id is given." })),
-					project: Type.Optional(Type.String({ description: "Project name from list_projects. Omit for a scratch thread on `machine`." })),
-					machine: Type.Optional(Type.String({ description: "Which machine: mp1, pc1, mm1. Defaults to the project's machine, else this one." })),
-					model: Type.Optional(Type.String({ description: `T3 model id. Defaults to ${config.jobModel}.` })),
-					workspace: Type.Optional(Type.Union([Type.Literal("worktree"), Type.Literal("root")], { description: "worktree (default for git projects): a fresh checkout. root: the project's own folder." })),
-					base_ref: Type.Optional(Type.String({ description: 'Branch a worktree starts from. Defaults to "main".' })),
-					thread_id: Type.Optional(Type.String({ description: "An existing T3 thread to track instead of launching one." })),
-					background: Type.Optional(Type.Boolean({ description: "A one-off with nothing to open later, like reading a version or a disk's free space on a machine." })),
-					emoji: Type.Optional(Type.String({ description: "A reaction for their message while the job runs: the literal emoji for the topic if there is one. Defaults to ⏳." })),
-				}),
+				parameters: obj({
+					title: str({ description: "Short name, shown on the thread and the card." }),
+					brief: opt(str({ description: "Self-contained brief: the goal and why, relevant facts, constraints, and what done looks like. Required unless thread_id is given." })),
+					project: opt(str({ description: "Project name from list_projects. Omit for a scratch thread on `machine`." })),
+					machine: opt(str({ description: "Which machine: mp1, pc1, mm1. Defaults to the project's machine, else this one." })),
+					model: opt(str({ description: `T3 model id. Defaults to ${config.jobModel}.` })),
+					workspace: opt(union([lit("worktree"), lit("root")], { description: "worktree (default for git projects): a fresh checkout. root: the project's own folder." })),
+					base_ref: opt(str({ description: 'Branch a worktree starts from. Defaults to "main".' })),
+					thread_id: opt(str({ description: "An existing T3 thread to track instead of launching one." })),
+					background: opt(bool({ description: "A one-off with nothing to open later, like reading a version or a disk's free space on a machine." })),
+					emoji: opt(str({ description: "A reaction for their message while the job runs: the literal emoji for the topic if there is one. Defaults to ⏳." })),
+				}, { open: true }),
 				execute: async (args, api, context) => {
 					const ask = await currentAsk(harness.current, api, api.conversationId, context);
 					const routes = (await api.snapshot(Routes, context))?.conversations ?? {};
@@ -948,7 +948,7 @@ export function createJobs(options: JobsOptions) {
 			defineTool({
 				name: "list_projects",
 				description: "List the T3 projects start_job can use, and every reachable machine. A machine with no projects can still run scratch jobs.",
-				parameters: Type.Object({}),
+				parameters: obj({}, { open: true }),
 				replay: "safe",
 				execute: async () => {
 					try {
@@ -964,7 +964,7 @@ export function createJobs(options: JobsOptions) {
 			defineTool({
 				name: "list_jobs",
 				description: "List jobs and where each stands. Use this before answering any question about how a job is going.",
-				parameters: Type.Object({}),
+				parameters: obj({}, { open: true }),
 				replay: "safe",
 				execute: async () => {
 					const jobs = store.active();
@@ -974,7 +974,7 @@ export function createJobs(options: JobsOptions) {
 			defineTool({
 				name: "message_job",
 				description: "Send a message to a job's agent: an answer, a go-ahead, a correction. It joins the running turn, or starts a new one if the agent has stopped.",
-				parameters: Type.Object({ job: Type.String(), message: Type.String() }),
+				parameters: obj({ job: str(), message: str() }, { open: true }),
 				execute: async ({ job: id, message }, _api, context) => {
 					if (!config.t3AllowSend) throw new Error("Sending into T3 threads is off (t3AllowSend).");
 					const job = mustGet(id);
@@ -996,7 +996,7 @@ export function createJobs(options: JobsOptions) {
 			defineTool({
 				name: "stop_job",
 				description: "Stop a job's agent mid-turn. The T3 thread stays, so it can be picked up again.",
-				parameters: Type.Object({ job: Type.String() }),
+				parameters: obj({ job: str() }, { open: true }),
 				execute: async ({ job }, _api, context) => {
 					await stop(job, context);
 					return text(`Stopped ${job}.`);
@@ -1005,7 +1005,7 @@ export function createJobs(options: JobsOptions) {
 			defineTool({
 				name: "ping_owner",
 				description: "Make your next reply about this job a real notification. Without it, replies in a job's thread land silently. Call it before you write the message.",
-				parameters: Type.Object({ job: Type.Optional(Type.String({ description: "The job's id. Optional in its own thread." })) }),
+				parameters: obj({ job: opt(str({ description: "The job's id. Optional in its own thread." })) }, { open: true }),
 				execute: async ({ job: id }, api, context) => {
 					const routes = (await api.snapshot(Routes, context))?.conversations ?? {};
 					const address = Object.keys(routes).find((each) => routes[each] === api.conversationId);

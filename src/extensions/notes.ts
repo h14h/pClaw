@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { Type } from "@earendil-works/pi-ai";
+import { obj, str } from "@earendil-works/pi-schema";
 import { defineExtension, defineTool, section } from "@earendil-works/pi-durable";
 import { ensureHome, writePrivate } from "../config.ts";
 
@@ -57,7 +57,7 @@ export function notesExtension(notes: Notes) {
 					"Save a short note about the person for later: people in their life, preferences, plans, dates, " +
 					"ongoing projects, how they like things done. Call this whenever you learn something you'd want to " +
 					"know next week. One fact per call.",
-				parameters: Type.Object({ note: Type.String({ description: "One short, specific fact." }) }),
+				parameters: obj({ note: str({ description: "One short, specific fact." }) }, { open: true }),
 				execute: async ({ note }) => {
 					notes.add(note);
 					return text("Saved.");
@@ -68,7 +68,7 @@ export function notesExtension(notes: Notes) {
 				description:
 					"Remove notes that are wrong or out of date, or that they asked you to forget. Removes every note " +
 					"line containing the given text.",
-				parameters: Type.Object({ text: Type.String({ description: "Text that appears in the note(s) to remove." }) }),
+				parameters: obj({ text: str({ description: "Text that appears in the note(s) to remove." }) }, { open: true }),
 				execute: async (args) => {
 					const removed = notes.remove(args.text);
 					return text(removed.length === 0 ? "No note matched." : `Removed:\n${removed.join("\n")}`);

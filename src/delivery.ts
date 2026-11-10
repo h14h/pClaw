@@ -1,4 +1,4 @@
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
 	AssistantEntry,
@@ -7,8 +7,8 @@ import {
 	type EntryId,
 	type EntryRecord,
 	type Harness,
+	type LiveState,
 	UserEntry,
-	watchEvents,
 } from "@earendil-works/pi-durable";
 
 /** Where a conversation's replies go: a Discord DM, a terminal. */
@@ -129,7 +129,9 @@ export async function deliver(
 		queue = queue.then(() => send(collector.flush(), heldEntry));
 	};
 
-	const stream = await watchEvents(harness, conversationId, context);
+	// Attach first, then read the transcript, so nothing committed in between is missed. Entry IDs only grow, so
+	// anything past `seen` is new.
+	const watch = await conversation.watch(context);
 	const catchUp = (entries: readonly EntryRecord[], last: EntryId | undefined) => {
 		// A cursor that compaction has hidden counts as caught up; resending the visible transcript would be worse.
 		const index = last === undefined ? -1 : entries.findIndex((entry) => entry.id === last);
@@ -149,24 +151,46 @@ export async function deliver(
 		}
 	};
 	lastQueued = (await harness.snapshot(Delivered, conversationId, context))?.last;
-	catchUp(stream.snapshot.entries, lastQueued);
-	if (stream.snapshot.run !== undefined) outbox.working(true);
+	const active = (await conversation.context(context)).entries;
+	catchUp(active, lastQueued);
+	let seen = Math.max(active.at(-1)?.id ?? 0, watch.value.entries.at(-1)?.id ?? 0);
+	const busy = (view: typeof watch.value) => (view.docs["pi.live"] as LiveState | undefined)?.run !== undefined;
+	let working = busy(watch.value);
+	if (working) outbox.working(true);
 
-	stream.start(async (events) => {
-		for (const event of events) {
-			// A consumer that fell far behind gets a fresh snapshot instead of the missed events.
-			if (event.type === "snapshot") catchUp(event.entries, lastQueued);
-			else if (event.type === "run_start") outbox.working(true);
-			else if (event.type === "run_end") {
-				outbox.working(false);
-				flushInOrder();
-			}
-			else if (event.type === "message_end" && AssistantEntry.is(event.entry)) sendInOrder(event.entry);
+	const take = (entry: EntryRecord) => {
+		if (entry.id <= seen) return;
+		seen = entry.id;
+		if (AssistantEntry.is(entry)) sendInOrder(entry);
+		else if (UserEntry.is(entry)) flushInOrder();
+	};
+	watch.start(async (call) => {
+		if (call.kind === "failed") {
+			console.error("[pclaw] delivery watch failed", call.error);
+			return;
 		}
+		const { value } = call;
+		// More appended at once than the window holds: page in what fell off the front.
+		if (value.before !== undefined && value.before > seen) {
+			let cursor: Parameters<typeof conversation.entries>[2];
+			do {
+				const page = await conversation.entries({ minEntryId: (seen + 1) as EntryId, maxEntryId: value.before, order: "ascending" }, 100, cursor, context);
+				for (const entry of page.items) take(entry);
+				cursor = page.next;
+			} while (cursor !== undefined);
+		}
+		for (const entry of value.entries) take(entry);
+		const now = busy(value);
+		if (now !== working) {
+			working = now;
+			outbox.working(now);
+		}
+		// A run that ended with text still held: send it. Also covers a run that started and ended between callbacks.
+		if (!now) flushInOrder();
 	});
 	return {
 		stop: async () => {
-			await stream.stop();
+			await watch.stop();
 			await queue;
 		},
 	};

@@ -4,8 +4,8 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Type } from "@earendil-works/pi-ai";
-import type { Context } from "@earendil-works/chord";
+import { lit, obj, opt, str, union } from "@earendil-works/pi-schema";
+import type { Context } from "@earendil-works/chord/context";
 import { type Conversation, type ConversationId, defineDoc, defineExtension, defineTask, defineTool, type Harness, type TaskId, type Tx } from "@earendil-works/pi-durable";
 import type { Config } from "../config.ts";
 import { MUSE, museArgs, musePreamble, museRun, museTranscript } from "../muse.ts";
@@ -399,25 +399,25 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 					"research, comparisons, lookups, browsing, making or reading files, or anything that takes more than a " +
 					"minute of careful work. The worker can't see this conversation, so the brief must stand alone. Its " +
 					"report comes back to you as a <worker-report>.",
-				parameters: Type.Object({
-					name: Type.String({ description: "Short name for this job, like nas-parts or llc-annual-report." }),
-					brief: Type.String({
+				parameters: obj({
+					name: str({ description: "Short name for this job, like nas-parts or llc-annual-report." }),
+					brief: str({
 						description:
 							"Self-contained brief: the goal and why, relevant facts and preferences, constraints, and what to report back.",
 					}),
-					depth: Type.Optional(
-						Type.Union([Type.Literal("quick"), Type.Literal("deep")], {
+					depth: opt(
+						union([lit("quick"), lit("deep")], {
 							description:
 								"quick (default): a lookup or simple comparison, a few searches, done in a minute or two. deep: real research where getting it right takes many sources and careful checking.",
 						}),
 					),
-					emoji: Type.Optional(
-						Type.String({
+					emoji: opt(
+						str({
 							description:
 								"A reaction for their message while the job runs: the literal emoji for the topic if there is one (🖥️ for a computer, 🍜 for ramen). Defaults to ⏳.",
 						}),
 					),
-				}),
+				}, { open: true }),
 				execute: async ({ name, brief, emoji, depth = "quick" }, api, context) => {
 					const ask = await currentAsk(harness.current, api, api.conversationId, context);
 					const badge = emoji !== undefined && isEmoji(emoji.trim()) ? emoji.trim() : WORKING;
@@ -456,7 +456,7 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 				name: "message_worker",
 				description:
 					"Send a follow-up, correction, answer, or go-ahead to a worker you started earlier. It remembers the job.",
-				parameters: Type.Object({ name: Type.String(), message: Type.String() }),
+				parameters: obj({ name: str(), message: str() }, { open: true }),
 				execute: async ({ name, message }, api, context) => {
 					const ask = await currentAsk(harness.current, api, api.conversationId, context);
 					const outcome = await api.commit(async (tx) => {
@@ -478,7 +478,7 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 			defineTool({
 				name: "stop_worker",
 				description: "Stop a worker mid-job. It keeps its memory, so message_worker can restart it later.",
-				parameters: Type.Object({ name: Type.String() }),
+				parameters: obj({ name: str() }, { open: true }),
 				execute: async ({ name }, api, context) => {
 					const worker = (await api.snapshot(Workers, api.conversationId, context))?.workers[name];
 					if (worker?.run === undefined) return text(`${name} isn't running.`);
@@ -490,7 +490,7 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 			defineTool({
 				name: "list_workers",
 				description: "List workers and what each is doing.",
-				parameters: Type.Object({}),
+				parameters: obj({}, { open: true }),
 				execute: async (_args, api, context) => {
 					const workers = Object.entries((await api.snapshot(Workers, api.conversationId, context))?.workers ?? {});
 					if (workers.length === 0) return text("No workers yet.");

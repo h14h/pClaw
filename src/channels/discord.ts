@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import {
 	type Conversation,
@@ -247,10 +247,10 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 	 * one sync at a time per conversation, so quick ⏳ -> ✅ changes land in order.
 	 */
 	async function syncReactions(addr: string, conversation: Conversation): Promise<() => void> {
-		// documentState() only attaches to a document that exists, and a conversation has none until its first reaction.
+		// watchDoc() only attaches to a document that exists, and a conversation has none until its first reaction.
 		await conversation.commit((tx) => tx.doc(Reactions, conversation.id), context);
-		const state = await agent.harness.documentState(Reactions, conversation.id, context);
-		if (state === undefined) return () => undefined;
+		const watch = await agent.harness.watchDoc(Reactions, conversation.id, context);
+		if (watch === undefined) return () => undefined;
 		let applied: Record<string, string> | undefined;
 		let queue = Promise.resolve();
 		const apply = async (ref: string, emoji: string) => {
@@ -263,8 +263,8 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 			}
 			if (emoji !== "" && !message.reactions.cache.get(emoji)?.me) await message.react(emoji);
 		};
-		return state.subscribe(async (value) => {
-			const asks = { ...(value?.asks ?? {}) };
+		const sync = (value: (typeof watch)["value"]) => {
+			const asks: Record<string, string> = { ...(value.asks ?? {}) };
 			if (applied === undefined) {
 				// On attach, bring the most recent asks up to date (a change may have landed while pclaw was down);
 				// older ones are assumed applied, so a restart doesn't refetch every message ever reacted to.
@@ -278,7 +278,12 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 				if (before[ref] === emoji) continue;
 				queue = queue.then(() => apply(ref, emoji)).catch((error: unknown) => console.error(`[pclaw] reaction ${ref}`, error));
 			}
+		};
+		sync(watch.value);
+		watch.start(async (call) => {
+			if (call.kind === "value") sync(call.value);
 		});
+		return () => void watch.stop();
 	}
 
 	async function attach(addr: string, conversation: Conversation) {

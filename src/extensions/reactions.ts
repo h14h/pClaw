@@ -1,5 +1,5 @@
-import type { Context } from "@earendil-works/chord";
-import { Type } from "@earendil-works/pi-ai";
+import type { Context } from "@earendil-works/chord/context";
+import { obj, str } from "@earendil-works/pi-schema";
 import {
 	type ConversationId,
 	defineDoc,
@@ -79,7 +79,7 @@ export function reactionsExtension(harness: { current?: Harness }) {
 					"a computer), ✅ or 🎉 when a job is done and the news is good, something warmer for hard news, and never ✅ " +
 					"on bad news. A reaction can be the whole reply: for \"thanks\" or \"ok sounds good\", react and reply NO_REPLY. " +
 					"It replaces any reaction you put there before; pass \"none\" to clear it.",
-				parameters: Type.Object({ emoji: Type.String({ description: "One emoji, or \"none\"." }) }),
+				parameters: obj({ emoji: str({ description: "One emoji, or \"none\"." }) }, { open: true }),
 				execute: async ({ emoji }, api, context) => {
 					const value = emoji.trim() === "none" ? "" : emoji.trim();
 					if (value !== "" && !isEmoji(value)) throw new Error(`"${emoji}" isn't a single emoji.`);

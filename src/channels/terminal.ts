@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline/promises";
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import type { Agent } from "../agent.ts";
 import type { Config } from "../config.ts";
 import { deliver } from "../delivery.ts";

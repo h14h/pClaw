@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { obj, str } from "@earendil-works/pi-schema";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { chosenService, formatSearch, search } from "../search.ts";
 
@@ -23,7 +23,7 @@ export function quickSearchExtension() {
 					"price, a date, a quick fact. Answer from what the sources say. If they don't clearly settle it, say so or " +
 					"delegate; never fill the gap with a guess. Comparisons, research, and anything needing several sources go " +
 					"to delegate instead.",
-				parameters: Type.Object({ query: Type.String({ description: "A specific query." }) }),
+				parameters: obj({ query: str({ description: "A specific query." }) }, { open: true }),
 				replay: "safe",
 				execute: async ({ query }, _api, context) => {
 					// `details` stays in the transcript, not the model's context: which service answered, and how fast.

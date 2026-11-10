@@ -1,5 +1,5 @@
-import type { Context } from "@earendil-works/chord";
-import { Type } from "@earendil-works/pi-ai";
+import type { Context } from "@earendil-works/chord/context";
+import { obj, str } from "@earendil-works/pi-schema";
 import {
 	AssistantEntry,
 	type Cursor,
@@ -106,7 +106,7 @@ export function recallExtension(harness: { current?: Harness }, timeZone: string
 					"they refer to something from before what you can see (\"what was that case you found\", \"like we talked " +
 					"about last month\"), or when your notes mention something and you need the details. Search with a few " +
 					"distinctive words, not a sentence.",
-				parameters: Type.Object({ query: Type.String({ description: "A few distinctive words, e.g. \"walnut NAS case\"." }) }),
+				parameters: obj({ query: str({ description: "A few distinctive words, e.g. \"walnut NAS case\"." }) }, { open: true }),
 				replay: "safe",
 				execute: async ({ query }, api, context) => {
 					const hits = search(await archive(String(api.conversationId), context), query);

@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { lit, obj, opt, str, union } from "@earendil-works/pi-schema";
 import { defineDoc, defineExtension, defineTask, defineTool } from "@earendil-works/pi-durable";
 import { stamp, utcOffset } from "../time.ts";
 
@@ -112,15 +112,15 @@ export function followUpsExtension(timeZone: string, now: () => number = Date.no
 					"Schedule a message to yourself that arrives at a set time, so you can check in, remind them, or " +
 					"pick a thread back up. Use it for reminders they ask for and for natural follow-ups (how did the " +
 					"interview go, did the package arrive). When it's due you'll get the note back and decide what to send.",
-				parameters: Type.Object({
-					at: Type.String({
+				parameters: obj({
+					at: str({
 						description: "When, as ISO 8601 with a UTC offset, e.g. 2026-10-03T09:00:00-07:00.",
 					}),
-					note: Type.String({
+					note: str({
 						description: "What to follow up on, with enough context that it makes sense days from now.",
 					}),
-					repeat: Type.Optional(Type.Union([Type.Literal("daily"), Type.Literal("weekly")])),
-				}),
+					repeat: opt(union([lit("daily"), lit("weekly")])),
+				}, { open: true }),
 				execute: async (args, api, context) => {
 					const dueAt = Date.parse(args.at);
 					if (Number.isNaN(dueAt)) throw new Error(`Couldn't read "${args.at}" as a time. Use ISO 8601 with an offset.`);
@@ -139,7 +139,7 @@ export function followUpsExtension(timeZone: string, now: () => number = Date.no
 			defineTool({
 				name: "list_follow_ups",
 				description: "List the follow-ups you have scheduled, soonest first.",
-				parameters: Type.Object({}),
+				parameters: obj({}, { open: true }),
 				execute: async (_args, api, context) => {
 					const items = Object.entries((await api.snapshot(FollowUps, api.conversationId, context))?.items ?? {});
 					if (items.length === 0) return text("Nothing scheduled.");
@@ -157,7 +157,7 @@ export function followUpsExtension(timeZone: string, now: () => number = Date.no
 			defineTool({
 				name: "cancel_follow_up",
 				description: "Cancel a scheduled follow-up by its id (from list_follow_ups).",
-				parameters: Type.Object({ id: Type.String() }),
+				parameters: obj({ id: str() }, { open: true }),
 				execute: async (args, api, context) => {
 					const found = await api.commit(async (tx) => {
 						const doc = await tx.doc(FollowUps, api.conversationId);

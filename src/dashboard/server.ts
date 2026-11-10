@@ -2,11 +2,11 @@ import { existsSync, readdirSync, readFileSync, statSync, unwatchFile, watch, wa
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { basename, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AttachedReplicatedState, Context, JsonValue } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import {
 	type ConversationId,
-	type ConversationView as DurableView,
-	type DocumentState,
+	type Conversation,
+	type ConversationWatch,
 	LiveDoc,
 	type LiveState,
 	UsageDoc,
@@ -63,9 +63,9 @@ function fallbackLabel(address: string): string {
 }
 
 type Watched = {
-	view: AttachedReplicatedState<DurableView>;
-	workers: DocumentState<{ workers: Record<string, JsonValue> }> | undefined;
-	followUps: DocumentState<{ items: Record<string, JsonValue> }> | undefined;
+	conversation: Conversation;
+	/** For live state and change notices. Its entries are a window, so the timeline reads the transcript instead. */
+	view: ConversationWatch;
 };
 
 /**
@@ -104,26 +104,29 @@ export async function startDashboard(
 		if (known !== undefined) return known;
 		const conversation = await harness.conversation(id, context);
 		if (conversation === undefined) return undefined;
-		const view = await conversation.viewState(context);
-		// documentState() only attaches to documents that exist; create empty ones so later changes are seen.
+		const view = await conversation.watch(context);
+		// watchDoc() only attaches to documents that exist; create empty ones so later changes are seen.
 		await conversation.commit(async (tx) => {
 			await tx.doc(Workers, id);
 			await tx.doc(FollowUps, id);
 			await tx.doc(Reactions, id);
 		}, context);
-		const workerDoc = await harness.documentState(Workers, id, context);
-		const followUpDoc = await harness.documentState(FollowUps, id, context);
-		const reactionsDoc = await harness.documentState(Reactions, id, context);
-		const entry: Watched = { view, workers: workerDoc, followUps: followUpDoc };
+		const docs = [
+			await harness.watchDoc(Workers, id, context),
+			await harness.watchDoc(FollowUps, id, context),
+			await harness.watchDoc(Reactions, id, context),
+		];
+		const entry: Watched = { conversation, view };
 		watched.set(String(id), entry);
 		const changed = async () => {
 			emit({ scope: "conversation", id: String(id) });
 			emit({ scope: "overview" });
 		};
-		cleanups.push(view.subscribe(changed));
-		if (workerDoc !== undefined) cleanups.push(workerDoc.subscribe(changed));
-		if (followUpDoc !== undefined) cleanups.push(followUpDoc.subscribe(changed));
-		if (reactionsDoc !== undefined) cleanups.push(reactionsDoc.subscribe(changed));
+		for (const each of [view, ...docs]) {
+			if (each === undefined) continue;
+			each.start(changed);
+			cleanups.push(() => void each.stop());
+		}
 		return entry;
 	}
 
@@ -131,16 +134,6 @@ export async function startDashboard(
 		const routes = Object.entries(await agent.addresses(context));
 		for (const [, id] of routes) await watchConversation(id);
 		return routes;
-	}
-
-	async function hydrated<T>(state: { value: T | undefined; subscribe(fn: (value: T) => Promise<void>): () => void }): Promise<T> {
-		if (state.value !== undefined) return state.value;
-		return new Promise((resolve) => {
-			const stop = state.subscribe(async (value) => {
-				stop();
-				resolve(value);
-			});
-		});
 	}
 
 	const workerSummaries = async (id: ConversationId): Promise<WorkerSummary[]> => {
@@ -231,7 +224,9 @@ export async function startDashboard(
 		const route = routes.find(([, id]) => String(id) === idText);
 		if (route === undefined) return undefined;
 		const [address, id] = route;
-		const view = await hydrated((await watchConversation(id))!.view);
+		const { conversation, view: watch } = (await watchConversation(id))!;
+		const view = watch.value;
+		const entries = (await conversation.context(context)).entries;
 		const followUps = await harness.snapshot(FollowUps, id, context);
 		const live = view.docs[LiveDoc.definition.kind] as LiveState | undefined;
 		return {
@@ -239,7 +234,7 @@ export async function startDashboard(
 			address,
 			...(await describe(address, id)),
 			live: liveStatus(live),
-			timeline: buildTimeline(view.entries, live?.run === undefined, await reactionsByEntry(id)),
+			timeline: buildTimeline(entries, live?.run === undefined, await reactionsByEntry(id)),
 			workers: await workerSummaries(id),
 			followUps: Object.entries(followUps?.items ?? {})
 				.map(([taskId, item]) => ({ id: taskId, at: item.dueAt, note: item.note, ...(item.repeat === undefined ? {} : { repeat: item.repeat }) }))
@@ -434,11 +429,12 @@ export async function startDashboard(
 
 	await conversations();
 	// New conversations (a thread's first message) show up in the overview at once.
-	const routesState = await harness.documentState(Routes, context);
-	const infoState = await harness.documentState(ConversationInfo, context);
 	const conversationsChanged = async () => emit({ scope: "overview" });
-	if (routesState !== undefined) cleanups.push(routesState.subscribe(conversationsChanged));
-	if (infoState !== undefined) cleanups.push(infoState.subscribe(conversationsChanged));
+	for (const each of [await harness.watchDoc(Routes, context), await harness.watchDoc(ConversationInfo, context)]) {
+		if (each === undefined) continue;
+		each.start(conversationsChanged);
+		cleanups.push(() => void each.stop());
+	}
 	await new Promise<void>((resolve, reject) => {
 		server.once("error", reject);
 		server.listen(options.port, "127.0.0.1", () => resolve());
@@ -453,7 +449,6 @@ export async function startDashboard(
 			clearTimeout(flush);
 			for (const cleanup of cleanups) cleanup();
 			for (const client of clients) client.end();
-			for (const state of watched.values()) state.view.dispose();
 			await new Promise((resolve) => server.close(resolve));
 		},
 	};
