@@ -9,6 +9,7 @@ import { xaiProvider } from "@earendil-works/pi-ai/providers/xai";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { openAgent } from "./agent.ts";
 import { startDiscord } from "./channels/discord.ts";
+import { startTelegram } from "./channels/telegram.ts";
 import { chatInTerminal } from "./channels/terminal.ts";
 import { type Config, ensureHome, loadConfig, paths, saveConfig } from "./config.ts";
 import { startContextKeeper } from "./context-keeper.ts";
@@ -110,16 +111,29 @@ async function setup(): Promise<void> {
 		if (key !== "") saveConfig({ parallelApiKey: key });
 	}
 
+	let hasChannel = config.discordToken !== undefined || config.telegramToken !== undefined;
 	if (config.discordToken === undefined) {
 		console.log(
 			"\nCreate a Discord bot at https://discord.com/developers/applications:\n" +
 				"  New Application > Bot > Reset Token, and copy the token.\n" +
-				"  On the same page, turn off Public Bot so nobody else can add it to a server.\n",
+				"  On the same page, turn off Public Bot so nobody else can add it to a server.\n" +
+				"  Press enter to skip if you're using Telegram instead.\n",
 		);
-		const token = await ask("Bot token: ");
-		if (token === "") throw new Error("No token entered.");
-		saveConfig({ discordToken: token });
+		const token = await ask("Discord bot token: ");
+		if (token !== "") {
+			saveConfig({ discordToken: token });
+			hasChannel = true;
+		}
 	}
+	if (config.telegramToken === undefined) {
+		console.log("\nOptional: create a Telegram bot with @BotFather and paste its token. Press enter to skip.");
+		const token = await ask("Telegram bot token: ");
+		if (token !== "") {
+			saveConfig({ telegramToken: token });
+			hasChannel = true;
+		}
+	}
+	if (!hasChannel) throw new Error("No Discord or Telegram bot token entered.");
 	console.log(`\nDone. Settings are in ${paths.config}. Start it with \`pnpm start\`, then DM the bot.`);
 }
 
@@ -149,8 +163,12 @@ async function start(): Promise<void> {
 	useProfile(loadProfile(config.profile).dir);
 	console.log(`[pclaw] profile ${config.profile}`);
 	const workers = workerOptions(config, paths);
+	if (config.discordToken === undefined && config.telegramToken === undefined) {
+		throw new Error("No Discord or Telegram token configured. Run `pnpm setup` or set DISCORD_TOKEN / TELEGRAM_BOT_TOKEN.");
+	}
 	const agent = await openAgent(await openNodeSqliteStorage(paths.db), { config, models, notes, workers }, context);
-	const discord = await startDiscord(agent, config, context);
+	const discord = config.discordToken === undefined ? undefined : await startDiscord(agent, config, context);
+	const telegram = config.telegramToken === undefined ? undefined : await startTelegram(agent, config, context);
 	const dashboard = await startDashboard({ agent, config, models, notes, workers, port: config.dashboardPort }, context);
 	const contextKeeper = startContextKeeper(agent, config.summarizeAtTokens, context);
 	const notesCleanup = startNotesCleanup(agent, { models, config, notes, archive: paths.notesArchive, stateFile: paths.notesCleanup }, context);
@@ -165,7 +183,8 @@ async function start(): Promise<void> {
 		contextKeeper.stop();
 		notesCleanup.stop();
 		jobKeeper.stop();
-		await discord.stop();
+		await discord?.stop();
+		await telegram?.stop();
 		await dashboard.stop();
 		await agent.harness.close(context);
 		process.exit(0);

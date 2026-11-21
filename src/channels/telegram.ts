@@ -1,0 +1,1119 @@
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, extname, join } from "node:path";
+import type { Context } from "@earendil-works/chord/context";
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
+import {
+	type Conversation,
+	type ConversationId,
+	defineDoc,
+	type EntryId,
+	type UserInput,
+} from "@earendil-works/pi-durable";
+import type { Agent } from "../agent.ts";
+import { type Config, paths, saveConfig } from "../config.ts";
+import { deliver, type Outbox } from "../delivery.ts";
+import type { Job } from "../extensions/jobs.ts";
+import { Reactions } from "../extensions/reactions.ts";
+import { Workers } from "../extensions/workers.ts";
+import { type Heard, memoLabel, transcribe } from "../speech.ts";
+import { stamp } from "../time.ts";
+import {
+	markdownToTelegramHtml,
+	normalizeTelegramReaction,
+	splitPlainText,
+	splitTelegramHtml,
+	stripTelegramHtml,
+	TELEGRAM_MAX_CAPTION,
+	TELEGRAM_MAX_MESSAGE,
+} from "./telegram-format.ts";
+
+const DEFAULT_API_BASE = "https://api.telegram.org";
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+/** Telegram Bot API `getFile` download cap is 20 MB. */
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
+/** Telegram typing indicators expire after ~5s. */
+const TYPING_REFRESH_MS = 4_000;
+const MEDIA_GROUP_DEBOUNCE_MS = 600;
+const QUOTE_LIMIT = 800;
+const RESYNC_ON_ATTACH = 10;
+const POLL_TIMEOUT_SECONDS = 30;
+const ALLOWED_UPDATES = ["message", "message_reaction"] as const;
+
+export type TelegramUser = {
+	id: number;
+	is_bot?: boolean;
+	first_name?: string;
+	last_name?: string;
+	username?: string;
+};
+
+export type TelegramChat = {
+	id: number;
+	type: "private" | "group" | "supergroup" | "channel";
+	title?: string;
+	username?: string;
+	first_name?: string;
+	last_name?: string;
+};
+
+export type TelegramPhotoSize = {
+	file_id: string;
+	file_unique_id?: string;
+	width: number;
+	height: number;
+	file_size?: number;
+};
+
+export type TelegramVoice = {
+	file_id: string;
+	duration: number;
+	mime_type?: string;
+	file_size?: number;
+};
+
+export type TelegramAudio = {
+	file_id: string;
+	duration?: number;
+	file_name?: string;
+	mime_type?: string;
+	file_size?: number;
+};
+
+export type TelegramDocument = {
+	file_id: string;
+	file_name?: string;
+	mime_type?: string;
+	file_size?: number;
+};
+
+export type TelegramTextQuote = {
+	text: string;
+	position?: number;
+	is_manual?: boolean;
+};
+
+export type TelegramMessage = {
+	message_id: number;
+	from?: TelegramUser;
+	chat: TelegramChat;
+	date: number;
+	text?: string;
+	caption?: string;
+	media_group_id?: string;
+	reply_to_message?: TelegramMessage;
+	quote?: TelegramTextQuote;
+	photo?: TelegramPhotoSize[];
+	voice?: TelegramVoice;
+	audio?: TelegramAudio;
+	document?: TelegramDocument;
+};
+
+export type TelegramReactionType =
+	| { type: "emoji"; emoji: string }
+	| { type: "custom_emoji"; custom_emoji_id: string }
+	| { type: "paid" };
+
+export type TelegramMessageReactionUpdated = {
+	chat: TelegramChat;
+	message_id: number;
+	user?: TelegramUser;
+	date: number;
+	old_reaction: TelegramReactionType[];
+	new_reaction: TelegramReactionType[];
+};
+
+export type TelegramUpdate = {
+	update_id: number;
+	message?: TelegramMessage;
+	message_reaction?: TelegramMessageReactionUpdated;
+};
+
+export type TelegramFile = {
+	file_id: string;
+	file_size?: number;
+	file_path?: string;
+};
+
+type TelegramApiResponse<T> = {
+	ok: boolean;
+	result?: T;
+	error_code?: number;
+	description?: string;
+	parameters?: { retry_after?: number };
+};
+
+export class TelegramApiError extends Error {
+	readonly method: string;
+	readonly status: number;
+	readonly description: string;
+	readonly retryAfter?: number;
+
+	constructor(method: string, status: number, description: string, retryAfter?: number) {
+		super(`Telegram ${method} failed (${status}): ${description}`);
+		this.name = "TelegramApiError";
+		this.method = method;
+		this.status = status;
+		this.description = description;
+		if (retryAfter !== undefined) this.retryAfter = retryAfter;
+	}
+}
+
+export function isTelegramParseError(error: unknown): boolean {
+	if (!(error instanceof TelegramApiError) || error.status !== 400) return false;
+	return /parse entities|can't find end of the entity|unsupported start tag|unexpected end tag/i.test(error.description);
+}
+
+export type OutboundFileInput =
+	| string
+	| { data: Uint8Array; filename: string; mimeType?: string };
+
+export type SendMediaOptions = {
+	caption?: string;
+	replyToMessageId?: number;
+	disableNotification?: boolean;
+};
+
+export type TelegramApi = {
+	getMe(signal?: AbortSignal): Promise<TelegramUser>;
+	getUpdates(
+		params: { offset?: number; timeout?: number; allowed_updates?: readonly string[] },
+		signal?: AbortSignal,
+	): Promise<TelegramUpdate[]>;
+	sendMessage(
+		params: {
+			chat_id: number | string;
+			text: string;
+			parse_mode?: "HTML";
+			link_preview_options?: { is_disabled: boolean };
+			reply_parameters?: { message_id: number };
+			disable_notification?: boolean;
+		},
+		signal?: AbortSignal,
+	): Promise<TelegramMessage>;
+	sendFormattedMessage(
+		chatId: number | string,
+		markdown: string,
+		options?: { replyToMessageId?: number; disableNotification?: boolean; disableLinkPreview?: boolean },
+		signal?: AbortSignal,
+	): Promise<TelegramMessage[]>;
+	sendChatAction(chatId: number | string, action: "typing" | "upload_document" | "upload_photo", signal?: AbortSignal): Promise<boolean>;
+	setMessageReaction(chatId: number | string, messageId: number, emoji: string | undefined, signal?: AbortSignal): Promise<boolean>;
+	getFile(fileId: string, signal?: AbortSignal): Promise<TelegramFile>;
+	downloadFile(filePath: string, signal?: AbortSignal): Promise<Uint8Array<ArrayBuffer>>;
+	sendDocument(chatId: number | string, file: OutboundFileInput, options?: SendMediaOptions, signal?: AbortSignal): Promise<TelegramMessage>;
+	sendPhoto(chatId: number | string, file: OutboundFileInput, options?: SendMediaOptions, signal?: AbortSignal): Promise<TelegramMessage>;
+};
+
+export function createTelegramApi(options: {
+	token: string;
+	apiBase?: string;
+	fetchFn?: typeof fetch;
+}): TelegramApi {
+	const base = (options.apiBase ?? DEFAULT_API_BASE).replace(/\/$/, "");
+	const fetchFn = options.fetchFn ?? fetch;
+
+	async function call<T>(method: string, params?: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+		const response = await fetchFn(`${base}/bot${options.token}/${method}`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(params ?? {}),
+			...(signal === undefined ? {} : { signal }),
+		});
+		const payload = (await response.json().catch(() => undefined)) as TelegramApiResponse<T> | undefined;
+		if (!response.ok || payload?.ok !== true) {
+			throw new TelegramApiError(
+				method,
+				payload?.error_code ?? response.status,
+				payload?.description ?? response.statusText ?? "unknown error",
+				payload?.parameters?.retry_after,
+			);
+		}
+		return payload.result as T;
+	}
+
+	async function sendMessage(
+		params: {
+			chat_id: number | string;
+			text: string;
+			parse_mode?: "HTML";
+			link_preview_options?: { is_disabled: boolean };
+			reply_parameters?: { message_id: number };
+			disable_notification?: boolean;
+		},
+		signal?: AbortSignal,
+	): Promise<TelegramMessage> {
+		return call<TelegramMessage>("sendMessage", params, signal);
+	}
+
+	async function sendFormattedMessage(
+		chatId: number | string,
+		markdown: string,
+		sendOptions?: { replyToMessageId?: number; disableNotification?: boolean; disableLinkPreview?: boolean },
+		signal?: AbortSignal,
+	): Promise<TelegramMessage[]> {
+		const html = markdownToTelegramHtml(markdown);
+		const chunks = splitTelegramHtml(html, TELEGRAM_MAX_MESSAGE);
+		if (chunks.length === 0) return [];
+		const linkPreview = { is_disabled: sendOptions?.disableLinkPreview ?? true };
+		const sent: TelegramMessage[] = [];
+		for (const [index, chunk] of chunks.entries()) {
+			const reply = index === 0 && sendOptions?.replyToMessageId !== undefined ? { reply_parameters: { message_id: sendOptions.replyToMessageId } } : {};
+			const silent = sendOptions?.disableNotification === true ? { disable_notification: true } : {};
+			try {
+				const message = await sendMessage(
+					{ chat_id: chatId, text: chunk, parse_mode: "HTML", link_preview_options: linkPreview, ...reply, ...silent },
+					signal,
+				);
+				sent.push(message);
+			} catch (error) {
+				if (!isTelegramParseError(error)) throw error;
+				// Plain-text fallback so Telegram 400 entity parse errors never drop a reply.
+				const plainChunks = splitPlainText(stripTelegramHtml(chunk), TELEGRAM_MAX_MESSAGE);
+				for (const [plainIdx, plain] of plainChunks.entries()) {
+					const plainReply = index === 0 && plainIdx === 0 ? reply : {};
+					const message = await sendMessage(
+						{ chat_id: chatId, text: plain, link_preview_options: linkPreview, ...plainReply, ...silent },
+						signal,
+					);
+					sent.push(message);
+				}
+			}
+		}
+		return sent;
+	}
+
+	async function uploadMedia(
+		method: "sendDocument" | "sendPhoto",
+		fieldName: "document" | "photo",
+		chatId: number | string,
+		file: OutboundFileInput,
+		sendOptions?: SendMediaOptions,
+		signal?: AbortSignal,
+	): Promise<TelegramMessage> {
+		const resolved =
+			typeof file === "string"
+				? { data: new Uint8Array(readFileSync(file)), filename: basename(file), mimeType: mimeFromPath(file) }
+				: { data: new Uint8Array(file.data), filename: file.filename, mimeType: file.mimeType ?? mimeFromPath(file.filename) };
+
+		const buildForm = (caption: string | undefined, parseMode: "HTML" | undefined) => {
+			const form = new FormData();
+			form.set("chat_id", String(chatId));
+			form.set(fieldName, new Blob([resolved.data], { type: resolved.mimeType }), resolved.filename);
+			if (caption !== undefined && caption !== "") {
+				form.set("caption", caption);
+				if (parseMode !== undefined) form.set("parse_mode", parseMode);
+			}
+			if (sendOptions?.replyToMessageId !== undefined) {
+				form.set("reply_parameters", JSON.stringify({ message_id: sendOptions.replyToMessageId }));
+			}
+			if (sendOptions?.disableNotification === true) form.set("disable_notification", "true");
+			return form;
+		};
+
+		const sendForm = async (form: FormData) => {
+			const response = await fetchFn(`${base}/bot${options.token}/${method}`, {
+				method: "POST",
+				body: form,
+				...(signal === undefined ? {} : { signal }),
+			});
+			const payload = (await response.json().catch(() => undefined)) as TelegramApiResponse<TelegramMessage> | undefined;
+			if (!response.ok || payload?.ok !== true) {
+				throw new TelegramApiError(
+					method,
+					payload?.error_code ?? response.status,
+					payload?.description ?? response.statusText ?? "unknown error",
+					payload?.parameters?.retry_after,
+				);
+			}
+			return payload.result as TelegramMessage;
+		};
+
+		const rawCaption = sendOptions?.caption?.trim();
+		const htmlCaption =
+			rawCaption !== undefined && rawCaption !== ""
+				? splitTelegramHtml(markdownToTelegramHtml(rawCaption), TELEGRAM_MAX_CAPTION)[0]
+				: undefined;
+
+		try {
+			return await sendForm(buildForm(htmlCaption, htmlCaption === undefined ? undefined : "HTML"));
+		} catch (error) {
+			if (!isTelegramParseError(error) || htmlCaption === undefined) throw error;
+			const plainCaption = splitPlainText(stripTelegramHtml(htmlCaption), TELEGRAM_MAX_CAPTION)[0];
+			return sendForm(buildForm(plainCaption, undefined));
+		}
+	}
+
+	return {
+		getMe: (signal) => call<TelegramUser>("getMe", undefined, signal),
+		getUpdates: (params, signal) => call<TelegramUpdate[]>("getUpdates", params, signal),
+		sendMessage,
+		sendFormattedMessage,
+		sendChatAction: (chatId, action, signal) => call<boolean>("sendChatAction", { chat_id: chatId, action }, signal),
+		setMessageReaction: (chatId, messageId, emoji, signal) => {
+			const normalized = emoji === undefined ? undefined : normalizeTelegramReaction(emoji);
+			return call<boolean>(
+				"setMessageReaction",
+				{
+					chat_id: chatId,
+					message_id: messageId,
+					reaction: normalized === undefined ? [] : [{ type: "emoji", emoji: normalized }],
+				},
+				signal,
+			);
+		},
+		getFile: (fileId, signal) => call<TelegramFile>("getFile", { file_id: fileId }, signal),
+		downloadFile: async (filePath, signal) => {
+			const response = await fetchFn(`${base}/file/bot${options.token}/${filePath.replace(/^\/+/, "")}`, {
+				...(signal === undefined ? {} : { signal }),
+			});
+			if (!response.ok) throw new Error(`Telegram file download failed (${response.status})`);
+			return new Uint8Array(await response.arrayBuffer());
+		},
+		sendDocument: (chatId, file, sendOptions, signal) => uploadMedia("sendDocument", "document", chatId, file, sendOptions, signal),
+		sendPhoto: (chatId, file, sendOptions, signal) => uploadMedia("sendPhoto", "photo", chatId, file, sendOptions, signal),
+	};
+}
+
+/**
+ * How pclaw maps Telegram chats onto Pi Durable conversations:
+ *   telegram:dm:<userId>      a private chat (DM): one long conversation
+ *   telegram:group:<chatId>   an allowlisted group or supergroup: one long conversation
+ */
+export const telegramAddress = {
+	dm: (userId: string | number) => `telegram:dm:${userId}`,
+	group: (chatId: string | number) => `telegram:group:${chatId}`,
+};
+
+export function parseTelegramAddress(addr: string): { kind: "dm" | "group"; chatId: string } | undefined {
+	const [channel, kind, id] = addr.split(":");
+	if (channel !== "telegram" || id === undefined || id === "") return undefined;
+	if (kind !== "dm" && kind !== "group") return undefined;
+	return { kind, chatId: id };
+}
+
+/**
+ * Where to show typing in Telegram while background workers or jobs run, matching Discord's rule:
+ * no activity means nothing is happening.
+ */
+export function telegramTypingTargets(
+	conversations: { address: string; workers: { status: string }[] }[],
+	jobs: Pick<Job, "origin" | "background" | "state" | "worker" | "discordThreadId">[],
+): string[] {
+	const running = jobs.filter((job) => job.state === "working" && job.origin.startsWith("telegram:"));
+	const workers = conversations
+		.filter(({ address, workers }) => address.startsWith("telegram:") && workers.some((worker) => worker.status === "working"))
+		.map(({ address }) => address);
+	const jobOrigins = running.map((job) => job.origin);
+	return [...new Set([...workers, ...jobOrigins])];
+}
+
+export type TelegramAuthState = {
+	ownerId?: string;
+	allowedUsers: ReadonlySet<string>;
+	allowedGroups: ReadonlySet<string>;
+};
+
+export type TelegramAuthResult =
+	| { allowed: false }
+	| { allowed: true; pairedOwnerId?: string; addr: string; label: string; isGroup: boolean };
+
+/**
+ * Authorize an inbound Telegram message.
+ * - Bots and messages without `from` are ignored.
+ * - In private chats: if `allowedUsers` is non-empty, sender must be in `allowedUsers` (or `ownerId`).
+ *   Otherwise if `ownerId` is set, sender must match `ownerId`.
+ *   Otherwise (unpaired instance with no allowlist), the first private sender pairs as `ownerId`.
+ * - In groups/supergroups: group chat id must be in `allowedGroups` AND sender must be an authorized user.
+ *   Pairing never happens in groups.
+ */
+export function authorizeTelegramMessage(message: TelegramMessage, state: TelegramAuthState): TelegramAuthResult {
+	if (message.from === undefined || message.from.is_bot === true) return { allowed: false };
+	const userId = String(message.from.id);
+	const chatId = String(message.chat.id);
+	const hasAllowlist = state.allowedUsers.size > 0;
+	const isKnownAllowedUser = hasAllowlist
+		? state.allowedUsers.has(userId) || (state.ownerId !== undefined && userId === state.ownerId)
+		: state.ownerId !== undefined && userId === state.ownerId;
+
+	if (message.chat.type === "private") {
+		if (!hasAllowlist && state.ownerId === undefined) {
+			return { allowed: true, pairedOwnerId: userId, addr: telegramAddress.dm(chatId), label: "Telegram DM", isGroup: false };
+		}
+		if (!isKnownAllowedUser) return { allowed: false };
+		return { allowed: true, addr: telegramAddress.dm(chatId), label: "Telegram DM", isGroup: false };
+	}
+
+	if (message.chat.type === "group" || message.chat.type === "supergroup") {
+		if (!state.allowedGroups.has(chatId)) return { allowed: false };
+		if (!isKnownAllowedUser) return { allowed: false };
+		return {
+			allowed: true,
+			addr: telegramAddress.group(chatId),
+			label: message.chat.title ?? `Telegram group ${chatId}`,
+			isGroup: true,
+		};
+	}
+
+	return { allowed: false };
+}
+
+/** Which transcript entry and text snippet each outbound Telegram message came from, for inbound reaction handling. */
+const TelegramSentMessages = defineDoc<{
+	messages: Record<string, { conversation: ConversationId; entry: EntryId; text: string; date: number }>;
+}>({
+	kind: "pclaw.telegram-sent",
+	version: 1,
+	scope: "session",
+	initial: () => ({ messages: {} }),
+	checkpointWhen: (_value, _ops, { deltasSinceBase }) => deltasSinceBase >= 64,
+});
+
+const clip = (text: string) => (text.length > QUOTE_LIMIT ? `${text.slice(0, QUOTE_LIMIT)}…` : text);
+
+function senderName(user: TelegramUser | undefined): string {
+	if (user === undefined) return "someone";
+	const full = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
+	if (full !== "") return full;
+	return user.username !== undefined ? `@${user.username}` : `user ${user.id}`;
+}
+
+/** Extract `[replying to ...]` / `[quoting ...]` context from `reply_to_message` and `quote`. */
+export function extractReplyContext(message: TelegramMessage, botId: number | undefined, timeZone: string): string[] {
+	const reply = message.reply_to_message;
+	const quoteText = message.quote?.text?.trim();
+	if (reply === undefined && (quoteText === undefined || quoteText === "")) return [];
+
+	const whose =
+		reply?.from === undefined
+			? "an earlier"
+			: reply.from.id === botId
+				? "your"
+				: message.from !== undefined && reply.from.id === message.from.id
+					? "their own"
+					: `${senderName(reply.from)}'s`;
+
+	const when = reply?.date === undefined ? "" : ` from ${stamp(reply.date * 1000, timeZone)}`;
+
+	if (quoteText !== undefined && quoteText !== "") {
+		return [`[quoting ${whose} message${when}: "${clip(quoteText)}"]`];
+	}
+
+	if (reply === undefined) return [];
+	const body = (reply.text ?? reply.caption ?? "").trim();
+	if (body !== "") {
+		return [`[replying to ${whose} message${when}: "${clip(body)}"]`];
+	}
+	if (reply.photo !== undefined && reply.photo.length > 0) {
+		return [`[replying to ${whose} photo${when}]`];
+	}
+	if (reply.document !== undefined) {
+		return [`[replying to ${whose} file "${reply.document.file_name ?? "document"}"${when}]`];
+	}
+	if (reply.voice !== undefined || reply.audio !== undefined) {
+		return [`[replying to ${whose} voice message${when}]`];
+	}
+	return [];
+}
+
+/**
+ * Debounce Telegram media-group albums (`media_group_id`). Telegram delivers each photo/document in an album
+ * as a separate `message` update; batching them over ~600ms keeps the whole album in one agent turn.
+ */
+export function createMediaGroupBuffer(options: {
+	delayMs?: number;
+	onFlush: (messages: TelegramMessage[]) => void | Promise<void>;
+	onError?: (error: unknown) => void;
+}) {
+	const delayMs = options.delayMs ?? MEDIA_GROUP_DEBOUNCE_MS;
+	const pending = new Map<string, { messages: TelegramMessage[]; timer: NodeJS.Timeout }>();
+	const inFlight = new Set<Promise<void>>();
+
+	const runFlush = (key: string) => {
+		const entry = pending.get(key);
+		if (entry === undefined) return;
+		pending.delete(key);
+		clearTimeout(entry.timer);
+		const promise = Promise.resolve()
+			.then(() => options.onFlush(entry.messages))
+			.catch((error: unknown) => {
+				if (options.onError !== undefined) options.onError(error);
+				else console.error("[pclaw] telegram media group flush failed", error);
+			})
+			.finally(() => {
+				inFlight.delete(promise);
+			});
+		inFlight.add(promise);
+	};
+
+	return {
+		add(message: TelegramMessage) {
+			const key = `${message.chat.id}:${message.media_group_id!}`;
+			const existing = pending.get(key);
+			if (existing !== undefined) {
+				existing.messages.push(message);
+				clearTimeout(existing.timer);
+				existing.timer = setTimeout(() => runFlush(key), delayMs);
+				return;
+			}
+			const timer = setTimeout(() => runFlush(key), delayMs);
+			pending.set(key, { messages: [message], timer });
+		},
+		async flushAll() {
+			for (const key of [...pending.keys()]) runFlush(key);
+			await Promise.all([...inFlight]);
+		},
+		stop() {
+			for (const entry of pending.values()) clearTimeout(entry.timer);
+			pending.clear();
+		},
+	};
+}
+
+function mimeFromPath(filePath: string): string {
+	switch (extname(filePath).toLowerCase()) {
+		case ".jpg":
+		case ".jpeg":
+			return "image/jpeg";
+		case ".png":
+			return "image/png";
+		case ".webp":
+			return "image/webp";
+		case ".gif":
+			return "image/gif";
+		case ".pdf":
+			return "application/pdf";
+		case ".ogg":
+		case ".oga":
+			return "audio/ogg";
+		case ".mp3":
+			return "audio/mpeg";
+		case ".m4a":
+			return "audio/mp4";
+		case ".wav":
+			return "audio/wav";
+		case ".txt":
+			return "text/plain";
+		case ".json":
+			return "application/json";
+		case ".csv":
+			return "text/csv";
+		default:
+			return "application/octet-stream";
+	}
+}
+
+function sanitizeFilename(name: string): string {
+	const base = basename(name).replace(/[\x00-\x1f/\\:*?"<>|]/g, "_").trim();
+	return base === "" || base === "." || base === ".." ? "file" : base.slice(0, 120);
+}
+
+function saveToInbox(inboxDir: string, message: TelegramMessage, originalName: string, bytes: Uint8Array): string {
+	mkdirSync(inboxDir, { recursive: true, mode: 0o700 });
+	const safe = sanitizeFilename(originalName);
+	const savedName = `tg-${message.chat.id}-${message.message_id}-${safe}`;
+	const savedPath = join(inboxDir, savedName);
+	writeFileSync(savedPath, bytes, { mode: 0o600 });
+	return savedPath;
+}
+
+export type BuildInputOptions = {
+	api: Pick<TelegramApi, "getFile" | "downloadFile" | "sendChatAction">;
+	timeZone: string;
+	botId?: number;
+	inboxDir?: string;
+	voiceDir?: string;
+	speechUrl?: string;
+	isGroup?: boolean;
+	extraContext?: string[];
+	transcribeFn?: typeof transcribe;
+	onVoiceResult?: (result: { id: string; ok: true; seconds: number; ms: number; words: number } | { id: string; ok: false; error: string }) => void;
+};
+
+/**
+ * Normalize one Telegram message (or a batched album of messages sharing `media_group_id`) into a `UserInput`
+ * for Pi Durable, handling photos (`ImageContent` <= 10 MB), voice/audio transcription (`speechUrl`),
+ * documents (<= 20 MB saved to inbox), and reply/quote context.
+ */
+export async function buildTelegramUserInput(
+	messages: readonly TelegramMessage[],
+	options: BuildInputOptions,
+): Promise<{ content: UserInput; plainText: string; hasVoice: boolean }> {
+	const primary = messages[0]!;
+	const parts: (TextContent | ImageContent)[] = [];
+	const textLines: string[] = [];
+	const notes: string[] = [];
+	let hasVoice = false;
+
+	const inboxDir = options.inboxDir ?? paths.inbox;
+	const voiceDir = options.voiceDir ?? paths.voice;
+	const transcribeFn = options.transcribeFn ?? transcribe;
+
+	// Extract reply/quote context from the first message in the batch that carries one.
+	const replyLines: string[] = [];
+	for (const message of messages) {
+		const ctx = extractReplyContext(message, options.botId, options.timeZone);
+		if (ctx.length > 0) {
+			replyLines.push(...ctx);
+			break;
+		}
+	}
+
+	for (const message of messages) {
+		const body = (message.text ?? message.caption ?? "").trim();
+		if (body !== "") textLines.push(body);
+
+		// 1. Photos: pick largest PhotoSize (photo[-1]), <= 10 MB -> ImageContent.
+		if (message.photo !== undefined && message.photo.length > 0) {
+			const largest = message.photo[message.photo.length - 1]!;
+			if (largest.file_size !== undefined && largest.file_size > MAX_IMAGE_BYTES) {
+				notes.push(`[attached photo (${largest.file_size} bytes), larger than the 10 MB image limit]`);
+			} else {
+				try {
+					const file = await options.api.getFile(largest.file_id);
+					if (file.file_path === undefined) {
+						notes.push("[attached photo, but Telegram returned no file path]");
+					} else {
+						const bytes = await options.api.downloadFile(file.file_path);
+						if (bytes.byteLength > MAX_IMAGE_BYTES) {
+							notes.push(`[attached photo (${bytes.byteLength} bytes), larger than the 10 MB image limit]`);
+						} else {
+							const mime = mimeFromPath(file.file_path);
+							parts.push({
+								type: "image",
+								data: Buffer.from(bytes).toString("base64"),
+								mimeType: mime.startsWith("image/") ? mime : "image/jpeg",
+							});
+						}
+					}
+				} catch (error) {
+					console.error("[pclaw] couldn't download Telegram photo", error);
+					notes.push("[attached photo, but pclaw couldn't download it]");
+				}
+			}
+		}
+
+		// 2. Voice / audio -> transcribe via speechUrl.
+		const audioMedia = message.voice ?? message.audio;
+		if (audioMedia !== undefined) {
+			const isVoice = message.voice !== undefined;
+			const id = `telegram:${message.message_id}`;
+			if (options.speechUrl === undefined) {
+				notes.push(isVoice ? "[sent a voice memo, but pclaw has no speech server configured]" : "[sent an audio file, but pclaw has no speech server configured]");
+			} else if (audioMedia.file_size !== undefined && audioMedia.file_size > MAX_FILE_BYTES) {
+				notes.push("[sent an audio message larger than Telegram's 20 MB Bot API download limit]");
+			} else {
+				try {
+					await options.api.sendChatAction(message.chat.id, "typing").catch(() => undefined);
+					const file = await options.api.getFile(audioMedia.file_id);
+					if (file.file_path === undefined) throw new Error("Telegram returned no file_path");
+					const audio = await options.api.downloadFile(file.file_path);
+					if (audio.byteLength > MAX_FILE_BYTES) throw new Error("audio exceeds 20 MB limit");
+					const ext = extname(file.file_path) || ".ogg";
+					mkdirSync(voiceDir, { recursive: true, mode: 0o700 });
+					writeFileSync(join(voiceDir, `telegram-${message.chat.id}-${message.message_id}${ext}`), audio, { mode: 0o600 });
+					const heard: Heard = await transcribeFn(options.speechUrl, audio);
+					hasVoice = true;
+					options.onVoiceResult?.({
+						id,
+						ok: true,
+						seconds: heard.seconds,
+						ms: heard.ms,
+						words: heard.text.split(/\s+/).filter(Boolean).length,
+					});
+					console.log(`[pclaw] heard a ${Math.round(heard.seconds)}s Telegram voice memo in ${heard.ms}ms`);
+					notes.push(memoLabel(heard.seconds), heard.text);
+				} catch (error) {
+					const reason = error instanceof Error ? error.message : String(error);
+					options.onVoiceResult?.({ id, ok: false, error: reason });
+					console.error(`[pclaw] couldn't hear a Telegram voice memo: ${reason}`);
+					notes.push("[sent a voice memo, but pclaw couldn't transcribe it]");
+				}
+			}
+		}
+
+		// 3. Documents (PDFs, archives, uncompressed images, code files, etc.) <= 20 MB -> save to inbox.
+		if (message.document !== undefined) {
+			const doc = message.document;
+			const name = doc.file_name ?? `document-${message.message_id}`;
+			const mime = doc.mime_type ?? mimeFromPath(name);
+			if (doc.file_size !== undefined && doc.file_size > MAX_FILE_BYTES) {
+				notes.push(`[attached file "${name}" (${mime}, ${doc.file_size} bytes), too large for Telegram Bot API download (20 MB limit)]`);
+			} else {
+				try {
+					const file = await options.api.getFile(doc.file_id);
+					if (file.file_path === undefined) {
+						notes.push(`[attached file "${name}" (${mime}), but Telegram returned no file path]`);
+					} else {
+						const bytes = await options.api.downloadFile(file.file_path);
+						if (bytes.byteLength > MAX_FILE_BYTES) {
+							notes.push(`[attached file "${name}" (${mime}, ${bytes.byteLength} bytes), too large for Telegram Bot API download (20 MB limit)]`);
+						} else {
+							const savedPath = saveToInbox(inboxDir, message, name, bytes);
+							if (mime.startsWith("image/") && bytes.byteLength <= MAX_IMAGE_BYTES) {
+								parts.push({ type: "image", data: Buffer.from(bytes).toString("base64"), mimeType: mime.split(";")[0]! });
+							}
+							notes.push(`[attached file "${name}" (${mime}, ${bytes.byteLength} bytes), saved at ${savedPath}]`);
+						}
+					}
+				} catch (error) {
+					console.error("[pclaw] couldn't download Telegram document", error);
+					notes.push(`[attached file "${name}" (${mime}), but pclaw couldn't download it]`);
+				}
+			}
+		}
+	}
+
+	const header = `[${stamp(primary.date * 1000, options.timeZone)}]`;
+	const groupPrefix = options.isGroup === true ? `[from ${senderName(primary.from)}]` : undefined;
+	const combinedText = [
+		header,
+		groupPrefix,
+		...replyLines,
+		...(options.extraContext ?? []),
+		...textLines,
+		...notes,
+	]
+		.filter((line): line is string => line !== undefined && line !== "")
+		.join("\n");
+
+	const plainText = [...textLines, ...notes].filter(Boolean).join("\n");
+	const content: UserInput = parts.length === 0 ? combinedText : [{ type: "text", text: combinedText }, ...parts];
+	return { content, plainText, hasVoice };
+}
+
+export type StartTelegramOptions = {
+	apiBase?: string;
+	fetchFn?: typeof fetch;
+	mediaGroupDelayMs?: number;
+	pollTimeoutSeconds?: number;
+	inboxDir?: string;
+	voiceDir?: string;
+	transcribeFn?: typeof transcribe;
+	onOwnerPaired?: (ownerId: string) => void;
+};
+
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+	return new Promise((resolve) => {
+		if (signal.aborted) {
+			resolve();
+			return;
+		}
+		const onAbort = () => {
+			clearTimeout(timer);
+			resolve();
+		};
+		const timer = setTimeout(() => {
+			signal.removeEventListener("abort", onAbort);
+			resolve();
+		}, ms);
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
+}
+
+function addedReactionEmoji(update: TelegramMessageReactionUpdated): string | undefined {
+	const oldSet = new Set(
+		update.old_reaction.flatMap((r) => (r.type === "emoji" ? [r.emoji] : [])),
+	);
+	for (const reaction of update.new_reaction) {
+		if (reaction.type === "emoji" && !oldSet.has(reaction.emoji)) return reaction.emoji;
+	}
+	return undefined;
+}
+
+/**
+ * pclaw on Telegram via Bot API long polling (`getUpdates`).
+ * Answers authorized users in private chats (`telegram:dm:<userId>`) and allowlisted groups (`telegram:group:<chatId>`).
+ * When neither `telegramOwnerId` nor `telegramAllowedUsers` is configured, the first person to DM the bot pairs as owner.
+ */
+export async function startTelegram(
+	agent: Agent,
+	config: Config,
+	context: Context,
+	options: StartTelegramOptions = {},
+): Promise<{ stop(): Promise<void>; api: TelegramApi }> {
+	if (config.telegramToken === undefined) throw new Error("No Telegram token configured.");
+
+	const api = createTelegramApi({
+		token: config.telegramToken,
+		...(options.apiBase === undefined ? {} : { apiBase: options.apiBase }),
+		...(options.fetchFn === undefined ? {} : { fetchFn: options.fetchFn }),
+	});
+
+	let ownerId = config.telegramOwnerId;
+	const allowedUsers = new Set(config.telegramAllowedUsers);
+	const allowedGroups = new Set(config.telegramAllowedGroups);
+	const { jobs } = agent;
+	const me = await api.getMe();
+	console.log(`[pclaw] on Telegram as ${me.username !== undefined ? `@${me.username}` : me.id}`);
+	if (ownerId === undefined && allowedUsers.size === 0) {
+		console.log("[pclaw] Waiting for a Telegram DM. The first person to message it becomes its owner.");
+	}
+
+	const deliveries = new Map<string, { stop(): Promise<void> }>();
+
+	function outbox(addr: string, conversation: Conversation): Outbox {
+		const parsed = parseTelegramAddress(addr);
+		let typing: NodeJS.Timeout | undefined;
+		return {
+			async send(text, entry) {
+				if (parsed === undefined) throw new Error(`Invalid Telegram address ${addr}`);
+				const mode = jobs.delivery(addr, text);
+				if (mode === "moved") return;
+				const sent = await api.sendFormattedMessage(parsed.chatId, text, {
+					disableNotification: mode === "silent",
+					disableLinkPreview: true,
+				});
+				if (sent.length > 0) {
+					await conversation.commit(async (tx) => {
+						const doc = await tx.doc(TelegramSentMessages);
+						for (const msg of sent) {
+							doc.messages[`${parsed.chatId}:${msg.message_id}`] = {
+								conversation: conversation.id,
+								entry,
+								text: clip(text.trim()),
+								date: msg.date * 1000,
+							};
+						}
+					}, context);
+				}
+			},
+			working(busy) {
+				clearInterval(typing);
+				typing = undefined;
+				if (!busy || parsed === undefined) return;
+				const ping = () => void api.sendChatAction(parsed.chatId, "typing").catch(() => undefined);
+				ping();
+				typing = setInterval(ping, TYPING_REFRESH_MS);
+			},
+		};
+	}
+
+	/**
+	 * Keep Telegram's bot reaction on each user message in sync with the conversation's `Reactions` doc.
+	 * Uses `normalizeTelegramReaction` so emojis outside Telegram's whitelist (e.g. `⏳`, `✅`, `⚠️`) map cleanly
+	 * and never fail with `REACTION_INVALID`.
+	 */
+	async function syncReactions(addr: string, conversation: Conversation): Promise<() => void> {
+		const parsed = parseTelegramAddress(addr);
+		if (parsed === undefined) return () => undefined;
+		await conversation.commit((tx) => tx.doc(Reactions, conversation.id), context);
+		const watch = await agent.harness.watchDoc(Reactions, conversation.id, context);
+		if (watch === undefined) return () => undefined;
+		let applied: Record<string, string> | undefined;
+		let queue = Promise.resolve();
+		const apply = async (ref: string, emoji: string) => {
+			if (!ref.startsWith("telegram:")) return;
+			const messageId = Number(ref.slice("telegram:".length));
+			if (!Number.isInteger(messageId) || messageId <= 0) return;
+			await api.setMessageReaction(parsed.chatId, messageId, emoji === "" ? undefined : emoji);
+		};
+		const sync = (value: (typeof watch)["value"]) => {
+			const asks: Record<string, string> = { ...(value.asks ?? {}) };
+			if (applied === undefined) {
+				const recent = Object.entries(asks).slice(-RESYNC_ON_ATTACH);
+				applied = Object.fromEntries(Object.entries(asks).slice(0, -RESYNC_ON_ATTACH));
+				for (const [ref, emoji] of recent) applied[ref] = `${emoji}\u0000stale`;
+			}
+			const before = applied;
+			applied = asks;
+			for (const [ref, emoji] of Object.entries(asks)) {
+				if (before[ref] === emoji) continue;
+				queue = queue
+					.then(() => apply(ref, emoji))
+					.catch((error: unknown) => console.error(`[pclaw] telegram reaction ${ref}`, error));
+			}
+		};
+		sync(watch.value);
+		watch.start(async (call) => {
+			if (call.kind === "value") sync(call.value);
+		});
+		return () => void watch.stop();
+	}
+
+	async function attach(addr: string, conversation: Conversation) {
+		if (deliveries.has(addr)) return;
+		deliveries.set(addr, { stop: async () => undefined });
+		const delivery = await deliver(agent.harness, conversation.id, outbox(addr, conversation), context);
+		const unsync = await syncReactions(addr, conversation);
+		deliveries.set(addr, {
+			stop: async () => {
+				unsync();
+				await delivery.stop();
+			},
+		});
+	}
+
+	// Reattach every Telegram conversation so replies written while pclaw was down go out now.
+	for (const [addr, id] of Object.entries(await agent.addresses(context))) {
+		if (!addr.startsWith("telegram:")) continue;
+		const conversation = await agent.harness.conversation(id, context);
+		if (conversation !== undefined) {
+			await attach(addr, conversation).catch((error: unknown) => console.error(`[pclaw] ${addr}`, error));
+		}
+	}
+
+	async function handleMessageBatch(messages: TelegramMessage[]): Promise<void> {
+		const primary = messages[0];
+		if (primary === undefined) return;
+		const auth = authorizeTelegramMessage(primary, { ownerId, allowedUsers, allowedGroups });
+		if (!auth.allowed) return;
+		if (auth.pairedOwnerId !== undefined) {
+			ownerId = auth.pairedOwnerId;
+			if (options.onOwnerPaired !== undefined) options.onOwnerPaired(ownerId);
+			else saveConfig({ telegramOwnerId: ownerId });
+			console.log(`[pclaw] paired on Telegram with ${senderName(primary.from)} (${ownerId})`);
+		}
+
+		const conversation = await agent.conversationFor(auth.addr, context);
+		await agent.describe(conversation.id, { label: auth.label }, context);
+		await attach(auth.addr, conversation);
+
+		const built = await buildTelegramUserInput(messages, {
+			api,
+			timeZone: config.timeZone,
+			botId: me.id,
+			...(options.inboxDir === undefined ? {} : { inboxDir: options.inboxDir }),
+			...(options.voiceDir === undefined ? {} : { voiceDir: options.voiceDir }),
+			...(config.speechUrl === undefined ? {} : { speechUrl: config.speechUrl }),
+			isGroup: auth.isGroup,
+			...(options.transcribeFn === undefined ? {} : { transcribeFn: options.transcribeFn }),
+			onVoiceResult: (result) => jobs.decisions.record({ type: "voice", ...result }),
+		});
+
+		// Ignore empty messages with no attachments or text (e.g. service messages like pinned/join notices).
+		if (built.plainText === "" && typeof built.content === "string") return;
+
+		const guidance = await jobs.guideMessage({
+			id: `tg-${primary.chat.id}-${primary.message_id}`,
+			text: built.plainText,
+			channel: auth.isGroup ? auth.label : "telegram direct message",
+			...(built.hasVoice ? { voice: true } : {}),
+		});
+
+		const content: UserInput =
+			guidance === undefined
+				? built.content
+				: typeof built.content === "string"
+					? `${built.content}\n${guidance}`
+					: built.content.map((part, idx) => (idx === 0 && part.type === "text" ? { ...part, text: `${part.text}\n${guidance}` } : part));
+
+		await conversation.submit(
+			{
+				type: "input",
+				content,
+				whenBusy: "steer",
+				// Single-colon requestId so `currentAsk` in reactions.ts recognizes it.
+				requestId: `telegram:${primary.message_id}`,
+			},
+			context,
+		);
+	}
+
+	async function handleReactionUpdate(update: TelegramMessageReactionUpdated): Promise<void> {
+		if (update.user === undefined || update.user.is_bot === true) return;
+		const userId = String(update.user.id);
+		const isAllowed =
+			allowedUsers.size > 0
+				? allowedUsers.has(userId) || (ownerId !== undefined && userId === ownerId)
+				: ownerId !== undefined && userId === ownerId;
+		if (!isAllowed) return;
+		const emoji = addedReactionEmoji(update);
+		if (emoji === undefined) return;
+
+		const sent = (await agent.harness.snapshot(TelegramSentMessages, context))?.messages[`${update.chat.id}:${update.message_id}`];
+		if (sent === undefined) return;
+		const conversation = await agent.harness.conversation(sent.conversation, context);
+		if (conversation === undefined) return;
+		const content = `[${stamp(update.date * 1000, config.timeZone)}]\n[reacted ${emoji} to your message from ${stamp(sent.date, config.timeZone)}: "${sent.text}"]`;
+		await conversation.submit(
+			{
+				type: "input",
+				content,
+				whenBusy: "followUp",
+				requestId: `telegram-reaction:${update.message_id}:${emoji}:${Date.now()}`,
+			},
+			context,
+		);
+	}
+
+	const albumBuffer = createMediaGroupBuffer({
+		delayMs: options.mediaGroupDelayMs ?? MEDIA_GROUP_DEBOUNCE_MS,
+		onFlush: (batch) => handleMessageBatch(batch),
+		onError: (error) => console.error("[pclaw] couldn't handle a Telegram media group", error),
+	});
+
+	const keepTyping = setInterval(() => {
+		void (async () => {
+			const known = await agent.addresses(context);
+			const conversations = await Promise.all(
+				[...deliveries.keys()].flatMap((address) => {
+					const id = known[address];
+					return id === undefined
+						? []
+						: [agent.harness.snapshot(Workers, id, context).then((doc) => ({ address, workers: Object.values(doc?.workers ?? {}) }))];
+				}),
+			);
+			for (const addr of telegramTypingTargets(conversations, jobs.store.active())) {
+				const parsed = parseTelegramAddress(addr);
+				if (parsed !== undefined) await api.sendChatAction(parsed.chatId, "typing").catch(() => undefined);
+			}
+		})().catch((error: unknown) => console.error("[pclaw] telegram typing", error));
+	}, TYPING_REFRESH_MS);
+
+	const abort = new AbortController();
+	let offset: number | undefined;
+	let backoffMs = 1_000;
+	const pollTimeout = options.pollTimeoutSeconds ?? POLL_TIMEOUT_SECONDS;
+
+	const pollLoop = (async () => {
+		while (!abort.signal.aborted) {
+			try {
+				const updates = await api.getUpdates(
+					{
+						...(offset === undefined ? {} : { offset }),
+						timeout: pollTimeout,
+						allowed_updates: ALLOWED_UPDATES,
+					},
+					abort.signal,
+				);
+				backoffMs = 1_000;
+				for (const update of updates) {
+					offset = update.update_id + 1;
+					if (update.message !== undefined) {
+						if (update.message.media_group_id !== undefined) {
+							albumBuffer.add(update.message);
+						} else {
+							await handleMessageBatch([update.message]).catch((error: unknown) =>
+								console.error("[pclaw] couldn't handle a Telegram message", error),
+							);
+						}
+					} else if (update.message_reaction !== undefined) {
+						await handleReactionUpdate(update.message_reaction).catch((error: unknown) =>
+							console.error("[pclaw] couldn't handle a Telegram reaction", error),
+						);
+					}
+				}
+			} catch (error) {
+				if (abort.signal.aborted) break;
+				const retryMs =
+					error instanceof TelegramApiError && error.retryAfter !== undefined
+						? error.retryAfter * 1000
+						: backoffMs;
+				console.error(`[pclaw] Telegram poll failed (retrying in ${Math.round(retryMs / 1000)}s):`, error instanceof Error ? error.message : error);
+				await sleep(retryMs, abort.signal);
+				backoffMs = Math.min(backoffMs * 2, 30_000);
+			}
+		}
+	})();
+
+	return {
+		api,
+		stop: async () => {
+			abort.abort();
+			albumBuffer.stop();
+			clearInterval(keepTyping);
+			await pollLoop;
+			for (const delivery of deliveries.values()) await delivery.stop();
+		},
+	};
+}

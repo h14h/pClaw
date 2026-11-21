@@ -13,7 +13,7 @@ export const Routes = defineDoc<{ conversations: Record<string, ConversationId> 
 	checkpointWhen: (_value, _ops, { deltasSinceBase }) => deltasSinceBase >= 64,
 });
 
-/** The app a conversation lives in: "discord", "terminal". The part of its address before the first colon. */
+/** The app a conversation lives in: "discord", "telegram", "terminal". The part of its address before the first colon. */
 export async function channelOf(read: DocumentReader, conversationId: ConversationId, context: Context): Promise<string | undefined> {
 	const routes = (await read.snapshot(Routes, context))?.conversations ?? {};
 	const address = Object.keys(routes).find((key) => routes[key] === conversationId);

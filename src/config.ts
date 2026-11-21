@@ -28,6 +28,8 @@ export const paths = {
 	decisions: join(home, "decisions.jsonl"),
 	/** Voice memos as they were sent, so a transcript can be checked or redone. */
 	voice: join(home, "voice"),
+	/** Inbound files (PDFs, documents, etc.) saved for workers to inspect. */
+	inbox: join(home, "inbox"),
 };
 
 export type Config = {
@@ -36,6 +38,14 @@ export type Config = {
 	discordOwnerId?: string;
 	/** Server channels pclaw answers in (besides DMs). Threads in them become forks of the channel's conversation. */
 	discordChannels: string[];
+	/** Telegram Bot API token from @BotFather. */
+	telegramToken?: string;
+	/** The paired Telegram owner user ID. Set on first DM when neither this nor `telegramAllowedUsers` is configured. */
+	telegramOwnerId?: string;
+	/** Telegram user IDs allowed to talk to pclaw. When non-empty, only these users (plus `telegramOwnerId`) are served. */
+	telegramAllowedUsers: string[];
+	/** Telegram group/supergroup chat IDs where pclaw answers allowed users. */
+	telegramAllowedGroups: string[];
 	/** The folder in profiles/ for the model you talk to. Its provider, model, and reasoning level win over the ones below. */
 	profile: string;
 	/** The model you talk to: fast, tuned for conversation, hands real work to workers. */
@@ -114,6 +124,8 @@ type StoredConfig = Partial<Config>;
 
 export const defaults: Config = {
 	discordChannels: [],
+	telegramAllowedUsers: [],
+	telegramAllowedGroups: [],
 	profile: "muse-spark-1.3",
 	provider: "meta",
 	model: "muse-spark-1.3",
@@ -148,12 +160,24 @@ function readStored(): StoredConfig {
 	return JSON.parse(readFileSync(paths.config, "utf8")) as StoredConfig;
 }
 
+function parseListEnv(value: string | undefined): string[] | undefined {
+	if (value === undefined) return undefined;
+	return value
+		.split(",")
+		.map((item) => item.trim())
+		.filter(Boolean);
+}
+
 /** Defaults, then config.json, then environment variables. */
 export function loadConfig(): Config {
 	const env = process.env;
 	const fromEnv: StoredConfig = {
 		discordToken: env.DISCORD_TOKEN,
 		discordOwnerId: env.PCLAW_DISCORD_OWNER_ID,
+		telegramToken: env.TELEGRAM_BOT_TOKEN ?? env.TELEGRAM_TOKEN,
+		telegramOwnerId: env.PCLAW_TELEGRAM_OWNER_ID,
+		telegramAllowedUsers: parseListEnv(env.PCLAW_TELEGRAM_ALLOWED_USERS),
+		telegramAllowedGroups: parseListEnv(env.PCLAW_TELEGRAM_ALLOWED_GROUPS),
 		profile: env.PCLAW_PROFILE,
 		provider: env.PCLAW_PROVIDER,
 		model: env.PCLAW_MODEL,

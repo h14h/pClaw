@@ -58,6 +58,8 @@ const TYPES: Record<string, string> = {
 
 function fallbackLabel(address: string): string {
 	if (address.startsWith("discord:dm:")) return "Discord DM";
+	if (address.startsWith("telegram:dm:")) return "Telegram DM";
+	if (address.startsWith("telegram:group:")) return "Telegram group";
 	if (address === "terminal") return "Terminal";
 	return address;
 }
