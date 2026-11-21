@@ -411,6 +411,8 @@ export type TelegramAuthState = {
 	ownerId?: string;
 	allowedUsers: ReadonlySet<string>;
 	allowedGroups: ReadonlySet<string>;
+	/** When true (e.g. `users` is configured), never auto-pair an unmapped sender on first DM. */
+	disablePairing?: boolean;
 };
 
 export type TelegramAuthResult =
@@ -422,7 +424,7 @@ export type TelegramAuthResult =
  * - Bots and messages without `from` are ignored.
  * - In private chats: if `allowedUsers` is non-empty, sender must be in `allowedUsers` (or `ownerId`).
  *   Otherwise if `ownerId` is set, sender must match `ownerId`.
- *   Otherwise (unpaired instance with no allowlist), the first private sender pairs as `ownerId`.
+ *   Otherwise (unpaired instance with no allowlist and pairing enabled), the first private sender pairs as `ownerId`.
  * - In groups/supergroups: group chat id must be in `allowedGroups` AND sender must be an authorized user.
  *   Pairing never happens in groups.
  */
@@ -436,7 +438,7 @@ export function authorizeTelegramMessage(message: TelegramMessage, state: Telegr
 		: state.ownerId !== undefined && userId === state.ownerId;
 
 	if (message.chat.type === "private") {
-		if (!hasAllowlist && state.ownerId === undefined) {
+		if (!hasAllowlist && state.ownerId === undefined && state.disablePairing !== true) {
 			return { allowed: true, pairedOwnerId: userId, addr: telegramAddress.dm(chatId), label: "Telegram DM", isGroup: false };
 		}
 		if (!isKnownAllowedUser) return { allowed: false };
@@ -625,6 +627,8 @@ export type BuildInputOptions = {
 	speechUrl?: string;
 	isGroup?: boolean;
 	extraContext?: string[];
+	/** Optional remote staging hook (e.g. `sandbox.putFile` for SSH VM users); returns the sandbox path. */
+	stageFile?: (localPath: string, filename: string) => Promise<string>;
 	transcribeFn?: typeof transcribe;
 	onVoiceResult?: (result: { id: string; ok: true; seconds: number; ms: number; words: number } | { id: string; ok: false; error: string }) => void;
 };
@@ -752,7 +756,20 @@ export async function buildTelegramUserInput(
 							if (mime.startsWith("image/") && bytes.byteLength <= MAX_IMAGE_BYTES) {
 								parts.push({ type: "image", data: Buffer.from(bytes).toString("base64"), mimeType: mime.split(";")[0]! });
 							}
-							notes.push(`[attached file "${name}" (${mime}, ${bytes.byteLength} bytes), saved at ${savedPath}]`);
+							if (options.stageFile !== undefined) {
+								try {
+									const stagedPath = await options.stageFile(savedPath, basename(savedPath));
+									notes.push(`[attached file "${name}" (${mime}, ${bytes.byteLength} bytes), saved at ${stagedPath}]`);
+								} catch (stageError) {
+									const reason = stageError instanceof Error ? stageError.message : String(stageError);
+									console.error("[pclaw] couldn't stage Telegram document to sandbox", stageError);
+									notes.push(
+										`[attached file "${name}" (${mime}, ${bytes.byteLength} bytes), saved locally at ${savedPath}, but staging to workspace failed: ${reason}]`,
+									);
+								}
+							} else {
+								notes.push(`[attached file "${name}" (${mime}, ${bytes.byteLength} bytes), saved at ${savedPath}]`);
+							}
 						}
 					}
 				} catch (error) {
@@ -840,14 +857,32 @@ export async function startTelegram(
 	});
 
 	let ownerId = config.telegramOwnerId;
-	const allowedUsers = new Set(config.telegramAllowedUsers);
+	const allowedUsers = new Set([...config.telegramAllowedUsers, ...agent.users.allowedExternalIds("telegram")]);
 	const allowedGroups = new Set(config.telegramAllowedGroups);
 	const { jobs } = agent;
 	const me = await api.getMe();
 	console.log(`[pclaw] on Telegram as ${me.username !== undefined ? `@${me.username}` : me.id}`);
-	if (ownerId === undefined && allowedUsers.size === 0) {
+	if (ownerId === undefined && allowedUsers.size === 0 && !agent.users.enabled) {
 		console.log("[pclaw] Waiting for a Telegram DM. The first person to message it becomes its owner.");
 	}
+
+	const unregisterFiles = agent.fileSenders.register("telegram", async (addr, file) => {
+		const parsed = parseTelegramAddress(addr);
+		if (parsed === undefined) throw new Error(`Invalid Telegram address ${addr}`);
+		const payload = {
+			data: file.data,
+			filename: file.filename,
+			...(file.mimeType === undefined ? {} : { mimeType: file.mimeType }),
+		};
+		const sendOptions = file.caption === undefined ? undefined : { caption: file.caption };
+		if (file.asPhoto === true) {
+			await api.sendChatAction(parsed.chatId, "upload_photo").catch(() => undefined);
+			await api.sendPhoto(parsed.chatId, payload, sendOptions);
+		} else {
+			await api.sendChatAction(parsed.chatId, "upload_document").catch(() => undefined);
+			await api.sendDocument(parsed.chatId, payload, sendOptions);
+		}
+	});
 
 	const deliveries = new Map<string, { stop(): Promise<void> }>();
 
@@ -955,7 +990,12 @@ export async function startTelegram(
 	async function handleMessageBatch(messages: TelegramMessage[]): Promise<void> {
 		const primary = messages[0];
 		if (primary === undefined) return;
-		const auth = authorizeTelegramMessage(primary, { ownerId, allowedUsers, allowedGroups });
+		const auth = authorizeTelegramMessage(primary, {
+			ownerId,
+			allowedUsers,
+			allowedGroups,
+			disablePairing: agent.users.enabled,
+		});
 		if (!auth.allowed) return;
 		if (auth.pairedOwnerId !== undefined) {
 			ownerId = auth.pairedOwnerId;
@@ -964,18 +1004,29 @@ export async function startTelegram(
 			console.log(`[pclaw] paired on Telegram with ${senderName(primary.from)} (${ownerId})`);
 		}
 
+		const user = agent.users.resolveAddress(auth.addr);
+		const userPaths = user === undefined ? undefined : agent.users.pathsFor(user.id);
+		const userTimeZone = user?.timeZone ?? config.timeZone;
+		const userSandbox = user === undefined ? undefined : agent.sandboxes.sandboxForUser(user);
+		const label = user !== undefined && !auth.isGroup ? `Telegram DM (${user.name})` : auth.label;
+
 		const conversation = await agent.conversationFor(auth.addr, context);
-		await agent.describe(conversation.id, { label: auth.label }, context);
+		await agent.describe(conversation.id, { label }, context);
 		await attach(auth.addr, conversation);
 
+		const inboxDir = options.inboxDir ?? userPaths?.inbox;
+		const voiceDir = options.voiceDir ?? userPaths?.voice;
 		const built = await buildTelegramUserInput(messages, {
 			api,
-			timeZone: config.timeZone,
+			timeZone: userTimeZone,
 			botId: me.id,
-			...(options.inboxDir === undefined ? {} : { inboxDir: options.inboxDir }),
-			...(options.voiceDir === undefined ? {} : { voiceDir: options.voiceDir }),
+			...(inboxDir === undefined ? {} : { inboxDir }),
+			...(voiceDir === undefined ? {} : { voiceDir }),
 			...(config.speechUrl === undefined ? {} : { speechUrl: config.speechUrl }),
 			isGroup: auth.isGroup,
+			...(userSandbox?.type === "ssh"
+				? { stageFile: (localPath: string, filename: string) => userSandbox.putFile(localPath, filename) }
+				: {}),
 			...(options.transcribeFn === undefined ? {} : { transcribeFn: options.transcribeFn }),
 			onVoiceResult: (result) => jobs.decisions.record({ type: "voice", ...result }),
 		});
@@ -983,12 +1034,14 @@ export async function startTelegram(
 		// Ignore empty messages with no attachments or text (e.g. service messages like pinned/join notices).
 		if (built.plainText === "" && typeof built.content === "string") return;
 
-		const guidance = await jobs.guideMessage({
-			id: `tg-${primary.chat.id}-${primary.message_id}`,
-			text: built.plainText,
-			channel: auth.isGroup ? auth.label : "telegram direct message",
-			...(built.hasVoice ? { voice: true } : {}),
-		});
+		const guidance = agent.t3Enabled
+			? await jobs.guideMessage({
+					id: `tg-${primary.chat.id}-${primary.message_id}`,
+					text: built.plainText,
+					channel: auth.isGroup ? auth.label : "telegram direct message",
+					...(built.hasVoice ? { voice: true } : {}),
+				})
+			: undefined;
 
 		const content: UserInput =
 			guidance === undefined
@@ -1024,7 +1077,8 @@ export async function startTelegram(
 		if (sent === undefined) return;
 		const conversation = await agent.harness.conversation(sent.conversation, context);
 		if (conversation === undefined) return;
-		const content = `[${stamp(update.date * 1000, config.timeZone)}]\n[reacted ${emoji} to your message from ${stamp(sent.date, config.timeZone)}: "${sent.text}"]`;
+		const userTimeZone = agent.users.resolveExternal("telegram", userId)?.timeZone ?? config.timeZone;
+		const content = `[${stamp(update.date * 1000, userTimeZone)}]\n[reacted ${emoji} to your message from ${stamp(sent.date, userTimeZone)}: "${sent.text}"]`;
 		await conversation.submit(
 			{
 				type: "input",
@@ -1109,6 +1163,7 @@ export async function startTelegram(
 	return {
 		api,
 		stop: async () => {
+			unregisterFiles();
 			abort.abort();
 			albumBuffer.stop();
 			clearInterval(keepTyping);

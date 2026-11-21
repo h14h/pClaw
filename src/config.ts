@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { loadProfile } from "./profiles.ts";
 import type { ServiceId } from "./search.ts";
@@ -32,6 +32,18 @@ export const paths = {
 	inbox: join(home, "inbox"),
 };
 
+export type UserSandboxConfig =
+	| { type: "local"; workDir?: string }
+	| { type: "ssh"; host: string; workDir?: string; inboxDir?: string; museBin?: string };
+
+export interface UserConfig {
+	name: string;
+	timeZone?: string;
+	telegram?: string;
+	discord?: string;
+	sandbox?: UserSandboxConfig;
+}
+
 export type Config = {
 	discordToken?: string;
 	/** The one Discord user pclaw answers. Set by pairing on the first DM when absent. */
@@ -46,8 +58,14 @@ export type Config = {
 	telegramAllowedUsers: string[];
 	/** Telegram group/supergroup chat IDs where pclaw answers allowed users. */
 	telegramAllowedGroups: string[];
+	/** Canonical multi-user map (`userId -> UserConfig`). When unset/empty, single-owner mode applies. */
+	users?: Record<string, UserConfig>;
 	/** The folder in profiles/ for the model you talk to. Its provider, model, and reasoning level win over the ones below. */
 	profile: string;
+	/** Optional bot-specific voice.md path (overrides the model profile's voice.md without editing profiles/). */
+	voiceFile?: string;
+	/** Optional bot-specific persona directory whose .md files override the model profile's prompts. */
+	personaDir?: string;
 	/** The model you talk to: fast, tuned for conversation, hands real work to workers. */
 	provider: string;
 	model: string;
@@ -80,7 +98,7 @@ export type Config = {
 	pageService: ServiceId;
 	/** The dashboard listens on 127.0.0.1 only; a proxy puts it on the tailnet. */
 	dashboardPort: number;
-	/** Where published pages are reachable, as the person would open them. Defaults to the dashboard's /pages. */
+	/** Where published pages are reachable, as the person would open them. Unset disables publish_page unless pagePublisher is set. */
 	pagesUrl?: string;
 	/** A publisher command for pages (`<command> <slug> <dir>`, prints the URL). Unset: pclaw serves them itself. */
 	pagePublisher?: string;
@@ -90,6 +108,8 @@ export type Config = {
 	summarizeAtTokens: number;
 	/** Roughly how many tokens of the most recent conversation stay word for word after a summary. */
 	keepRecentTokens: number;
+	/** Gate T3 / Jobs. Default true when t3Url is non-empty, false when allowT3 === false or t3Url is unset/empty. */
+	allowT3?: boolean;
 	/** T3 Code server origin for its official MCP endpoint (`<t3Url>/mcp`). */
 	t3Url: string;
 	/** OAuth redirect URI for T3 pairing, as the browser reaches the dashboard. Defaults to the local dashboard. */
@@ -155,6 +175,18 @@ export const defaults: Config = {
 	decisionHoldout: 0.2,
 };
 
+/** Whether T3 / Jobs features are enabled for this config. */
+export function isT3Enabled(config: Pick<Config, "allowT3" | "t3Url">): boolean {
+	if (config.allowT3 === false) return false;
+	return typeof config.t3Url === "string" && config.t3Url.trim() !== "";
+}
+
+/** Whether publish_page is enabled for this config and sandbox type. */
+export function isPagesEnabled(config: Pick<Config, "pagesUrl" | "pagePublisher">, sandboxType: "local" | "ssh" = "local"): boolean {
+	if (sandboxType === "ssh") return false;
+	return Boolean(config.pagesUrl?.trim() || config.pagePublisher?.trim());
+}
+
 function readStored(): StoredConfig {
 	if (!existsSync(paths.config)) return {};
 	return JSON.parse(readFileSync(paths.config, "utf8")) as StoredConfig;
@@ -168,6 +200,14 @@ function parseListEnv(value: string | undefined): string[] | undefined {
 		.filter(Boolean);
 }
 
+function parseBoolEnv(value: string | undefined): boolean | undefined {
+	if (value === undefined) return undefined;
+	const lower = value.trim().toLowerCase();
+	if (lower === "1" || lower === "true" || lower === "yes") return true;
+	if (lower === "0" || lower === "false" || lower === "no") return false;
+	return undefined;
+}
+
 /** Defaults, then config.json, then environment variables. */
 export function loadConfig(): Config {
 	const env = process.env;
@@ -179,6 +219,8 @@ export function loadConfig(): Config {
 		telegramAllowedUsers: parseListEnv(env.PCLAW_TELEGRAM_ALLOWED_USERS),
 		telegramAllowedGroups: parseListEnv(env.PCLAW_TELEGRAM_ALLOWED_GROUPS),
 		profile: env.PCLAW_PROFILE,
+		voiceFile: env.PCLAW_VOICE_FILE,
+		personaDir: env.PCLAW_PERSONA_DIR,
 		provider: env.PCLAW_PROVIDER,
 		model: env.PCLAW_MODEL,
 		thinkingLevel: env.PCLAW_THINKING as ModelThinkingLevel | undefined,
@@ -188,6 +230,7 @@ export function loadConfig(): Config {
 		dashboardPort: env.PCLAW_DASHBOARD_PORT === undefined ? undefined : Number(env.PCLAW_DASHBOARD_PORT),
 		tavilyApiKey: env.TAVILY_API_KEY,
 		parallelApiKey: env.PARALLEL_API_KEY,
+		allowT3: parseBoolEnv(env.PCLAW_ALLOW_T3),
 		t3Url: env.PCLAW_T3_URL,
 		t3RedirectUri: env.PCLAW_T3_REDIRECT_URI,
 	};
@@ -208,6 +251,7 @@ export function ensureHome(): void {
 
 /** Write through a temp file so a crash never leaves a half-written file, readable only by this user. */
 export function writePrivate(file: string, contents: string): void {
+	mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
 	const temp = `${file}.${process.pid}.tmp`;
 	writeFileSync(temp, contents, { mode: 0o600 });
 	renameSync(temp, file);

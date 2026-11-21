@@ -2,7 +2,6 @@ import type { Context } from "@earendil-works/chord/context";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { AssistantEntry, type ConversationId, type EntryId, LiveDoc } from "@earendil-works/pi-durable";
 import type { Agent } from "./agent.ts";
-import { readPrompt } from "./prompts.ts";
 
 const CHECK_MS = 60_000;
 /** An idle conversation holding this many copies of the notes gets summarized, which drops them (see `notesView`). */
@@ -61,7 +60,7 @@ export function startContextKeeper(agent: Agent, thresholdTokens: number, contex
 			const conversation = await agent.harness.conversation(id, context);
 			if (conversation === undefined) continue;
 			pending.add(String(id));
-			const task = await conversation.compact(readPrompt("compaction"), context);
+			const task = await conversation.compact(agent.prompts.read("compaction"), context);
 			console.log(`[pclaw] summarizing conversation ${id} (${reason})`);
 			void agent.harness
 				.waitForTask(task, context)

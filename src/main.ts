@@ -155,13 +155,15 @@ async function start(): Promise<void> {
 		throw new Error(`Not signed in to ${config.provider}, or the sign-in expired. Run \`pnpm setup\`.`);
 	}
 	ensureHome();
-	// Workers' publish_page tool reads these.
-	process.env.PCLAW_PAGES_URL = config.pagesUrl ?? `http://127.0.0.1:${config.dashboardPort}/pages`;
-	if (config.pagePublisher !== undefined) process.env.PCLAW_PAGE_PUBLISHER = config.pagePublisher;
+	// Workers' publish_page tool reads these; leave unset when pagesUrl / pagePublisher are not configured.
+	if (config.pagesUrl !== undefined && config.pagesUrl.trim() !== "") process.env.PCLAW_PAGES_URL = config.pagesUrl;
+	else delete process.env.PCLAW_PAGES_URL;
+	if (config.pagePublisher !== undefined && config.pagePublisher.trim() !== "") process.env.PCLAW_PAGE_PUBLISHER = config.pagePublisher;
+	else delete process.env.PCLAW_PAGE_PUBLISHER;
 	setUpSearch(config);
 	const notes = new Notes(paths.notes);
 	useProfile(loadProfile(config.profile).dir);
-	console.log(`[pclaw] profile ${config.profile}`);
+	console.log(`[pclaw] profile ${config.profile}${config.voiceFile ? ` (voice ${config.voiceFile})` : ""}`);
 	const workers = workerOptions(config, paths);
 	if (config.discordToken === undefined && config.telegramToken === undefined) {
 		throw new Error("No Discord or Telegram token configured. Run `pnpm setup` or set DISCORD_TOKEN / TELEGRAM_BOT_TOKEN.");
@@ -171,9 +173,21 @@ async function start(): Promise<void> {
 	const telegram = config.telegramToken === undefined ? undefined : await startTelegram(agent, config, context);
 	const dashboard = await startDashboard({ agent, config, models, notes, workers, port: config.dashboardPort }, context);
 	const contextKeeper = startContextKeeper(agent, config.summarizeAtTokens, context);
-	const notesCleanup = startNotesCleanup(agent, { models, config, notes, archive: paths.notesArchive, stateFile: paths.notesCleanup }, context);
-	const jobKeeper = agent.jobs.startKeeper(context, config.jobPollSeconds * 1000, config.jobProgressSeconds * 1000);
-	console.log(`[pclaw] jobs on, decision model ${config.decisionUrl ?? "off"}`);
+	const notesCleanup = startNotesCleanup(
+		agent,
+		{
+			models,
+			config,
+			notes,
+			archive: paths.notesArchive,
+			stateFile: paths.notesCleanup,
+			users: agent.users,
+			prompts: agent.prompts,
+		},
+		context,
+	);
+	const jobKeeper = agent.t3Enabled ? agent.jobs.startKeeper(context, config.jobPollSeconds * 1000, config.jobProgressSeconds * 1000) : undefined;
+	console.log(`[pclaw] jobs ${agent.t3Enabled ? "on" : "off"}, users ${agent.users.enabled ? agent.users.all().length : "single-owner"}, decision model ${config.decisionUrl ?? "off"}`);
 
 	let stopping = false;
 	const stop = async () => {
@@ -182,7 +196,7 @@ async function start(): Promise<void> {
 		console.log("[pclaw] stopping");
 		contextKeeper.stop();
 		notesCleanup.stop();
-		jobKeeper.stop();
+		jobKeeper?.stop();
 		await discord?.stop();
 		await telegram?.stop();
 		await dashboard.stop();

@@ -67,19 +67,21 @@ export default function (pi: ToolApi) {
 			return text(params.find ? findInPage(content, params.find) : pageWindow(content, params.offset), { service, ms: String(Math.round(performance.now() - started)) });
 		},
 	});
-	pi.registerTool({
-		name: "publish_page",
-		label: "Publish page",
-		description:
-			"Publish a web page you built under pages/<slug>/ (see the web-page skill). Checks it, and returns its address " +
-			"on the person's private network. Call it again after changing a page.",
-		parameters: obj({ slug: str({ description: "The page's folder name under pages/." }) }, { open: true }),
-		async execute(_id, params: { slug: string }) {
-			const url = await publishPage(process.cwd(), params.slug, {
-				...(process.env.PCLAW_PAGES_URL ? { pagesUrl: process.env.PCLAW_PAGES_URL } : {}),
-				...(process.env.PCLAW_PAGE_PUBLISHER ? { publisher: process.env.PCLAW_PAGE_PUBLISHER } : {}),
-			});
-			return text(`Published: ${url}`);
-		},
-	});
+	if (process.env.PCLAW_DISABLE_PAGES !== "1" && (process.env.PCLAW_PAGES_URL || process.env.PCLAW_PAGE_PUBLISHER)) {
+		pi.registerTool({
+			name: "publish_page",
+			label: "Publish page",
+			description:
+				"Publish a web page you built under pages/<slug>/ (see the web-page skill). Checks it, and returns its address " +
+				"on the person's private network. Call it again after changing a page.",
+			parameters: obj({ slug: str({ description: "The page's folder name under pages/." }) }, { open: true }),
+			async execute(_id, params: { slug: string }) {
+				const url = await publishPage(process.cwd(), params.slug, {
+					...(process.env.PCLAW_PAGES_URL ? { pagesUrl: process.env.PCLAW_PAGES_URL } : {}),
+					...(process.env.PCLAW_PAGE_PUBLISHER ? { publisher: process.env.PCLAW_PAGE_PUBLISHER } : {}),
+				});
+				return text(`Published: ${url}`);
+			},
+		});
+	}
 }

@@ -8,7 +8,7 @@ import { type Conversation, type ConversationId, defineExtension, defineTool, ty
 import { type Config, writePrivate } from "../config.ts";
 import type { WorkerItem } from "../dashboard/types.ts";
 import { type Decided, type Decisions, messageGuidance, messageQuestions, pick, progressGuidance, progressQuestions, projectQuestion, readTurn, TURN_TAIL, turnGuidance, turnQuestions, yes } from "../decisions.ts";
-import { readPrompt } from "../prompts.ts";
+import { type PromptResolver, readPrompt } from "../prompts.ts";
 import { Routes } from "../routes.ts";
 import { pairedClient, T3Down } from "../t3-client.ts";
 import { stamp } from "../time.ts";
@@ -368,8 +368,8 @@ const PROGRESS_TASK = `Right now you're partway through a job for them, and this
 Use null unless a person would actually want to read it: something found, a snag, a change of plan. More of the same is null. Never repeat what you've already said. Never include a password, token, or key.`;
 
 /** Updates come from the same voice as everything else pclaw says. */
-export function progressPrompt(): string {
-	return `${readPrompt("voice").trim()}\n\n${PROGRESS_TASK}`;
+export function progressPrompt(prompts?: PromptResolver): string {
+	return `${(prompts?.read("voice") ?? readPrompt("voice")).trim()}\n\n${PROGRESS_TASK}`;
 }
 
 const SECRETS = /^.*(password|passwd|token|secret|api[_-]?key|authorization).*$/gim;
@@ -395,6 +395,8 @@ export type JobsOptions = {
 	models: Models;
 	config: Config;
 	harness: { current?: Harness };
+	/** Per-agent prompt resolver (supports voiceFile/personaDir without global mutation). */
+	prompts?: PromptResolver;
 	/** A worker's transcript so far. */
 	workerItems?: (sessionId: string) => WorkerItem[];
 };
@@ -518,7 +520,7 @@ export function createJobs(options: JobsOptions) {
 					? "You haven't said anything in this thread yet, so tell them what you've picked up so far."
 					: `Your last update was ${minutes} minutes ago.${minutes >= 3 ? " That's a while, so say where things stand if there's anything new." : ""}`;
 			const content = [`The job: ${job.title}\n${job.brief.slice(0, 800)}`, `What you've said so far: ${job.told.join(" / ") || "nothing"}`, quiet, ...(hint === undefined ? [] : [hint]), `What just happened:\n${activity}`].join("\n\n");
-			const reply = await models.completeSimple(model, { systemPrompt: progressPrompt(), messages: [{ role: "user", content, timestamp: Date.now() }] }, { reasoning: "low", signal: AbortSignal.timeout(30_000) });
+			const reply = await models.completeSimple(model, { systemPrompt: progressPrompt(options.prompts), messages: [{ role: "user", content, timestamp: Date.now() }] }, { reasoning: "low", signal: AbortSignal.timeout(30_000) });
 			const raw = reply.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
 			const parsed = JSON.parse(/\{[\s\S]*\}/.exec(raw)?.[0] ?? "{}") as { status?: string; message?: string | null };
 			const status = parsed.status?.trim().slice(0, 120);

@@ -36,6 +36,9 @@ async function main(): Promise<string> {
 		return (find === undefined ? pageWindow(content, Number(option(rest, "--offset") ?? 0)) : findInPage(content, find)) + via(service);
 	}
 	if (command === "publish" && target !== undefined) {
+		if (process.env.PCLAW_DISABLE_PAGES === "1" || (!process.env.PCLAW_PAGES_URL && !process.env.PCLAW_PAGE_PUBLISHER)) {
+			throw new Error("publish_page is disabled (no pagesUrl configured).");
+		}
 		const url = await publishPage(process.cwd(), target, {
 			...(process.env.PCLAW_PAGES_URL ? { pagesUrl: process.env.PCLAW_PAGES_URL } : {}),
 			...(process.env.PCLAW_PAGE_PUBLISHER ? { publisher: process.env.PCLAW_PAGE_PUBLISHER } : {}),

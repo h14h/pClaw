@@ -1,5 +1,5 @@
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { Context } from "@earendil-works/chord/context";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import {
@@ -30,11 +30,13 @@ import { deliver, type Outbox } from "../delivery.ts";
 import type { Job, JobState, JobSurface } from "../extensions/jobs.ts";
 import { Reactions } from "../extensions/reactions.ts";
 import { Workers } from "../extensions/workers.ts";
+import { sanitizeFilename } from "../sandbox.ts";
 import { type Heard, memoLabel, transcribe } from "../speech.ts";
 import { stamp } from "../time.ts";
 
 const MAX_MESSAGE = 2000;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const TYPING_REFRESH_MS = 8_000;
 const QUOTE_LIMIT = 800;
 const RESYNC_ON_ATTACH = 10;
@@ -135,9 +137,19 @@ export function splitMessage(text: string, limit = MAX_MESSAGE): string[] {
 
 const clip = (text: string) => (text.length > QUOTE_LIMIT ? `${text.slice(0, QUOTE_LIMIT)}…` : text);
 
-async function toInput(message: Message, timeZone: string, context: string[], memo?: Heard): Promise<UserInput> {
+async function toInput(
+	message: Message,
+	timeZone: string,
+	context: string[],
+	memo?: Heard,
+	options?: {
+		inboxDir?: string;
+		stageFile?: (localPath: string, filename: string) => Promise<string>;
+	},
+): Promise<UserInput> {
 	const parts: (TextContent | ImageContent)[] = [];
 	const notes: string[] = memo === undefined ? [] : [memoLabel(memo.seconds), memo.text];
+	const inboxDir = options?.inboxDir ?? paths.inbox;
 	for (const attachment of message.attachments.values()) {
 		const type = attachment.contentType ?? "";
 		if (type.startsWith("audio/")) {
@@ -150,6 +162,37 @@ async function toInput(message: Message, timeZone: string, context: string[], me
 				const data = Buffer.from(await response.arrayBuffer()).toString("base64");
 				parts.push({ type: "image", data, mimeType: type.split(";")[0]! });
 				continue;
+			}
+		}
+		if (attachment.size <= MAX_FILE_BYTES) {
+			try {
+				const response = await fetch(attachment.url);
+				if (response.ok) {
+					const bytes = new Uint8Array(await response.arrayBuffer());
+					if (bytes.byteLength <= MAX_FILE_BYTES) {
+						mkdirSync(inboxDir, { recursive: true, mode: 0o700 });
+						const safe = sanitizeFilename(attachment.name ?? `attachment-${message.id}`);
+						const savedPath = join(inboxDir, `dc-${message.channelId}-${message.id}-${safe}`);
+						writeFileSync(savedPath, bytes, { mode: 0o600 });
+						if (options?.stageFile !== undefined) {
+							try {
+								const stagedPath = await options.stageFile(savedPath, basename(savedPath));
+								notes.push(`[attached file "${attachment.name}" (${type || "application/octet-stream"}, ${bytes.byteLength} bytes), saved at ${stagedPath}]`);
+							} catch (stageError) {
+								const reason = stageError instanceof Error ? stageError.message : String(stageError);
+								console.error("[pclaw] couldn't stage Discord document to sandbox", stageError);
+								notes.push(
+									`[attached file "${attachment.name}" (${type || "application/octet-stream"}, ${bytes.byteLength} bytes), saved locally at ${savedPath}, but staging to workspace failed: ${reason}]`,
+								);
+							}
+						} else {
+							notes.push(`[attached file "${attachment.name}" (${type || "application/octet-stream"}, ${bytes.byteLength} bytes), saved at ${savedPath}]`);
+						}
+						continue;
+					}
+				}
+			} catch (error) {
+				console.error("[pclaw] couldn't download Discord attachment", error);
 			}
 		}
 		notes.push(`[attached ${attachment.name} (${type || "unknown type"}, ${attachment.size} bytes), which I can't open yet]`);
@@ -174,6 +217,9 @@ async function replyContext(message: Message, botId: string, timeZone: string): 
 export async function startDiscord(agent: Agent, config: Config, context: Context): Promise<{ stop(): Promise<void> }> {
 	if (config.discordToken === undefined) throw new Error("No Discord token. Run `pnpm setup`.");
 	let ownerId = config.discordOwnerId;
+	const allowedUsers = new Set<string>(agent.users.allowedExternalIds("discord"));
+	const isAllowedDiscordUser = (userId: string) =>
+		(ownerId !== undefined && userId === ownerId) || allowedUsers.has(userId);
 	const channels = new Set(config.discordChannels);
 	const { jobs } = agent;
 
@@ -207,6 +253,15 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 		const channel = await client.channels.fetch(id!).catch(() => null);
 		return channel?.isSendable() ? channel : undefined;
 	}
+
+	const unregisterFiles = agent.fileSenders.register("discord", async (addr, file) => {
+		const channel = await target(addr);
+		if (channel === undefined) throw new Error(`Can't reach ${addr}`);
+		await channel.send({
+			...(file.caption !== undefined && file.caption.trim() !== "" ? { content: file.caption.slice(0, MAX_MESSAGE) } : {}),
+			files: [{ attachment: Buffer.from(file.data), name: file.filename }],
+		});
+	});
 
 	function outbox(addr: string, conversation: Conversation): Outbox {
 		let typing: NodeJS.Timeout | undefined;
@@ -336,8 +391,9 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 		const channel = message.channel;
 		if (channel.isDMBased()) {
 			const addr = address.dm(message.author.id);
+			const user = agent.users.resolveAddress(addr);
 			const conversation = await agent.conversationFor(addr, context);
-			await agent.describe(conversation.id, { label: "Discord DM" }, context);
+			await agent.describe(conversation.id, { label: user === undefined ? "Discord DM" : `Discord DM (${user.name})` }, context);
 			return { addr, conversation, extra: [] };
 		}
 		if (channel.isThread() && channel.parentId !== null && served(channel.parentId)) return threadRoute(channel);
@@ -351,7 +407,7 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 	}
 
 	/** The first audio attachment as text, or undefined. A failure leaves a note for the front model to pass on. */
-	async function hear(message: Message): Promise<Heard | undefined> {
+	async function hear(message: Message, voiceDir = paths.voice): Promise<Heard | undefined> {
 		const attachment = message.attachments.find((each) => each.contentType?.startsWith("audio/") === true);
 		if (attachment === undefined || config.speechUrl === undefined) return undefined;
 		const id = `message:${message.id}`;
@@ -360,8 +416,8 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 			const download = await fetch(attachment.url);
 			if (!download.ok) throw new Error(`Discord returned ${download.status}`);
 			const audio = new Uint8Array(await download.arrayBuffer());
-			mkdirSync(paths.voice, { recursive: true, mode: 0o700 });
-			writeFileSync(join(paths.voice, `${message.id}.ogg`), audio, { mode: 0o600 });
+			mkdirSync(voiceDir, { recursive: true, mode: 0o700 });
+			writeFileSync(join(voiceDir, `${message.id}.ogg`), audio, { mode: 0o600 });
 			const heard = await transcribe(config.speechUrl, audio);
 			jobs.decisions.record({ type: "voice", id, ok: true, seconds: heard.seconds, ms: heard.ms, words: heard.text.split(/\s+/).filter(Boolean).length });
 			console.log(`[pclaw] heard a ${Math.round(heard.seconds)}s voice memo in ${heard.ms}ms`);
@@ -447,29 +503,40 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 	client.on(Events.MessageCreate, async (message) => {
 		try {
 			if (message.author.bot) return;
-			if (ownerId === undefined && message.channel.isDMBased()) {
+			if (!agent.users.enabled && ownerId === undefined && message.channel.isDMBased()) {
 				ownerId = message.author.id;
 				saveConfig({ discordOwnerId: ownerId });
 				console.log(`[pclaw] paired with ${message.author.tag} (${ownerId})`);
 			}
-			if (message.author.id !== ownerId) return;
+			if (!isAllowedDiscordUser(message.author.id)) return;
 			const route = await conversationFor(message);
 			if (route === undefined) return;
 			await attach(route.addr, route.conversation);
-			const memo = await hear(message);
-			const guidance = await jobs.guideMessage({
-				id: message.id,
-				text: [message.content, memo?.text].filter(Boolean).join("\n"),
-				channel: "name" in message.channel && message.channel.name !== null ? message.channel.name : "direct message",
-				...(message.channel.isThread() ? { discordThreadId: message.channelId } : {}),
-				...(memo === undefined ? {} : { voice: true }),
-			});
-			const extra = [...route.extra, ...(await replyContext(message, client.user!.id, config.timeZone)), ...(guidance === undefined ? [] : [guidance])];
+			const user = agent.users.resolveAddress(route.addr);
+			const userPaths = user === undefined ? undefined : agent.users.pathsFor(user.id);
+			const userTimeZone = user?.timeZone ?? config.timeZone;
+			const userSandbox = user === undefined ? undefined : agent.sandboxes.sandboxForUser(user);
+			const memo = await hear(message, userPaths?.voice ?? paths.voice);
+			const guidance = agent.t3Enabled
+				? await jobs.guideMessage({
+						id: message.id,
+						text: [message.content, memo?.text].filter(Boolean).join("\n"),
+						channel: "name" in message.channel && message.channel.name !== null ? message.channel.name : "direct message",
+						...(message.channel.isThread() ? { discordThreadId: message.channelId } : {}),
+						...(memo === undefined ? {} : { voice: true }),
+					})
+				: undefined;
+			const extra = [...route.extra, ...(await replyContext(message, client.user!.id, userTimeZone)), ...(guidance === undefined ? [] : [guidance])];
 			// Messages sent while pclaw is working join the current run at its next step, like a person cutting in.
 			await route.conversation.submit(
 				{
 					type: "input",
-					content: await toInput(message, config.timeZone, extra, memo),
+					content: await toInput(message, userTimeZone, extra, memo, {
+						inboxDir: userPaths?.inbox ?? paths.inbox,
+						...(userSandbox?.type === "ssh"
+							? { stageFile: (localPath, filename) => userSandbox.putFile(localPath, filename) }
+							: {}),
+					}),
 					whenBusy: "steer",
 					requestId: `discord:${message.id}`,
 				},
@@ -480,23 +547,24 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 		}
 	});
 
-	// The owner's reactions on pclaw's messages reach it as a short input: an acknowledgment, an answer, a go-ahead.
+	// Reactions on pclaw's messages reach it as a short input: an acknowledgment, an answer, a go-ahead.
 	client.on(Events.MessageReactionAdd, async (partial, partialUser) => {
 		try {
-			if (partialUser.id !== ownerId) return;
+			if (!isAllowedDiscordUser(partialUser.id)) return;
 			const reaction = partial.partial ? await partial.fetch() : partial;
 			const message = reaction.message.partial ? await reaction.message.fetch() : reaction.message;
 			if (message.author.id !== client.user!.id) return;
 			const known = await agent.addresses(context);
 			const addr = Object.keys(known).find((key) =>
-				message.channel.isDMBased() ? key === address.dm(ownerId!) : key === address.channel(message.channelId) || key === address.thread(message.channelId),
+				message.channel.isDMBased() ? key === address.dm(partialUser.id) : key === address.channel(message.channelId) || key === address.thread(message.channelId),
 			);
 			if (addr === undefined) return;
 			const conversation = await agent.harness.conversation(known[addr]!, context);
 			const emoji = reaction.emoji.name ?? "?";
 			const job = jobs.store.forThread(message.channelId);
 			if (job !== undefined) jobs.decisions.record({ type: "reaction", job: job.id, decision: job.decision, emoji, message: message.id });
-			const content = `[${stamp(Date.now(), config.timeZone)}]\n[reacted ${emoji} to your message from ${stamp(message.createdTimestamp, config.timeZone)}: "${clip(message.content)}"]`;
+			const userTimeZone = agent.users.resolveExternal("discord", partialUser.id)?.timeZone ?? config.timeZone;
+			const content = `[${stamp(Date.now(), userTimeZone)}]\n[reacted ${emoji} to your message from ${stamp(message.createdTimestamp, userTimeZone)}: "${clip(message.content)}"]`;
 			await conversation?.submit(
 				{ type: "input", content, whenBusy: "followUp", requestId: `discord-reaction:${message.id}:${emoji}:${Date.now()}` },
 				context,
@@ -541,12 +609,13 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 			const conversation = await agent.harness.conversation(id, context);
 			if (conversation !== undefined) await attach(addr, conversation).catch((error: unknown) => console.error(`[pclaw] ${addr}`, error));
 		}
-		if (ownerId === undefined) console.log("[pclaw] Waiting for a DM. The first person to message it becomes its owner.");
+		if (ownerId === undefined && !agent.users.enabled) console.log("[pclaw] Waiting for a DM. The first person to message it becomes its owner.");
 	});
 
 	await client.login(config.discordToken);
 	return {
 		stop: async () => {
+			unregisterFiles();
 			for (const delivery of deliveries.values()) await delivery.stop();
 			clearInterval(keepTyping);
 			delete jobs.surface.current;

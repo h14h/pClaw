@@ -1,9 +1,23 @@
+import type { Context } from "@earendil-works/chord/context";
 import { lit, obj, opt, str, union } from "@earendil-works/pi-schema";
-import { defineDoc, defineExtension, defineTask, defineTool } from "@earendil-works/pi-durable";
+import {
+	type ConversationId,
+	defineDoc,
+	defineExtension,
+	defineTask,
+	defineTool,
+	type DocumentReader,
+} from "@earendil-works/pi-durable";
 import { stamp, utcOffset } from "../time.ts";
 
 export type Repeat = "daily" | "weekly";
 type FollowUpItem = { note: string; dueAt: number; repeat?: Repeat };
+
+export type TimeZoneResolver = (
+	read: DocumentReader,
+	conversationId: ConversationId,
+	context: Context,
+) => Promise<string>;
 
 /** Scheduled follow-ups of one conversation, keyed by the id of the task that will deliver each one. */
 export const FollowUps = defineDoc<{ items: Record<string, FollowUpItem> }>({
@@ -43,9 +57,12 @@ export function wakeMessage(note: string, at: number, timeZone: string): string 
  * task ends quietly when it wakes and finds it gone.
  */
 /** A hint for a follow-up that came due, or nothing. */
-export type FollowUpGuide = (id: string, note: string) => Promise<string | undefined>;
+export type FollowUpGuide = (id: string, note: string, timeZone?: string) => Promise<string | undefined>;
 
-export function followUpTask(timeZone: string, guide?: FollowUpGuide) {
+export function followUpTask(timeZoneOrResolver: string | TimeZoneResolver, guide?: FollowUpGuide) {
+	const resolveTz: TimeZoneResolver =
+		typeof timeZoneOrResolver === "function" ? timeZoneOrResolver : async () => timeZoneOrResolver;
+
 	return defineTask<null, FollowUpState, null>({
 		name: "pclaw.follow-up",
 		version: 1,
@@ -63,13 +80,14 @@ export function followUpTask(timeZone: string, guide?: FollowUpGuide) {
 			},
 			fire: async (task, runtime, context) => {
 				const item = (await runtime.snapshot(FollowUps, runtime.conversationId, context))?.items[task.id];
+				const tz = await resolveTz(runtime, runtime.conversationId, context);
 				if (item !== undefined) {
 					const conversation = await runtime.conversation(runtime.conversationId, context);
-					const hint = await guide?.(`follow-up:${task.id}:${item.dueAt}`, item.note);
+					const hint = await guide?.(`follow-up:${task.id}:${item.dueAt}`, item.note, tz);
 					await conversation?.submit(
 						{
 							type: "input",
-							content: hint === undefined ? wakeMessage(item.note, item.dueAt, timeZone) : `${wakeMessage(item.note, item.dueAt, timeZone)}\n${hint}`,
+							content: hint === undefined ? wakeMessage(item.note, item.dueAt, tz) : `${wakeMessage(item.note, item.dueAt, tz)}\n${hint}`,
 							whenBusy: "followUp",
 							// A restart between submitting and committing must not deliver it twice.
 							requestId: `follow-up:${task.id}:${item.dueAt}`,
@@ -81,7 +99,7 @@ export function followUpTask(timeZone: string, guide?: FollowUpGuide) {
 					const doc = await tx.doc(FollowUps, runtime.conversationId);
 					const current = doc.items[task.id];
 					if (current?.repeat !== undefined) {
-						current.dueAt = nextOccurrence(current.dueAt, current.repeat, timeZone);
+						current.dueAt = nextOccurrence(current.dueAt, current.repeat, tz);
 						return { status: "running", checkpoint: { phase: "wait" } };
 					}
 					delete doc.items[task.id];
@@ -100,8 +118,14 @@ export function followUpTask(timeZone: string, guide?: FollowUpGuide) {
 
 const text = (value: string) => ({ output: [{ type: "text" as const, text: value }] });
 
-export function followUpsExtension(timeZone: string, now: () => number = Date.now, guide?: FollowUpGuide) {
-	const FollowUp = followUpTask(timeZone, guide);
+export function followUpsExtension(
+	timeZoneOrResolver: string | TimeZoneResolver,
+	now: () => number = Date.now,
+	guide?: FollowUpGuide,
+) {
+	const resolveTz: TimeZoneResolver =
+		typeof timeZoneOrResolver === "function" ? timeZoneOrResolver : async () => timeZoneOrResolver;
+	const FollowUp = followUpTask(resolveTz, guide);
 	return defineExtension({
 		name: "pclaw.follow-ups",
 		tasks: [FollowUp],
@@ -125,6 +149,7 @@ export function followUpsExtension(timeZone: string, now: () => number = Date.no
 					const dueAt = Date.parse(args.at);
 					if (Number.isNaN(dueAt)) throw new Error(`Couldn't read "${args.at}" as a time. Use ISO 8601 with an offset.`);
 					if (dueAt < now() - 60_000) throw new Error(`${args.at} is in the past.`);
+					const tz = await resolveTz(api, api.conversationId, context);
 					const id = await api.commit(async (tx) => {
 						const taskId = await tx.createTask(FollowUp, null, { ownership: { kind: "conversation" }, background: true });
 						const item: FollowUpItem = { note: args.note, dueAt };
@@ -133,7 +158,7 @@ export function followUpsExtension(timeZone: string, now: () => number = Date.no
 						return taskId;
 					}, context);
 					const repeat = args.repeat === undefined ? "" : `, repeating ${args.repeat}`;
-					return text(`Scheduled for ${stamp(dueAt, timeZone)}${repeat}. id: ${id}`);
+					return text(`Scheduled for ${stamp(dueAt, tz)}${repeat}. id: ${id}`);
 				},
 			}),
 			defineTool({
@@ -143,12 +168,13 @@ export function followUpsExtension(timeZone: string, now: () => number = Date.no
 				execute: async (_args, api, context) => {
 					const items = Object.entries((await api.snapshot(FollowUps, api.conversationId, context))?.items ?? {});
 					if (items.length === 0) return text("Nothing scheduled.");
+					const tz = await resolveTz(api, api.conversationId, context);
 					items.sort(([, a], [, b]) => a.dueAt - b.dueAt);
 					return text(
 						items
 							.map(([id, item]) => {
 								const repeat = item.repeat === undefined ? "" : ` (${item.repeat})`;
-								return `${id}: ${stamp(item.dueAt, timeZone)}${repeat}: ${item.note}`;
+								return `${id}: ${stamp(item.dueAt, tz)}${repeat}: ${item.note}`;
 							})
 							.join("\n"),
 					);

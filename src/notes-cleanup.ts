@@ -1,13 +1,15 @@
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname } from "node:path";
 import type { Context } from "@earendil-works/chord/context";
 import type { Message } from "@earendil-works/pi-ai";
 import type { Models } from "@earendil-works/pi-ai/models";
 import { AssistantEntry, type EntryRecord } from "@earendil-works/pi-durable";
 import type { Agent } from "./agent.ts";
-import { type Config, ensureHome, writePrivate } from "./config.ts";
+import { type Config, writePrivate } from "./config.ts";
 import { conversationText, NotesUpdate } from "./extensions/memory.ts";
 import type { Notes } from "./extensions/notes.ts";
-import { readPrompt } from "./prompts.ts";
+import { type PromptResolver, readPrompt } from "./prompts.ts";
+import type { UserRegistry } from "./users.ts";
 
 /**
  * The nightly notes cleanup. The notes only grow during the day: the memory pass and `remember` add lines, and nothing
@@ -96,7 +98,7 @@ export function applyCleanup(notes: Notes, lines: string[], reply: CleanupReply,
 		archived.push(`- ${today} retired${why === "" ? "" : ` (${why})`}: ${line}`);
 	}
 	if (archived.length > 0) {
-		ensureHome();
+		mkdirSync(dirname(archive), { recursive: true, mode: 0o700 });
 		if (!existsSync(archive)) writePrivate(archive, "# Retired notes\n\nWhat the nightly cleanup took out of the notes, newest last. pclaw doesn't see this file.\n\n");
 		appendFileSync(archive, `${archived.join("\n")}\n`);
 	}
@@ -110,11 +112,17 @@ const timestampOf = (entry: EntryRecord): number | undefined => {
 	return typeof at === "number" ? at : undefined;
 };
 
-/** Every conversation since `since`: what was said, and the notes saved by `remember` or the memory pass. */
-export async function daySince(agent: Agent, since: number, context: Context): Promise<Day> {
+/** Every matching conversation since `since`: what was said, and the notes saved by `remember` or the memory pass. */
+export async function daySince(
+	agent: Agent,
+	since: number,
+	context: Context,
+	filter: (address: string) => boolean = () => true,
+): Promise<Day> {
 	const parts: string[] = [];
 	const saved = new Set<string>();
 	for (const [address, id] of Object.entries(await agent.addresses(context))) {
+		if (!filter(address)) continue;
 		const conversation = await agent.harness.conversation(id, context);
 		if (conversation === undefined) continue;
 		const recent: EntryRecord[] = [];
@@ -145,7 +153,7 @@ export async function daySince(agent: Agent, since: number, context: Context): P
 
 /** One cleanup of the notes file. */
 export async function cleanupNotes(
-	options: { models: Models; config: Pick<Config, "provider" | "model">; notes: Notes; archive: string },
+	options: { models: Models; config: Pick<Config, "provider" | "model">; notes: Notes; archive: string; prompts?: PromptResolver },
 	day: Day,
 	today: string,
 	signal?: AbortSignal,
@@ -157,7 +165,10 @@ export async function cleanupNotes(
 	if (model === undefined) throw new Error(`notes cleanup: unknown model ${config.provider}/${config.model}`);
 	const reply = await models.completeSimple(
 		model,
-		{ systemPrompt: readPrompt("cleanup"), messages: [{ role: "user", content: input, timestamp: Date.now() }] },
+		{
+			systemPrompt: options.prompts?.read("cleanup") ?? readPrompt("cleanup"),
+			messages: [{ role: "user", content: input, timestamp: Date.now() }],
+		},
 		{ reasoning: "medium", ...(signal === undefined ? {} : { signal }) },
 	);
 	if (reply.stopReason === "error") throw new Error(`notes cleanup: ${reply.errorMessage ?? "model error"}`);
@@ -165,33 +176,136 @@ export async function cleanupNotes(
 	return applyCleanup(notes, lines, parseCleanup(text), today, options.archive);
 }
 
+function formatLocal(at: number, timeZone: string, part: "day" | "hour"): string {
+	return new Intl.DateTimeFormat(
+		"en-CA",
+		part === "day"
+			? { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }
+			: { timeZone, hour: "2-digit", hourCycle: "h23" },
+	).format(at);
+}
+
+function readLastRun(stateFile: string): number | undefined {
+	try {
+		const value = (JSON.parse(readFileSync(stateFile, "utf8")) as { lastRun?: unknown }).lastRun;
+		return typeof value === "number" ? value : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Run nightly notes cleanup independently for every canonical user in `users`.
+ * Each user only reads their own conversations (across Telegram & Discord, never group chats or other users),
+ * updates their own `notes.md`, archives to their own `notes-archive.md`, and tracks their own `notes-cleanup.json`.
+ */
+export async function cleanupNotesForUsers(
+	agent: Agent,
+	options: { models: Models; config: Config; users: UserRegistry; prompts?: PromptResolver; now?: number; force?: boolean },
+	context: Context,
+): Promise<Record<string, CleanupResult>> {
+	const now = options.now ?? Date.now();
+	const results: Record<string, CleanupResult> = {};
+	for (const user of options.users.all()) {
+		const tz = user.timeZone ?? options.config.timeZone;
+		const userPaths = options.users.pathsFor(user.id);
+		const last = readLastRun(userPaths.notesCleanup);
+		if (!options.force) {
+			if (Number(formatLocal(now, tz, "hour")) < RUN_HOUR) continue;
+			if (last !== undefined && formatLocal(last, tz, "day") === formatLocal(now, tz, "day")) continue;
+		}
+		const day = await daySince(agent, last ?? now - DAY_MS, context, (address) => options.users.resolveAddress(address)?.id === user.id);
+		const result = await cleanupNotes(
+			{
+				models: options.models,
+				config: options.config,
+				notes: options.users.notesFor(user.id),
+				archive: userPaths.notesArchive,
+				...(options.prompts === undefined ? {} : { prompts: options.prompts }),
+			},
+			day,
+			formatLocal(now, tz, "day"),
+			AbortSignal.timeout(5 * 60_000),
+		);
+		writePrivate(userPaths.notesCleanup, JSON.stringify({ lastRun: now }));
+		results[user.id] = result;
+	}
+	return results;
+}
+
 /** Runs the cleanup once a night, at `RUN_HOUR` local time or the first check after it. */
 export function startNotesCleanup(
 	agent: Agent,
-	options: { models: Models; config: Config; notes: Notes; archive: string; stateFile: string },
+	options: { models: Models; config: Config; notes: Notes; archive: string; stateFile: string; users?: UserRegistry; prompts?: PromptResolver },
 	context: Context,
 ): { stop(): void } {
-	const local = (at: number, part: "day" | "hour") =>
-		new Intl.DateTimeFormat("en-CA", part === "day" ? { timeZone: options.config.timeZone, year: "numeric", month: "2-digit", day: "2-digit" } : { timeZone: options.config.timeZone, hour: "2-digit", hourCycle: "h23" }).format(at);
-	const lastRun = (): number | undefined => {
-		try {
-			const value = (JSON.parse(readFileSync(options.stateFile, "utf8")) as { lastRun?: unknown }).lastRun;
-			return typeof value === "number" ? value : undefined;
-		} catch {
-			return undefined;
-		}
-	};
+	const users = options.users;
+	if (users?.enabled) {
+		const attempted = new Map<string, number>();
+		const running = new Set<string>();
+		const check = async () => {
+			const now = Date.now();
+			for (const user of users.all()) {
+				const tz = user.timeZone ?? options.config.timeZone;
+				const userPaths = users.pathsFor(user.id);
+				const last = readLastRun(userPaths.notesCleanup);
+				const lastAttempt = attempted.get(user.id) ?? 0;
+				if (
+					running.has(user.id) ||
+					Number(formatLocal(now, tz, "hour")) < RUN_HOUR ||
+					(last !== undefined && formatLocal(last, tz, "day") === formatLocal(now, tz, "day")) ||
+					now - lastAttempt < RETRY_MS
+				) {
+					continue;
+				}
+				running.add(user.id);
+				attempted.set(user.id, now);
+				try {
+					const day = await daySince(agent, last ?? now - DAY_MS, context, (address) => users.resolveAddress(address)?.id === user.id);
+					const result = await cleanupNotes(
+						{
+							models: options.models,
+							config: options.config,
+							notes: users.notesFor(user.id),
+							archive: userPaths.notesArchive,
+							...(options.prompts === undefined ? {} : { prompts: options.prompts }),
+						},
+						day,
+						formatLocal(now, tz, "day"),
+						AbortSignal.timeout(5 * 60_000),
+					);
+					writePrivate(userPaths.notesCleanup, JSON.stringify({ lastRun: now }));
+					if (result.skipped !== undefined) console.error(`[pclaw] notes cleanup (${user.id}) skipped: ${result.skipped}`);
+					else console.log(`[pclaw] notes cleanup (${user.id}): ${result.changes.length === 0 ? "nothing to change" : `\n  ${result.changes.join("\n  ")}`}`);
+				} catch (error) {
+					console.error(`[pclaw] notes cleanup (${user.id}) failed`, error);
+				} finally {
+					running.delete(user.id);
+				}
+			}
+		};
+		const timer = setInterval(() => void check().catch((error: unknown) => console.error("[pclaw] notes cleanup failed", error)), CHECK_MS);
+		return { stop: () => clearInterval(timer) };
+	}
+
 	let attempted = 0;
 	let running = false;
 	const check = async () => {
 		const now = Date.now();
-		const last = lastRun();
-		if (running || Number(local(now, "hour")) < RUN_HOUR || (last !== undefined && local(last, "day") === local(now, "day")) || now - attempted < RETRY_MS) return;
+		const last = readLastRun(options.stateFile);
+		if (
+			running ||
+			Number(formatLocal(now, options.config.timeZone, "hour")) < RUN_HOUR ||
+			(last !== undefined && formatLocal(last, options.config.timeZone, "day") === formatLocal(now, options.config.timeZone, "day")) ||
+			now - attempted < RETRY_MS
+		) {
+			return;
+		}
 		running = true;
 		attempted = now;
 		try {
 			const day = await daySince(agent, last ?? now - DAY_MS, context);
-			const result = await cleanupNotes(options, day, local(now, "day"), AbortSignal.timeout(5 * 60_000));
+			const result = await cleanupNotes(options, day, formatLocal(now, options.config.timeZone, "day"), AbortSignal.timeout(5 * 60_000));
 			writePrivate(options.stateFile, JSON.stringify({ lastRun: now }));
 			if (result.skipped !== undefined) console.error(`[pclaw] notes cleanup skipped: ${result.skipped}`);
 			else console.log(`[pclaw] notes cleanup: ${result.changes.length === 0 ? "nothing to change" : `\n  ${result.changes.join("\n  ")}`}`);

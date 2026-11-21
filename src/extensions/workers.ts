@@ -2,15 +2,27 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { lit, obj, opt, str, union } from "@earendil-works/pi-schema";
 import type { Context } from "@earendil-works/chord/context";
-import { type Conversation, type ConversationId, defineDoc, defineExtension, defineTask, defineTool, type Harness, type TaskId, type Tx } from "@earendil-works/pi-durable";
-import type { Config } from "../config.ts";
+import {
+	type Conversation,
+	type ConversationId,
+	defineDoc,
+	defineExtension,
+	defineTask,
+	defineTool,
+	type DocumentReader,
+	type Harness,
+	type TaskId,
+	type Tx,
+} from "@earendil-works/pi-durable";
+import { type Config, isPagesEnabled, isT3Enabled } from "../config.ts";
 import { MUSE, museArgs, musePreamble, museRun, museTranscript } from "../muse.ts";
 import { pairedClient, runT3Turn } from "../t3-client.ts";
-import { prompts } from "../prompts.ts";
+import { type PromptResolver, prompts } from "../prompts.ts";
+import type { WorkerSandbox } from "../sandbox.ts";
 import { currentAsk, FAILED, isEmoji, Reactions, setReaction, WORKING } from "./reactions.ts";
 
 /**
@@ -74,6 +86,8 @@ export type WorkerOptions = {
 	quickThinkingLevel: string;
 	/** pi skills (directories with SKILL.md): pclaw's own, e.g. web-page, then config.workerSkills. */
 	skills: string[];
+	/** Whether workers are offered publish_page and the web-page skill. */
+	allowPages?: boolean;
 	/** T3 worker threads: where T3 lives and the pairing to use. Absent: provider `t3` reports it isn't set up. */
 	t3?: { url: string; storeFile: string; projectId?: string; baseRef?: string };
 };
@@ -83,7 +97,16 @@ export type Depth = "quick" | "deep";
 /** pclaw's own skills. */
 const SKILLS = fileURLToPath(new URL("../skills", import.meta.url));
 
-export function workerOptions(config: Config, paths: { work: string; workerSessions: string; t3Auth?: string }): WorkerOptions {
+export function workerOptions(
+	config: Config,
+	paths: { work: string; workerSessions: string; t3Auth?: string },
+	promptResolver?: PromptResolver,
+): WorkerOptions {
+	const allowPages = isPagesEnabled(config, "local");
+	const builtinSkills = readdirSync(SKILLS, { withFileTypes: true })
+		.filter((entry) => entry.isDirectory() && (allowPages || entry.name !== "web-page"))
+		.map((entry) => join(SKILLS, entry.name));
+	const t3Enabled = isT3Enabled(config);
 	return {
 		command: config.workerCommand,
 		museCommand: config.museCommand,
@@ -94,15 +117,16 @@ export function workerOptions(config: Config, paths: { work: string; workerSessi
 		timeoutMs: config.workerTimeoutMinutes * 60_000,
 		cwd: paths.work,
 		sessionDir: paths.workerSessions,
-		promptFile: prompts.worker.file,
+		promptFile: promptResolver?.file("worker") ?? prompts.worker.file,
 		toolsFile: fileURLToPath(new URL("../worker-tools.ts", import.meta.url)),
 		cliFile: fileURLToPath(new URL("../worker-cli.ts", import.meta.url)),
 		quickThinkingLevel: config.workerQuickThinkingLevel,
 		skills: [
-			...readdirSync(SKILLS, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => join(SKILLS, entry.name)),
+			...builtinSkills,
 			...config.workerSkills.map((dir) => resolve(dir.replace(/^~(?=$|\/)/, homedir()))),
 		],
-		...(paths.t3Auth === undefined
+		allowPages,
+		...(paths.t3Auth === undefined || !t3Enabled
 			? {}
 			: {
 					t3: {
@@ -131,6 +155,21 @@ export function jobOf(options: WorkerOptions, job: Partial<Job>): Job {
 	return options.provider === MUSE || options.provider === T3 ? options.piFallback : { provider: options.provider, model: options.model };
 }
 
+/** Run one local turn of the worker's session with explicit thinking level (used by local sandbox and `runWorker`). */
+export function runLocalWorker(
+	options: WorkerOptions,
+	sessionId: string,
+	message: string,
+	signal: AbortSignal | undefined,
+	thinking: string,
+	job: Job,
+): Promise<WorkerResult> {
+	if (job.provider === T3) return runT3(options, job, sessionId, message, signal);
+	return job.provider === MUSE
+		? runMuse(options, job, sessionId, message, thinking, signal)
+		: runPi(options, job, sessionId, message, thinking, signal);
+}
+
 /** Run one turn of the worker's session and return its final answer. Rejects only when `signal` aborts it. */
 export function runWorker(
 	options: WorkerOptions,
@@ -141,8 +180,7 @@ export function runWorker(
 	job: Job = jobOf(options, {}),
 ): Promise<WorkerResult> {
 	const thinking = depth === "quick" ? options.quickThinkingLevel : options.thinkingLevel;
-	if (job.provider === T3) return runT3(options, job, sessionId, message, signal);
-	return job.provider === MUSE ? runMuse(options, job, sessionId, message, thinking, signal) : runPi(options, job, sessionId, message, thinking, signal);
+	return runLocalWorker(options, sessionId, message, signal, thinking, job);
 }
 
 /** Where a T3 worker's thread id (its session) is kept, beside the pi/Muse session files. */
@@ -192,6 +230,7 @@ export async function runT3(options: WorkerOptions, job: Job, sessionId: string,
 }
 
 function runPi(options: WorkerOptions, job: Job, sessionId: string, message: string, thinking: string, signal?: AbortSignal): Promise<WorkerResult> {
+	const visibleSkills = options.allowPages === false ? options.skills.filter((dir) => basename(dir) !== "web-page") : options.skills;
 	const args = [
 		"-p",
 		"--provider", job.provider,
@@ -202,19 +241,28 @@ function runPi(options: WorkerOptions, job: Job, sessionId: string, message: str
 		"--append-system-prompt", options.promptFile,
 		// pclaw's own tools, not the owner's personal pi setup: no other extensions, skills, or AGENTS.md files.
 		"--no-extensions", "--extension", options.toolsFile,
-		"--no-skills", ...options.skills.flatMap((skill) => ["--skill", skill]),
+		"--no-skills", ...visibleSkills.flatMap((skill) => ["--skill", skill]),
 		"--no-context-files", "--no-prompt-templates", "--no-themes",
 		// Trust project-local files in the workspace without an interactive prompt.
 		"--approve",
 		// pi reads a leading @ as a file to attach.
 		`Message from pclaw:\n\n${message}`,
 	];
-	return spawnWorker(options, options.command, args, signal, (code, stdout, stderr) => {
-		if (code === 0) return { ok: true, output: clip(stdout.trim()) || "(the worker finished without saying anything)" };
-		// pi prints startup warnings to stderr; they're noise in a failure report.
-		const errors = stderr.split("\n").filter((line) => line.trim() !== "" && !line.startsWith("Warning:")).join("\n");
-		return { ok: false, output: clip(`exit ${code}\n${errors || stdout.trim()}`) };
-	});
+	const extraEnv = options.allowPages === false ? { PCLAW_DISABLE_PAGES: "1" } : undefined;
+	return spawnWorker(
+		options,
+		options.command,
+		args,
+		signal,
+		(code, stdout, stderr) => {
+			if (code === 0) return { ok: true, output: clip(stdout.trim()) || "(the worker finished without saying anything)" };
+			// pi prints startup warnings to stderr; they're noise in a failure report.
+			const errors = stderr.split("\n").filter((line) => line.trim() !== "" && !line.startsWith("Warning:")).join("\n");
+			return { ok: false, output: clip(`exit ${code}\n${errors || stdout.trim()}`) };
+		},
+		undefined,
+		extraEnv,
+	);
 }
 
 function runMuse(options: WorkerOptions, job: Job, sessionId: string, message: string, thinking: string, signal?: AbortSignal): Promise<WorkerResult> {
@@ -231,7 +279,8 @@ function runMuse(options: WorkerOptions, job: Job, sessionId: string, message: s
 		const errors = stderr.split("\n").filter((line) => line.trim() !== "" && !line.startsWith("muse: ")).join("\n");
 		return { ok: false, output: clip(`exit ${code}\n${errors || "Muse ended without a result."}`) };
 	};
-	return spawnWorker(options, options.museCommand, args, signal, finish, (chunk) => run.write(chunk));
+	const extraEnv = options.allowPages === false ? { PCLAW_DISABLE_PAGES: "1" } : undefined;
+	return spawnWorker(options, options.museCommand, args, signal, finish, (chunk) => run.write(chunk), extraEnv);
 }
 
 /** Run a worker process. `finish` reads its result; a timeout or a failure to start becomes a failed result. */
@@ -242,11 +291,13 @@ function spawnWorker(
 	signal: AbortSignal | undefined,
 	finish: (code: number | null, stdout: string, stderr: string) => WorkerResult,
 	onStdout?: (chunk: string) => void,
+	extraEnv?: Record<string, string>,
 ): Promise<WorkerResult> {
 	const timeout = AbortSignal.timeout(options.timeoutMs);
 	return new Promise((resolve, reject) => {
 		const child = spawn(command, args, {
 			cwd: options.cwd,
+			...(extraEnv === undefined ? {} : { env: { ...process.env, ...extraEnv } }),
 			stdio: ["ignore", "pipe", "pipe"],
 			signal: signal === undefined ? timeout : AbortSignal.any([timeout, signal]),
 		});
@@ -304,6 +355,12 @@ export type WorkerHooks = {
 	session?: (worker: { name: string; brief: string; sessionId: string; conversationId: ConversationId; ask?: string }, context: Context) => Promise<Conversation | undefined>;
 	/** A run ended and its report is about to go in. */
 	reporting?: (worker: { name: string; conversationId: ConversationId; ok: boolean }, context: Context) => Promise<void>;
+	/** Resolve the sandbox and sessionDir for a conversation (per-user isolation + local/ssh execution). */
+	resolveSandbox?: (
+		read: DocumentReader,
+		conversationId: ConversationId,
+		context: Context,
+	) => Promise<{ sandbox: WorkerSandbox; sessionDir: string }>;
 };
 
 export function workersExtension(options: WorkerOptions, harness: { current?: Harness }, hooks: WorkerHooks = {}) {
@@ -317,14 +374,31 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 				const resumed = (await runtime.memo<boolean>("started", context)) === true;
 				if (!resumed) await runtime.memo("started", true, context);
 				const message = task.input.depth === "quick" ? `${QUICK_NOTE}\n\n${task.input.message}` : task.input.message;
-				const result = await runWorker(
-					options,
-					task.input.sessionId,
-					resumed ? RESUME : message,
-					context.abortSignal,
-					task.input.depth,
-					jobOf(options, task.input),
-				);
+				const job = jobOf(options, task.input);
+				const thinking = (task.input.depth ?? "deep") === "quick" ? options.quickThinkingLevel : options.thinkingLevel;
+				let result: WorkerResult;
+				if (hooks.resolveSandbox !== undefined) {
+					const { sandbox, sessionDir } = await hooks.resolveSandbox(runtime, runtime.conversationId, context);
+					result = await sandbox.runWorker({
+						sessionId: task.input.sessionId,
+						sessionDir,
+						message: resumed ? RESUME : message,
+						thinking,
+						job,
+						...(context.abortSignal === undefined ? {} : { signal: context.abortSignal }),
+						timeoutMs: options.timeoutMs,
+						workerOptions: options,
+					});
+				} else {
+					result = await runWorker(
+						options,
+						task.input.sessionId,
+						resumed ? RESUME : message,
+						context.abortSignal,
+						task.input.depth,
+						job,
+					);
+				}
 				await runtime.commit(() => ({ status: "running", checkpoint: { phase: "report", ...result } }), context);
 			},
 			report: async (task, runtime, context) => {

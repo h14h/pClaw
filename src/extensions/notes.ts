@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
+import type { Context } from "@earendil-works/chord/context";
 import { obj, str } from "@earendil-works/pi-schema";
-import { defineExtension, defineTool, section } from "@earendil-works/pi-durable";
-import { ensureHome, writePrivate } from "../config.ts";
+import { type ConversationId, defineExtension, defineTool, type DocumentReader, section } from "@earendil-works/pi-durable";
+import { writePrivate } from "../config.ts";
 
 /** Notes live in a plain markdown file, one "- " line per note, so the person can read and edit them. */
 export class Notes {
@@ -18,7 +19,6 @@ export class Notes {
 	add(note: string): void {
 		const current = this.read();
 		const line = `- ${note.replace(/\s*\n\s*/g, " ").trim()}\n`;
-		ensureHome();
 		writePrivate(this.file, current === "" || current.endsWith("\n") ? current + line : `${current}\n${line}`);
 	}
 
@@ -60,9 +60,18 @@ export class Notes {
 	}
 }
 
+export type NotesResolver = (
+	read: DocumentReader,
+	conversationId: ConversationId,
+	context: Context,
+) => Promise<Notes | undefined>;
+
 const text = (value: string) => ({ output: [{ type: "text" as const, text: value }] });
 
-export function notesExtension(notes: Notes) {
+export function notesExtension(notesOrResolver: Notes | NotesResolver) {
+	const resolveNotes: NotesResolver =
+		typeof notesOrResolver === "function" ? notesOrResolver : async () => notesOrResolver;
+
 	return defineExtension({
 		name: "pclaw.notes",
 		tools: [
@@ -74,7 +83,9 @@ export function notesExtension(notes: Notes) {
 					"know next week. One fact per call. Never a password, key, or token. For their setup, note what a " +
 					"thing is for and where its details are written down, not ports, paths, or versions.",
 				parameters: obj({ note: str({ description: "One short, specific fact." }) }, { open: true }),
-				execute: async ({ note }) => {
+				execute: async ({ note }, api, context) => {
+					const notes = await resolveNotes(api, api.conversationId, context);
+					if (notes === undefined) return text("Private notes aren't used in shared group chats.");
 					notes.add(note);
 					return text("Saved.");
 				},
@@ -85,7 +96,9 @@ export function notesExtension(notes: Notes) {
 					"Remove notes that are wrong or out of date, or that they asked you to forget. Removes every note " +
 					"line containing the given text.",
 				parameters: obj({ text: str({ description: "Text that appears in the note(s) to remove." }) }, { open: true }),
-				execute: async (args) => {
+				execute: async (args, api, context) => {
+					const notes = await resolveNotes(api, api.conversationId, context);
+					if (notes === undefined) return text("Private notes aren't used in shared group chats.");
 					const removed = notes.remove(args.text);
 					return text(removed.length === 0 ? "No note matched." : `Removed:\n${removed.join("\n")}`);
 				},
@@ -94,8 +107,16 @@ export function notesExtension(notes: Notes) {
 		// Read on every request, so edits to the file show up in the next reply. See `notesView` for why changes go in
 		// their own section.
 		sections: [
-			section("notes", (input) => notesView(notes.read(), input.shown.notes).notes),
-			section("notes-changes", (input) => notesView(notes.read(), input.shown.notes).changes),
+			section("notes", async (input, context) => {
+				const notes = await resolveNotes(input.read, input.conversationId, context);
+				if (notes === undefined) return undefined;
+				return notesView(notes.read(), input.shown.notes).notes;
+			}),
+			section("notes-changes", async (input, context) => {
+				const notes = await resolveNotes(input.read, input.conversationId, context);
+				if (notes === undefined) return undefined;
+				return notesView(notes.read(), input.shown.notes).changes;
+			}),
 		],
 	});
 }

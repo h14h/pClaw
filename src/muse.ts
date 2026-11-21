@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { skillDescription } from "./dashboard/files.ts";
 import type { WorkerItem } from "./dashboard/types.ts";
+import { filterWorkerPrompt } from "./prompts.ts";
 
 /**
  * Muse Code as a worker harness: `muse exec` runs one turn of a Muse session headless and streams its events as JSONL.
@@ -40,10 +41,32 @@ export function museModels(fallback: string): { id: string; name: string }[] {
 /**
  * Put in front of a Muse session's first message: pclaw's worker prompt, then where its tools and skills are. Muse takes
  * no appended system prompt or extension, so they come as text and a command.
+ *
+ * When `remote: true` (an isolated SSH VM sandbox), uses a VM-safe preamble: relies on Muse's native `web_search` and
+ * `web_fetch`, omits host `worker-cli.ts` paths, omits `systemctl --user restart pclaw`, omits `publish_page`, and omits
+ * host-local skill paths.
  */
-export function musePreamble(options: { promptFile: string; cliFile: string; skills: string[] }): string {
+export function musePreamble(options: {
+	promptFile: string;
+	cliFile: string;
+	skills: string[];
+	allowPages?: boolean;
+	remote?: boolean;
+}): string {
+	const workerPrompt = filterWorkerPrompt(readFileSync(options.promptFile, "utf8"), { remote: options.remote });
+	if (options.remote === true) {
+		return [
+			workerPrompt,
+			"## Tools here",
+			"Use your built-in `web_search` and `web_fetch` tools when instructions say `search` or `read_page`.",
+			"Don't schedule anything (no cron jobs or reminders): pclaw handles follow-ups.",
+			"Put files you create in this workspace directory and report their exact paths so pclaw can send them to the user.",
+		].join("\n\n");
+	}
+	const allowPages = options.allowPages !== false;
 	const cli = `${process.execPath} ${options.cliFile}`;
-	const skills = options.skills
+	const visibleSkills = allowPages ? options.skills : options.skills.filter((dir) => basename(dir) !== "web-page");
+	const skills = visibleSkills
 		.map((dir) => {
 			const file = join(dir, "SKILL.md");
 			const description = existsSync(file) ? skillDescription(file) : undefined;
@@ -51,12 +74,12 @@ export function musePreamble(options: { promptFile: string; cliFile: string; ski
 		})
 		.join("\n");
 	return [
-		readFileSync(options.promptFile, "utf8").trim(),
+		workerPrompt,
 		"## Tools here",
 		"Where these instructions or a skill say `search` or `read_page`, use your `web_search` and `web_fetch` tools. pclaw's own are commands, if those fail:",
 		`- search: \`${cli} search "<query>" [--max 5]\``,
 		`- read_page: \`${cli} read <url> [--find "a few words"] [--offset 8000]\``,
-		`\`publish_page\` is a command: \`${cli} publish <slug>\`, run from this directory.`,
+		...(allowPages ? [`\`publish_page\` is a command: \`${cli} publish <slug>\`, run from this directory.`] : []),
 		"Don't schedule anything (no cron jobs or reminders): pclaw handles follow-ups.",
 		...(skills === "" ? [] : ["Skills: when a job matches one, read its SKILL.md first and follow it.", skills]),
 	].join("\n\n");

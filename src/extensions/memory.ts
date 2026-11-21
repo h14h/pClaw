@@ -16,8 +16,8 @@ import {
 } from "@earendil-works/pi-durable";
 import type { Config } from "../config.ts";
 import { STRIP_GUIDANCE } from "../decisions.ts";
-import { readPrompt } from "../prompts.ts";
-import type { Notes } from "./notes.ts";
+import { type PromptResolver, readPrompt } from "../prompts.ts";
+import type { Notes, NotesResolver } from "./notes.ts";
 
 /**
  * The memory pass. The front model is tuned to answer fast and rarely stops to call `remember`, so notes are also kept
@@ -90,22 +90,29 @@ export async function reviewNotes(
 	current: string,
 	lines: string[],
 	signal?: AbortSignal,
+	systemPrompt?: string,
 ): Promise<{ add: string[]; remove: string[] }> {
 	const model = models.getModel(config.provider, config.model);
 	if (model === undefined) throw new Error(`memory pass: unknown model ${config.provider}/${config.model}`);
 	const input = `Current notes:\n\n${current.trim() || "(none yet)"}\n\nConversation since the last pass:\n\n${lines.join("\n\n")}`;
 	const reply = await models.completeSimple(
 		model,
-		{ systemPrompt: readPrompt("memory"), messages: [{ role: "user", content: input, timestamp: Date.now() }] },
+		{ systemPrompt: systemPrompt ?? readPrompt("memory"), messages: [{ role: "user", content: input, timestamp: Date.now() }] },
 		{ reasoning: "low", ...(signal === undefined ? {} : { signal }) },
 	);
 	if (reply.stopReason === "error") throw new Error(`memory pass: ${reply.errorMessage ?? "model error"}`);
 	return parseChanges(textOf(reply));
 }
 
-export function memoryExtension(options: { notes: Notes; models: Models; config: Config; quietMs: number }) {
-	const { notes, models, config } = options;
-	const review = (lines: string[], signal: AbortSignal | undefined) => reviewNotes(models, config, notes.read(), lines, signal);
+export function memoryExtension(options: {
+	notes: Notes | NotesResolver;
+	models: Models;
+	config: Config;
+	quietMs: number;
+	prompts?: PromptResolver;
+}) {
+	const { models, config } = options;
+	const resolveNotes: NotesResolver = typeof options.notes === "function" ? options.notes : async () => options.notes as Notes;
 
 	const Keeper = defineTask<null, { phase: "watch"; tick: number }, null>({
 		name: "pclaw.memory-keeper",
@@ -133,20 +140,37 @@ export function memoryExtension(options: { notes: Notes; models: Models; config:
 					return checkAgainAt((lastAt ?? now) + options.quietMs);
 				}
 
+				// Skip private-note updates on multi-user shared group chats.
+				const userNotes = await resolveNotes(runtime, id, context);
+				if (userNotes === undefined) {
+					await runtime.commit(async (tx) => {
+						(await tx.doc(Memory, id)).reviewed = last;
+						return { status: "running", checkpoint: next };
+					}, context);
+					return;
+				}
+
 				let changes = { add: [] as string[], remove: [] as string[] };
 				if (lines.length > 0) {
 					try {
-						changes = await review(lines, context.abortSignal);
+						changes = await reviewNotes(
+							models,
+							config,
+							userNotes.read(),
+							lines,
+							context.abortSignal,
+							options.prompts?.read("memory"),
+						);
 					} catch (error) {
 						if (context.abortSignal?.aborted) throw error;
 						runtime.report(error);
 						return checkAgainAt(now + RETRY_MS);
 					}
 				}
-				const existing = new Set(notes.read().split("\n").map((line) => line.replace(/^-\s*/, "").trim()));
+				const existing = new Set(userNotes.read().split("\n").map((line) => line.replace(/^-\s*/, "").trim()));
 				const added = changes.add.filter((note) => !existing.has(note));
-				const removed = changes.remove.filter((note) => notes.removeExact(note));
-				for (const note of added) notes.add(note);
+				const removed = changes.remove.filter((note) => userNotes.removeExact(note));
+				for (const note of added) userNotes.add(note);
 
 				await runtime.commit(async (tx) => {
 					(await tx.doc(Memory, id)).reviewed = last;

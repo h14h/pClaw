@@ -11,6 +11,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { Routes } from "../routes.ts";
 import { stamp } from "../time.ts";
+import type { UserRegistry } from "../users.ts";
 
 const SCAN_LIMIT = 5_000;
 const RESULTS = 6;
@@ -64,24 +65,53 @@ export function search(messages: { who: "them" | "pclaw"; text: string; at: numb
 }
 
 /**
- * Search everything said in every conversation, including what summaries have replaced. Messages still in the current
+ * Search everything said in past conversations, including what summaries have replaced. Messages still in the current
  * context are left out, since the model can already see them.
+ *
+ * In multi-user mode (`users.enabled`), conversations are strictly filtered to those owned by the caller's canonical
+ * `userId` (allowing cross-client continuity between Telegram and Discord while never leaking across users). Shared
+ * group chats only search their own history.
  */
-export function recallExtension(harness: { current?: Harness }, timeZone: string) {
+export function recallExtension(
+	harness: { current?: Harness },
+	timeZone: string,
+	options?: { users?: UserRegistry },
+) {
+	const users = options?.users;
+
 	async function archive(currentId: string, context: Context) {
 		const h = harness.current;
 		if (h === undefined) throw new Error("pclaw is still starting up.");
 		const visible = new Set(
 			((await (await h.conversation(currentId as never, context))?.context(context))?.entries ?? []).map((entry) => String(entry.id)),
 		);
+		const routes = (await h.snapshot(Routes, context))?.conversations ?? {};
+		const currentAddress = Object.keys(routes).find((addr) => String(routes[addr]) === currentId);
+
+		let targetIds = Object.values(routes);
+		let resolvedTimeZone = timeZone;
+		if (users?.enabled) {
+			const caller = users.resolveAddress(currentAddress);
+			if (caller !== undefined) {
+				targetIds = Object.entries(routes)
+					.filter(([addr]) => users.resolveAddress(addr)?.id === caller.id)
+					.map(([, id]) => id);
+				if (caller.timeZone !== undefined) resolvedTimeZone = caller.timeZone;
+			} else {
+				// Group chats or unmapped conversations: never leak any user's private DMs.
+				targetIds = Object.values(routes).filter((id) => String(id) === currentId);
+			}
+		}
+
 		const seen = new Set<string>();
 		const messages: { who: "them" | "pclaw"; text: string; at: number }[] = [];
-		for (const id of Object.values((await h.snapshot(Routes, context))?.conversations ?? {})) {
+		for (const id of targetIds) {
 			const conversation = await h.conversation(id, context);
+			if (conversation === undefined) continue;
 			let cursor: Cursor | undefined;
 			let scanned = 0;
 			do {
-				const page = await conversation!.entries({}, 200, cursor, context);
+				const page = await conversation.entries({}, 200, cursor, context);
 				for (const entry of page.items) {
 					const key = String(entry.id);
 					if (seen.has(key) || visible.has(key)) continue;
@@ -93,7 +123,7 @@ export function recallExtension(harness: { current?: Harness }, timeZone: string
 				cursor = page.next;
 			} while (cursor !== undefined && scanned < SCAN_LIMIT);
 		}
-		return messages;
+		return { messages, timeZone: resolvedTimeZone };
 	}
 
 	return defineExtension({
@@ -109,11 +139,12 @@ export function recallExtension(harness: { current?: Harness }, timeZone: string
 				parameters: obj({ query: str({ description: "A few distinctive words, e.g. \"walnut NAS case\"." }) }, { open: true }),
 				replay: "safe",
 				execute: async ({ query }, api, context) => {
-					const hits = search(await archive(String(api.conversationId), context), query);
+					const { messages, timeZone: tz } = await archive(String(api.conversationId), context);
+					const hits = search(messages, query);
 					const text =
 						hits.length === 0
 							? "Nothing found. Try different words, or ask them."
-							: hits.map((hit) => `[${stamp(hit.at, timeZone)}] ${hit.who}: ${hit.text}`).join("\n\n");
+							: hits.map((hit) => `[${stamp(hit.at, tz)}] ${hit.who}: ${hit.text}`).join("\n\n");
 					return { output: [{ type: "text" as const, text }] };
 				},
 			}),

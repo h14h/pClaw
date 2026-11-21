@@ -13,10 +13,15 @@ export const Routes = defineDoc<{ conversations: Record<string, ConversationId> 
 	checkpointWhen: (_value, _ops, { deltasSinceBase }) => deltasSinceBase >= 64,
 });
 
+/** The address a conversation is bound to, e.g. "telegram:dm:123" or "discord:channel:456". */
+export async function addressOf(read: DocumentReader, conversationId: ConversationId, context: Context): Promise<string | undefined> {
+	const routes = (await read.snapshot(Routes, context))?.conversations ?? {};
+	return Object.keys(routes).find((key) => routes[key] === conversationId);
+}
+
 /** The app a conversation lives in: "discord", "telegram", "terminal". The part of its address before the first colon. */
 export async function channelOf(read: DocumentReader, conversationId: ConversationId, context: Context): Promise<string | undefined> {
-	const routes = (await read.snapshot(Routes, context))?.conversations ?? {};
-	const address = Object.keys(routes).find((key) => routes[key] === conversationId);
+	const address = await addressOf(read, conversationId, context);
 	return address?.split(":")[0];
 }
 

@@ -20,7 +20,7 @@ export class SettingsError extends Error {}
  */
 export function settingsApi(options: { agent: Agent; config: Config; models: Models; workers: WorkerOptions }) {
 	const { agent, config, models, workers } = options;
-	const files = editableFiles(workers.skills);
+	const files = editableFiles(workers.skills, agent.prompts);
 
 	function modelOptions(): ModelOption[] {
 		// Muse is offered for workers even while they run in pi, so they can be switched to it.

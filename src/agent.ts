@@ -1,3 +1,5 @@
+import type { spawn } from "node:child_process";
+import { join } from "node:path";
 import type { Context } from "@earendil-works/chord/context";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { Models } from "@earendil-works/pi-ai/models";
@@ -10,29 +12,42 @@ import {
 	type Storage,
 } from "@earendil-works/pi-durable";
 import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
-import { type Config, paths } from "./config.ts";
-import { followUpsExtension } from "./extensions/follow-ups.ts";
+import { type Config, isPagesEnabled, isT3Enabled, paths } from "./config.ts";
+import { filesExtension, FileSenders } from "./extensions/files.ts";
+import { followUpsExtension, type TimeZoneResolver } from "./extensions/follow-ups.ts";
 import { memoryExtension } from "./extensions/memory.ts";
 import { quickSearchExtension } from "./extensions/quick-search.ts";
 import { reactionsExtension } from "./extensions/reactions.ts";
 import { recallExtension } from "./extensions/recall.ts";
-import { type Notes, notesExtension } from "./extensions/notes.ts";
+import { type Notes, notesExtension, type NotesResolver } from "./extensions/notes.ts";
 import { formattingExtension, soulExtension } from "./extensions/soul.ts";
 import { createJobs, JobStore, type Jobs, t3Backend } from "./extensions/jobs.ts";
 import { t3Extension } from "./extensions/t3.ts";
 import { type Decisions, decisionClient, followUpGuidance, followUpQuestions } from "./decisions.ts";
 import { applyProfile, loadProfile } from "./profiles.ts";
-import { useProfile } from "./prompts.ts";
-import { ConversationInfo, Routes } from "./routes.ts";
+import { createPromptResolver, type PromptResolver } from "./prompts.ts";
+import { addressOf, ConversationInfo, Routes } from "./routes.ts";
+import { SandboxManager } from "./sandbox.ts";
 import { stamp } from "./time.ts";
 import type { WorkerItem } from "./dashboard/types.ts";
 import { workerItems } from "./dashboard/views.ts";
 import { prepareWorkspace, type WorkerOptions, workerOptions, workersExtension } from "./extensions/workers.ts";
+import { UserRegistry } from "./users.ts";
 
 export type Agent = {
 	harness: Harness;
 	/** Real work in T3 threads, and the hints that guide it. */
 	jobs: Jobs;
+	/** Whether T3 / Jobs are enabled for this agent. */
+	t3Enabled: boolean;
+	/** Canonical multi-user registry (`users.enabled === false` in single-owner mode). */
+	users: UserRegistry;
+	/** Per-user worker sandbox & session-dir resolver. */
+	sandboxes: SandboxManager;
+	/** Per-channel outbound file sender hooks (`send_file`). */
+	fileSenders: FileSenders;
+	/** Per-agent prompt resolver (supports `voiceFile` / `personaDir` without global mutation). */
+	prompts: PromptResolver;
 	/** The conversation for `address`, created on first use. */
 	conversationFor(address: string, context: Context): Promise<Conversation>;
 	/** Addresses that have a conversation, for reattaching delivery after a restart. */
@@ -48,6 +63,25 @@ export type Agent = {
 	setModel(choice: { provider: string; model: string; thinkingLevel: ModelThinkingLevel }, context: Context): Promise<void>;
 };
 
+function disabledJobs(decisions: Decisions, storeFile: string): Jobs {
+	const store = new JobStore(storeFile);
+	const emptyExtension = { name: "pclaw.jobs.disabled" } as Jobs["extension"];
+	const noopBackend = {} as Jobs["backend"];
+	return {
+		extension: emptyExtension,
+		store,
+		surface: {},
+		decisions,
+		guideMessage: async () => undefined,
+		delivery: () => undefined,
+		stop: async () => undefined,
+		startKeeper: () => ({ stop() {}, tick: async () => undefined }),
+		openSession: async () => undefined,
+		workerReporting: async () => undefined,
+		backend: noopBackend,
+	};
+}
+
 export async function openAgent(
 	storage: Storage,
 	options: {
@@ -60,6 +94,12 @@ export async function openAgent(
 		decisions?: Decisions;
 		jobStore?: JobStore;
 		workerItems?: (sessionId: string) => WorkerItem[];
+		/** Override home directory for per-user storage in tests. */
+		homeDir?: string;
+		users?: UserRegistry;
+		sandboxes?: SandboxManager;
+		sshCommand?: string;
+		spawnFn?: typeof spawn;
 		/** How long a conversation stays quiet before the memory pass reads it. */
 		memoryQuietMs?: number;
 		now?: () => number;
@@ -68,18 +108,77 @@ export async function openAgent(
 ): Promise<Agent> {
 	const { config, models, notes } = options;
 	const profile = loadProfile(config.profile);
-	useProfile(profile.dir);
+	const promptResolver = createPromptResolver({
+		profileDir: profile.dir,
+		...(config.personaDir === undefined ? {} : { personaDir: config.personaDir }),
+		...(config.voiceFile === undefined ? {} : { voiceFile: config.voiceFile }),
+	});
+	const t3Enabled = isT3Enabled(config);
+	const users = options.users ?? new UserRegistry(config.users, options.homeDir);
+	const allowPages =
+		isPagesEnabled(config, "local") &&
+		(!users.enabled || users.all().some((user) => (user.sandbox?.type ?? "local") !== "ssh"));
+
+	const workers = options.workers ?? workerOptions(config, paths, promptResolver);
+	prepareWorkspace(workers);
+	const sandboxes =
+		options.sandboxes ??
+		new SandboxManager({
+			config,
+			users,
+			defaultWorkDir: workers.cwd,
+			defaultInboxDir: options.homeDir === undefined ? paths.inbox : join(options.homeDir, "inbox"),
+			defaultSessionDir: workers.sessionDir,
+			...(options.sshCommand === undefined ? {} : { sshCommand: options.sshCommand }),
+			...(options.spawnFn === undefined ? {} : { spawnFn: options.spawnFn }),
+		});
+	const fileSenders = new FileSenders();
+
+	const notesResolver: NotesResolver = users.enabled
+		? async (read, conversationId, ctx) => {
+				const addr = await addressOf(read, conversationId, ctx);
+				const user = users.resolveAddress(addr);
+				return user === undefined ? undefined : users.notesFor(user.id);
+			}
+		: async () => notes;
+
+	const timeZoneResolver: TimeZoneResolver = users.enabled
+		? async (read, conversationId, ctx) => {
+				const addr = await addressOf(read, conversationId, ctx);
+				return users.resolveAddress(addr)?.timeZone ?? config.timeZone;
+			}
+		: async () => config.timeZone;
+
 	const registry = createRegistry();
-	const install = (extension: Parameters<typeof applyProfile>[0]) => registry.install(applyProfile(extension, profile));
-	registry.install(soulExtension(config.timeZone));
-	install(notesExtension(notes));
+	let hasDeferredTools = false;
+	const install = (extension: Parameters<typeof applyProfile>[0]) => {
+		const applied = applyProfile(extension, profile);
+		if (applied.tools?.some((tool) => tool.deferred === true)) hasDeferredTools = true;
+		registry.install(applied);
+	};
+
+	const current: { current?: Harness } = {};
+	const sessions: { current?: Jobs } = {};
+
+	const promptFlags = { allowT3: t3Enabled, allowPages };
+	registry.install(
+		soulExtension({
+			timeZone: config.timeZone,
+			prompts: promptResolver,
+			flags: promptFlags,
+			users,
+			harness: current,
+			...(options.now === undefined ? {} : { now: options.now }),
+		}),
+	);
+	install(notesExtension(notesResolver));
 	const decisions = options.decisions ?? decisionClient({ url: config.decisionUrl, logFile: paths.decisions, holdout: config.decisionHoldout });
 	install(
-		followUpsExtension(config.timeZone, options.now, async (id, note) => {
+		followUpsExtension(timeZoneResolver, options.now, async (id, note, tz) => {
 			const decided = await decisions.ask({
 				id,
 				site: "follow-up",
-				state: { follow_up: note.slice(0, 2_000), local_time: stamp(Date.now(), config.timeZone) },
+				state: { follow_up: note.slice(0, 2_000), local_time: stamp(Date.now(), tz ?? config.timeZone) },
 				questions: followUpQuestions,
 			});
 			if (decided === undefined) return undefined;
@@ -88,46 +187,85 @@ export async function openAgent(
 			return decided.arm === "guided" ? guidance : undefined;
 		}),
 	);
-	const workers = options.workers ?? workerOptions(config, paths);
-	prepareWorkspace(workers);
-	const current: { current?: Harness } = {};
-	const sessions: { current?: Jobs } = {};
 	install(
 		workersExtension(workers, current, {
 			log: decisions.record,
-			session: async (worker, context) => sessions.current?.openSession(worker, context),
-			reporting: async (worker, context) => sessions.current?.workerReporting(worker, context),
+			...(t3Enabled
+				? {
+						session: async (worker, ctx) => sessions.current?.openSession(worker, ctx),
+						reporting: async (worker, ctx) => sessions.current?.workerReporting(worker, ctx),
+					}
+				: {}),
+			resolveSandbox: async (read, conversationId, ctx) => {
+				const addr = await addressOf(read, conversationId, ctx);
+				const resolved = sandboxes.forAddress(addr);
+				return { sandbox: resolved.sandbox, sessionDir: resolved.sessionDir };
+			},
 		}),
 	);
-	const memory = memoryExtension({ notes, models, config, quietMs: options.memoryQuietMs ?? config.memoryQuietMinutes * 60_000 });
-	registry.install(memory.extension);
-	install(recallExtension(current, config.timeZone));
-	install(reactionsExtension(current));
-	install(quickSearchExtension());
-	const jobs = createJobs({
-		store: options.jobStore ?? new JobStore(paths.jobs),
-		backend: options.jobBackend ?? t3Backend(config.t3Url, paths.t3Auth),
-		decisions,
+	install(
+		filesExtension({
+			fileSenders,
+			resolveSandbox: async (read, conversationId, ctx) => {
+				const addr = await addressOf(read, conversationId, ctx);
+				const resolved = sandboxes.forAddress(addr);
+				return { address: addr, sandbox: resolved.sandbox };
+			},
+		}),
+	);
+	const memory = memoryExtension({
+		notes: notesResolver,
 		models,
 		config,
-		harness: current,
-		workerItems: options.workerItems ?? ((sessionId) => workerItems(workers.sessionDir, sessionId)),
+		quietMs: options.memoryQuietMs ?? config.memoryQuietMinutes * 60_000,
+		prompts: promptResolver,
 	});
-	sessions.current = jobs;
-	install(jobs.extension);
-	install(
-		t3Extension({
-			t3Url: config.t3Url,
-			storeFile: paths.t3Auth,
-			redirectUri: config.t3RedirectUri ?? `http://127.0.0.1:${config.dashboardPort}/t3/callback`,
-			allowSend: config.t3AllowSend,
-			pollMs: Math.max(15, config.t3PollSeconds) * 1000,
-			timeZone: config.timeZone,
-		}),
-	);
-	if (profile.deferredTools.length > 0) registry.install(createToolSearchExtension());
+	registry.install(memory.extension);
+	install(recallExtension(current, config.timeZone, { users }));
+	install(reactionsExtension(current));
+	install(quickSearchExtension());
+
+	const findWorkerItems =
+		options.workerItems ??
+		((sessionId: string) => {
+			for (const dir of sandboxes.allSessionDirs()) {
+				const items = workerItems(dir, sessionId);
+				if (items.length > 0) return items;
+			}
+			return [];
+		});
+
+	let jobs: Jobs;
+	if (t3Enabled) {
+		jobs = createJobs({
+			store: options.jobStore ?? new JobStore(paths.jobs),
+			backend: options.jobBackend ?? t3Backend(config.t3Url, paths.t3Auth),
+			decisions,
+			models,
+			config,
+			harness: current,
+			prompts: promptResolver,
+			workerItems: findWorkerItems,
+		});
+		sessions.current = jobs;
+		install(jobs.extension);
+		install(
+			t3Extension({
+				t3Url: config.t3Url,
+				storeFile: paths.t3Auth,
+				redirectUri: config.t3RedirectUri ?? `http://127.0.0.1:${config.dashboardPort}/t3/callback`,
+				allowSend: config.t3AllowSend,
+				pollMs: Math.max(15, config.t3PollSeconds) * 1000,
+				timeZone: config.timeZone,
+			}),
+		);
+	} else {
+		jobs = disabledJobs(decisions, options.homeDir === undefined ? paths.jobs : join(options.homeDir, "jobs.json"));
+	}
+
+	if (hasDeferredTools) registry.install(createToolSearchExtension());
 	// Last, so the app's rules end the system prompt.
-	registry.install(formattingExtension());
+	registry.install(formattingExtension({ prompts: promptResolver, flags: promptFlags }));
 
 	let agent = { model: { provider: config.provider, modelId: config.model }, thinkingLevel: config.thinkingLevel };
 	const harness = await Harness.open(
@@ -186,8 +324,8 @@ export async function openAgent(
 	}
 
 	async function describe(id: ConversationId, info: { label: string; parent?: ConversationId }, context: Context) {
-		const current = (await harness.snapshot(ConversationInfo, context))?.conversations[String(id)];
-		if (current?.label === info.label && current.parent === info.parent) return;
+		const currentInfo = (await harness.snapshot(ConversationInfo, context))?.conversations[String(id)];
+		if (currentInfo?.label === info.label && currentInfo.parent === info.parent) return;
 		const conversation = await harness.conversation(id, context);
 		await conversation?.commit(async (tx) => {
 			const doc = await tx.doc(ConversationInfo);
@@ -210,5 +348,18 @@ export async function openAgent(
 	}
 
 	harness.resume();
-	return { harness, jobs, conversationFor, addresses, forkFor, describe, setModel };
+	return {
+		harness,
+		jobs,
+		t3Enabled,
+		users,
+		sandboxes,
+		fileSenders,
+		prompts: promptResolver,
+		conversationFor,
+		addresses,
+		forkFor,
+		describe,
+		setModel,
+	};
 }

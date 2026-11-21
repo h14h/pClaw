@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, renameSync, statSy
 import { homedir } from "node:os";
 import { basename, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { formattingDir, formattingFile, type PromptName, prompts } from "../prompts.ts";
+import { formattingDir, formattingFile, type PromptName, type PromptResolver, prompts } from "../prompts.ts";
 import type { FileContent, FileSummary } from "./types.ts";
 
 const REPO = fileURLToPath(new URL("../../", import.meta.url));
@@ -16,10 +16,12 @@ type Entry = Omit<FileSummary, "size" | "modifiedAt"> & { file: string };
  * files, and every markdown file in the workers' skills (pclaw's own and config.workerSkills). The list is read fresh
  * each time, so a new file shows up without a restart. Only files on the list can be read or written.
  */
-export function editableFiles(skills: string[]) {
+export function editableFiles(skills: string[], promptResolver?: PromptResolver) {
 	function entries(): Entry[] {
 		const list: Entry[] = [];
-		for (const [id, prompt] of Object.entries(prompts) as [PromptName, (typeof prompts)[PromptName]][]) {
+		const promptMap = promptResolver?.entries() ?? prompts;
+		const resolveFmt = (name: string) => promptResolver?.formattingFile(name) ?? formattingFile(name);
+		for (const [id, prompt] of Object.entries(promptMap) as [PromptName, (typeof prompts)[PromptName]][]) {
 			list.push({ id: `prompts/${id}.md`, group: "prompts", name: prompt.name, path: display(prompt.file), description: prompt.description, file: prompt.file });
 		}
 		for (const name of markdownIn(formattingDir)) {
@@ -28,9 +30,9 @@ export function editableFiles(skills: string[]) {
 				id: `formatting/${name}`,
 				group: "formatting",
 				name: app[0]!.toUpperCase() + app.slice(1),
-				path: display(formattingFile(name)),
+				path: display(resolveFmt(name)),
 				description: `How to format messages in ${app[0]!.toUpperCase() + app.slice(1)}.`,
-				file: formattingFile(name),
+				file: resolveFmt(name),
 			});
 		}
 		const seen = new Set<string>();

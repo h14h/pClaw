@@ -246,9 +246,12 @@ export async function startDashboard(
 	}
 
 	function sessionFile(sessionId: string): string | undefined {
-		if (!existsSync(workers.sessionDir)) return undefined;
-		const name = readdirSync(workers.sessionDir).find((file) => file.endsWith(`_${sessionId}.jsonl`));
-		return name === undefined ? undefined : join(workers.sessionDir, name);
+		for (const dir of agent.sandboxes.allSessionDirs()) {
+			if (!existsSync(dir)) continue;
+			const name = readdirSync(dir).find((file) => file.endsWith(`_${sessionId}.jsonl`));
+			if (name !== undefined) return join(dir, name);
+		}
+		return undefined;
 	}
 
 	async function workerDetail(idText: string, name: string): Promise<WorkerDetail | undefined> {
