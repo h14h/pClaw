@@ -8,13 +8,12 @@
 #   ./scripts/provision-exedev-user.sh max grug-max
 #
 # Environment overrides:
-#   EXEDEV_IMAGE   Base VM image (default: boldsoftware/exeuntu)
 #   MUSE_BIN       Local path to the statically linked x86-64 muse binary
 #                  (default: resolved from `command -v muse`)
 #   SSH_WAIT_SECS  Seconds to wait for the new VM to accept SSH (default: 90)
 #
 # Safe to re-run: skips VM creation if <vmName>.exe.xyz already answers SSH,
-# and installs muse + Python PDF packages idempotently.
+# and installs muse + PDF tools (poppler-utils, pypdf, pdfplumber) idempotently.
 
 set -euo pipefail
 
@@ -25,7 +24,6 @@ fi
 
 USER_ID="$1"
 VM_NAME="$2"
-EXEDEV_IMAGE="${EXEDEV_IMAGE:-boldsoftware/exeuntu}"
 SSH_WAIT_SECS="${SSH_WAIT_SECS:-90}"
 VM_HOST="${VM_NAME}.exe.xyz"
 SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15)
@@ -43,11 +41,12 @@ fi
 echo "==> Provisioning exe.dev VM '${VM_HOST}' for user '${USER_ID}'"
 
 # 1. Create the VM only if it is not already reachable.
+#    Note: omit --image; exe.dev's default image is boldsoftware/exeuntu.
 if ssh "${SSH_OPTS[@]}" "$VM_HOST" "true" 2>/dev/null; then
   echo "    VM '${VM_HOST}' already exists and accepts SSH; skipping creation."
 else
-  echo "    Creating VM '${VM_NAME}' from image '${EXEDEV_IMAGE}'..."
-  ssh "${SSH_OPTS[@]}" exe.dev new --image "$EXEDEV_IMAGE" --name "$VM_NAME"
+  echo "    Creating VM '${VM_NAME}' (default exeuntu image)..."
+  ssh "${SSH_OPTS[@]}" exe.dev new --name "$VM_NAME"
 
   echo "    Waiting up to ${SSH_WAIT_SECS}s for SSH on '${VM_HOST}'..."
   deadline=$((SECONDS + SSH_WAIT_SECS))
@@ -92,20 +91,15 @@ else
   echo "Warning: local 'muse' binary not found in PATH (set MUSE_BIN=/path/to/muse to copy it)." >&2
 fi
 
-# 4. Install Python 3 + PDF inspection essentials (pypdf, pdfplumber) idempotently.
-echo "==> Installing Python 3 and PDF tools (pypdf, pdfplumber) on '${VM_HOST}'"
+# 4. Install PDF inspection essentials (poppler-utils, pypdf, pdfplumber) idempotently.
+echo "==> Installing poppler-utils and Python PDF tools (pypdf, pdfplumber) on '${VM_HOST}'"
 ssh "${SSH_OPTS[@]}" "$VM_HOST" '
   set -euo pipefail
-  if ! command -v python3 >/dev/null 2>&1 || ! python3 -m venv --help >/dev/null 2>&1; then
-    sudo apt-get update -qq
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 python3-venv python3-pip
-  fi
-  if [ ! -x "$HOME/.local/venv/bin/python" ]; then
-    python3 -m venv "$HOME/.local/venv"
-  fi
-  "$HOME/.local/venv/bin/pip" install --quiet --upgrade pip pypdf pdfplumber
-  ln -sf "$HOME/.local/venv/bin/python" "$HOME/.local/bin/python-pdf"
-  "$HOME/.local/venv/bin/python" -c "import pypdf, pdfplumber; print(\"PDF libs OK:\", pypdf.__version__, pdfplumber.__version__)"
+  sudo apt-get update -qq
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq poppler-utils python3
+  sudo uv pip install --system --break-system-packages pypdf pdfplumber
+  python3 -c "import pypdf, pdfplumber; print(\"PDF libs OK:\", pypdf.__version__, pdfplumber.__version__)"
+  pdftotext -v 2>&1 | head -n 1 || true
 '
 
 cat <<EOF
@@ -115,11 +109,11 @@ cat <<EOF
 Next steps (manual — never store credentials in git):
 
 1. Seed Muse Code authentication on the VM:
-     ssh ${VM_HOST} '~/.local/bin/muse login'
+     ssh ${VM_HOST} '/home/exedev/.local/bin/muse login'
    (Or copy the Muse auth token/credentials file securely into the VM's XDG config/data dir.)
 
 2. Verify headless Muse execution:
-     ssh ${VM_HOST} '~/.local/bin/muse exec --json --workspace ~/work --approval-mode never --disable-sandbox --disable-request-user-input --no-foreign-personal-context "Reply with OK"'
+     ssh ${VM_HOST} '/home/exedev/.local/bin/muse exec --json --workspace ~/work --approval-mode never --disable-sandbox --disable-request-user-input --no-foreign-personal-context "Reply with OK"'
 
 3. Add this user entry under "users" in your bot's ~/.pclaw/config.json:
      "${USER_ID}": {
@@ -132,7 +126,7 @@ Next steps (manual — never store credentials in git):
          "host": "${VM_HOST}",
          "workDir": "~/work",
          "inboxDir": "~/inbox",
-         "museBin": "~/.local/bin/muse"
+         "museBin": "/home/exedev/.local/bin/muse"
        }
      }
 EOF

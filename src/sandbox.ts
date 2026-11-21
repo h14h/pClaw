@@ -11,7 +11,7 @@ import type { ResolvedUser, UserRegistry } from "./users.ts";
 const REPORT_LIMIT = 12_000;
 const DEFAULT_SSH_WORK_DIR = "~/work";
 const DEFAULT_SSH_INBOX_DIR = "~/inbox";
-const DEFAULT_SSH_MUSE_BIN = "muse";
+const DEFAULT_SSH_MUSE_BIN = "~/.local/bin/muse";
 const SSH_FILE_TIMEOUT_MS = 120_000;
 
 export const SSH_BASE_ARGS = [
@@ -195,6 +195,7 @@ export function buildRemoteMuseCommand(options: {
 	const effort = options.effort === "off" ? "none" : options.effort;
 	return [
 		"set -e",
+		'export PATH="$HOME/.local/bin:$PATH"',
 		`mkdir -p ${workExpr}`,
 		`cd ${workExpr}`,
 		'prompt_file=$(mktemp)',

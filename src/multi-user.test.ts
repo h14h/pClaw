@@ -548,7 +548,7 @@ test("strict cross-user isolation for notes, timezone, cross-client awareness, r
 test("memory-keeper updates only the user's private notes and skips shared group chats", async () => {
 	const homeDir = join(dir, "keeper-home");
 	const { faux, models } = setupFaux();
-	let nowMs = Date.parse("2026-11-21T20:00:00Z");
+	let nowMs = Date.now();
 
 	const multiConfig = baseConfig({
 		allowT3: false,
@@ -594,8 +594,13 @@ test("memory-keeper updates only the user's private notes and skips shared group
 		await (await groupConv.submit({ type: "input", content: "random group chatter about lunch" }, context)).wait(context);
 
 		// Wait past quietMs for keepers to run
-		nowMs += 500;
-		await new Promise((r) => setTimeout(r, 300));
+		nowMs = Date.now() + 500;
+		const deadline = Date.now() + 5_000;
+		while (memoryReviewCalls === 0 && Date.now() < deadline) {
+			await new Promise((r) => setTimeout(r, 50));
+		}
+		// Give group keeper a moment to ensure it never calls review
+		await new Promise((r) => setTimeout(r, 150));
 
 		assert.equal(memoryReviewCalls, 1);
 		assert.match(readFileSync(agent.users.pathsFor("max").notes, "utf8"), /dark roast coffee/);
@@ -692,6 +697,8 @@ HOME="${fakeVmHome}" exec bash -c "$cmd"
 		effort: "high",
 		sessionId: "sess-1",
 	});
+	assert.match(remoteCmdPreview, /export PATH="\$HOME\/\.local\/bin:\$PATH"/);
+	assert.match(remoteCmdPreview, /"\$HOME"\/'\.local\/bin\/muse' exec --json/);
 	assert.match(remoteCmdPreview, /--approval-mode never --disable-sandbox --disable-request-user-input --no-foreign-personal-context/);
 
 	// Verify VM-safe preamble omits host worker-cli.ts, systemctl restart, and publish_page
