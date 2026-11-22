@@ -46,9 +46,9 @@ export function formatRelativeAge(ageMs: number): string {
 
 /**
  * The front model's system prompt: the active voice, how pclaw works (src/prompts/front.md), the user's time
- * zone, and (in multi-user mode) a 1-line cross-client awareness hint when the user recently spoke on another
- * client. Rendered before every request, so edits apply right away; Pi Durable only resends a section when it
- * changes, which keeps the prompt cache warm otherwise.
+ * zone, and a 1-line cross-client awareness hint when the user recently spoke on another client (both in
+ * multi-user mode and single-owner multi-client setups like Discord + Telegram). Rendered before every request,
+ * so edits apply right away; Pi Durable only resends a section when it changes, which keeps the prompt cache warm otherwise.
  */
 export function soulExtension(timeZoneOrOptions: string | SoulOptions) {
 	const opts: SoulOptions =
@@ -79,19 +79,43 @@ export function soulExtension(timeZoneOrOptions: string | SoulOptions) {
 			section("cross-client", async (input, context) => {
 				const users = opts.users;
 				const harness = opts.harness?.current;
-				if (!users?.enabled || harness === undefined) return undefined;
+				if (harness === undefined) return undefined;
 				const routes = (await input.read.snapshot(Routes, context))?.conversations ?? {};
 				const currentAddress = Object.keys(routes).find((addr) => routes[addr] === input.conversationId);
 				if (currentAddress === undefined) return undefined;
-				const user = users.resolveAddress(currentAddress);
-				if (user === undefined) return undefined;
 				const currentChannel = currentAddress.split(":")[0];
+
+				if (users?.enabled) {
+					const user = users.resolveAddress(currentAddress);
+					if (user === undefined) return undefined;
+					let best: { channel: string; at: number } | undefined;
+					for (const [otherAddr, otherId] of Object.entries(routes)) {
+						if (otherId === input.conversationId) continue;
+						const otherChannel = otherAddr.split(":")[0];
+						if (otherChannel === undefined || otherChannel === currentChannel) continue;
+						if (users.resolveAddress(otherAddr)?.id !== user.id) continue;
+						const otherConv = await harness.conversation(otherId, context);
+						if (otherConv === undefined) continue;
+						const page = await otherConv.entries({}, 10, undefined, context);
+						const at = latestMessageTimestamp(page.items);
+						if (at !== undefined && (best === undefined || at > best.at)) {
+							best = { channel: otherChannel, at };
+						}
+					}
+					if (best === undefined) return undefined;
+					const ageMs = nowFn() - best.at;
+					if (ageMs < 0 || ageMs > CROSS_CLIENT_WINDOW_MS) return undefined;
+					return `Recent activity with ${user.name} on ${best.channel} (${formatRelativeAge(ageMs)}); use recall if they reference it.`;
+				}
+
+				// Single-owner multi-client mode (e.g. Discord + Telegram sharing one owner): never leak into Telegram groups.
+				if (currentAddress.startsWith("telegram:group:")) return undefined;
 				let best: { channel: string; at: number } | undefined;
 				for (const [otherAddr, otherId] of Object.entries(routes)) {
 					if (otherId === input.conversationId) continue;
+					if (otherAddr.startsWith("telegram:group:")) continue;
 					const otherChannel = otherAddr.split(":")[0];
 					if (otherChannel === undefined || otherChannel === currentChannel) continue;
-					if (users.resolveAddress(otherAddr)?.id !== user.id) continue;
 					const otherConv = await harness.conversation(otherId, context);
 					if (otherConv === undefined) continue;
 					const page = await otherConv.entries({}, 10, undefined, context);
@@ -103,7 +127,7 @@ export function soulExtension(timeZoneOrOptions: string | SoulOptions) {
 				if (best === undefined) return undefined;
 				const ageMs = nowFn() - best.at;
 				if (ageMs < 0 || ageMs > CROSS_CLIENT_WINDOW_MS) return undefined;
-				return `Recent activity with ${user.name} on ${best.channel} (${formatRelativeAge(ageMs)}); use recall if they reference it.`;
+				return `Recent activity on ${best.channel} (${formatRelativeAge(ageMs)}); use recall if they reference it.`;
 			}),
 		],
 	});

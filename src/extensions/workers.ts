@@ -25,7 +25,7 @@ import { pairedClient, runT3Turn } from "../t3-client.ts";
 import { type PromptResolver, prompts } from "../prompts.ts";
 import type { WorkerSandbox } from "../sandbox.ts";
 import { formatWorkerProgress } from "../worker-progress.ts";
-import { currentAsk, FAILED, isEmoji, Reactions, setReaction, WORKING } from "./reactions.ts";
+import { currentAsk, FAILED, isEmoji, Reactions, setReaction, STEERED, WORKING } from "./reactions.ts";
 
 /**
  * Workers are coding agents on a slower, smarter model: Muse Code (worker provider `muse`), T3 Code threads
@@ -604,9 +604,15 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 						try {
 							if (mode === "queue") {
 								await handle.queue(message, thinking);
+								if (ask !== undefined) {
+									await api.commit((tx) => setReaction(tx, api.conversationId, ask, STEERED), context);
+								}
 								return { ...text(`Queued for ${name}.`), control: { terminate: true } };
 							}
 							const steered = await handle.steer(message, thinking);
+							if (ask !== undefined) {
+								await api.commit((tx) => setReaction(tx, api.conversationId, ask, STEERED), context);
+							}
 							return {
 								...text(steered.disposition === "steered" ? `Steered ${name} mid-run.` : `Queued for ${name}.`),
 								control: { terminate: true },

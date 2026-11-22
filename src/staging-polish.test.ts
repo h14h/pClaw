@@ -638,3 +638,163 @@ rl.on("line", (line) => {
 		await agent.harness.close(context);
 	}
 });
+
+test("worker progress monitor preserves control-arm holdout when milestone < 0.5 and gates only guided arm", async () => {
+	const { faux, models } = setupFaux();
+	const items = parseMuseSession(
+		JSON.stringify({
+			received_at: Date.now() - 5_000,
+			method: "item/completed",
+			params: {
+				item: {
+					itemId: "tc-1",
+					kind: "toolCall",
+					status: "completed",
+					tool: "web_search",
+					args: JSON.stringify({ query: "chicago tavern pizza" }),
+					visibleOutput: "10 results",
+				},
+			},
+		}),
+	);
+
+	const runArm = async (holdout: number) => {
+		const logFile = join(dir, `progress-arm-${holdout}.jsonl`);
+		const decisions = decisionClient({
+			url: "http://d1.test",
+			logFile,
+			holdout,
+			fetchFn: (async () =>
+				new Response(JSON.stringify({ answers: { milestone: { probability: 0.1 } } }), {
+					headers: { "Content-Type": "application/json" },
+				})) as typeof fetch,
+		});
+		const agent = await openAgent(
+			await openNodeSqliteStorage(join(dir, `progress-arm-${holdout}.sqlite`)),
+			{
+				config: baseConfig({ allowT3: false }),
+				models,
+				notes: new Notes(join(dir, `progress-arm-${holdout}-notes.md`)),
+				decisions,
+				homeDir: join(dir, `progress-arm-${holdout}-home`),
+				workerItems: () => items,
+			},
+			context,
+		);
+		const updates: string[] = [];
+		const unregister = agent.progressSurfaces.register("telegram", {
+			async update({ message }) {
+				updates.push(message);
+			},
+		});
+		let fakeNow = Date.now();
+		const monitor = startWorkerProgressMonitor(
+			agent,
+			{
+				models,
+				config: baseConfig({ allowT3: false }),
+				decisions,
+				everyMs: 60_000,
+				refreshMs: 30_000,
+				firstUpdateMs: 10_000,
+				quietConfirmMs: 120_000,
+				now: () => fakeNow,
+			},
+			context,
+		);
+		try {
+			const conv = await agent.conversationFor("telegram:dm:909", context);
+			await conv.commit(async (tx) => {
+				(await tx.doc(Workers, conv.id)).workers.pizza = {
+					sessionId: "sess-arm",
+					brief: "find pizza",
+					status: "working",
+					startedAt: fakeNow,
+					updatedAt: fakeNow,
+				};
+			}, context);
+			fakeNow += 20_000;
+			await monitor.tick();
+			const logEntries = readFileSync(logFile, "utf8")
+				.trim()
+				.split("\n")
+				.map((l) => JSON.parse(l) as { type: string; arm?: string; posted?: boolean });
+			const progressLog = logEntries.find((e) => e.type === "progress");
+			return { updates, progressLog };
+		} finally {
+			monitor.stop();
+			unregister();
+			await agent.harness.close(context);
+		}
+	};
+
+	faux.setResponses([
+		fauxAssistantMessage(JSON.stringify({ status: "Searching", message: "Checking tavern pizza spots." })),
+	]);
+	// holdout=1 -> control arm: must NOT gate on milestone < 0.5!
+	const controlRes = await runArm(1);
+	assert.equal(controlRes.updates.length, 1);
+	assert.equal(controlRes.progressLog?.arm, "control");
+	assert.equal(controlRes.progressLog?.posted, true);
+
+	// holdout=0 -> guided arm: MUST gate on milestone < 0.5 when !quietDue!
+	const guidedRes = await runArm(0);
+	assert.equal(guidedRes.updates.length, 0);
+	assert.equal(guidedRes.progressLog?.arm, "guided");
+	assert.equal(guidedRes.progressLog?.posted, false);
+});
+
+test("single-owner mode (no config.users) emits cross-client continuity hint across Discord and Telegram, but not in Telegram groups", async () => {
+	const { faux, models } = setupFaux();
+	let nowMs = Date.now();
+	const agent = await openAgent(
+		await openNodeSqliteStorage(join(dir, "single-owner-cross-client.sqlite")),
+		{
+			config: baseConfig({ allowT3: true, timeZone: "America/Chicago" }),
+			models,
+			notes: new Notes(join(dir, "single-owner-notes.md")),
+			homeDir: join(dir, "single-owner-home"),
+			memoryQuietMs: 24 * 60 * 60_000,
+			now: () => nowMs,
+		},
+		context,
+	);
+
+	try {
+		assert.equal(agent.users.enabled, false);
+		const requests: ModelContext[] = [];
+		faux.setResponses([
+			(req) => {
+				requests.push(req);
+				return fauxAssistantMessage("checked the discord note");
+			},
+			(req) => {
+				requests.push(req);
+				return fauxAssistantMessage("hey from telegram");
+			},
+			(req) => {
+				requests.push(req);
+				return fauxAssistantMessage("hey group");
+			},
+		]);
+
+		const dc = await agent.conversationFor("discord:dm:100", context);
+		await (await dc.submit({ type: "input", content: "working on the nas build" }, context)).wait(context);
+
+		nowMs += 15 * 60_000;
+
+		const tg = await agent.conversationFor("telegram:dm:200", context);
+		await (await tg.submit({ type: "input", content: "what did we decide earlier?" }, context)).wait(context);
+
+		const tgGroup = await agent.conversationFor("telegram:group:-555", context);
+		await (await tgGroup.submit({ type: "input", content: "hello everyone" }, context)).wait(context);
+
+		assert.match(
+			JSON.stringify(requests[1]),
+			/Recent activity on discord \(15m ago\); use recall if they reference it\./,
+		);
+		assert.doesNotMatch(JSON.stringify(requests[2]), /Recent activity on/);
+	} finally {
+		await agent.harness.close(context);
+	}
+});

@@ -1086,8 +1086,9 @@ export async function startTelegram(
 								}
 								if (!state.userSpokeAfterAck && state.ackMessageIds.length > 0) {
 									toDelete.push(...state.ackMessageIds);
-									state.ackMessageIds = [];
 								}
+								state.ackMessageIds = [];
+								state.userSpokeAfterAck = false;
 								state.pendingFinish = false;
 								if (toDelete.length > 0) await deleteEphemeralIds(parsed.chatId, toDelete);
 							}

@@ -13,6 +13,7 @@ import { openAgent } from "./agent.ts";
 import { type Config, defaults } from "./config.ts";
 import { deliver } from "./delivery.ts";
 import { Notes } from "./extensions/notes.ts";
+import { Reactions, STEERED } from "./extensions/reactions.ts";
 import { type WorkerOptions, Workers } from "./extensions/workers.ts";
 import { MUSE, museTranscript, parseMuseSession } from "./muse.ts";
 import { isUuidv7, type LiveWorkerHandle, runMuseMsp, toMuseSessionId, uuidv7 } from "./muse-msp.ts";
@@ -496,14 +497,16 @@ test("workersExtension supports live message_worker steer, queue, and clean stop
 		};
 		await waitLog('"method":"turn/start"');
 
-		// Live steer while worker is still running!
-		await conv.submit({ type: "input", content: "actually include STEER_LIVE_42" }, context);
+		// Live steer while worker is still running! Also verify instant 🫡 reaction on ask message.
+		await conv.submit({ type: "input", content: "actually include STEER_LIVE_42", requestId: "telegram:401" }, context);
 		await until(2);
 		await waitLog('"method":"turn/steer"');
+		assert.equal((await agent.harness.snapshot(Reactions, conv.id, context))?.asks["telegram:401"], STEERED);
 
-		// Live queue while worker is still running!
-		await conv.submit({ type: "input", content: "after that, also add indexes" }, context);
+		// Live queue while worker is still running! Also verify instant 🫡 reaction on ask message.
+		await conv.submit({ type: "input", content: "after that, also add indexes", requestId: "telegram:402" }, context);
 		await until(3);
+		assert.equal((await agent.harness.snapshot(Reactions, conv.id, context))?.asks["telegram:402"], STEERED);
 
 		// Release gate so steered turn 1 + queued turn 2 complete cleanly!
 		writeFileSync(gateFile, "go\n");

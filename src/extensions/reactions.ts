@@ -36,6 +36,7 @@ export const Reactions = defineDoc<{
 
 export const WORKING = "⏳";
 export const FAILED = "⚠️";
+export const STEERED = "🫡";
 
 /** True for a single emoji (allowing modifiers and joiners), so a model's ":tada:" or "done!" is refused up front. */
 export function isEmoji(text: string): boolean {

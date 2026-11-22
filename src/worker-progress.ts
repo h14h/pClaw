@@ -259,19 +259,21 @@ export function startWorkerProgressMonitor(
 						if (decided !== undefined) {
 							arm = decided.arm;
 							milestone = yes(decided.answers.milestone);
-							if (decided.arm === "guided") hint = progressGuidance(decided.answers);
-							if (milestone < 0.5 && !quietDue) {
-								state.position = items.length;
-								state.lastCheckedAt = now;
-								options.decisions.record({
-									type: "progress",
-									id: decisionId,
-									job: name,
-									arm,
-									milestone,
-									posted: false,
-								});
-								continue;
+							if (decided.arm === "guided") {
+								hint = progressGuidance(decided.answers);
+								if (milestone < 0.5 && !quietDue) {
+									state.position = items.length;
+									state.lastCheckedAt = now;
+									options.decisions.record({
+										type: "progress",
+										id: decisionId,
+										job: name,
+										arm,
+										milestone,
+										posted: false,
+									});
+									continue;
+								}
 							}
 						}
 					}
