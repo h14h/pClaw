@@ -93,6 +93,8 @@ export type MuseMspRunOptions = {
 	onHandle?: (handle: LiveWorkerHandle) => void;
 	/** Human-readable process label for startup failure messages. */
 	label?: string;
+	/** Grace window (ms) to wait for a `pure_followup` successor turn after an unconsumed `turn/steer` (default 5000). */
+	steerGraceMs?: number;
 };
 
 type JsonRpcErrorObj = {
@@ -139,6 +141,7 @@ type ApprovalChoice = {
 
 type MspItem = {
 	itemId?: string;
+	commandId?: string;
 	kind?: string;
 	turnId?: string | null;
 	status?: string;
@@ -203,6 +206,7 @@ export async function runMuseMsp(options: MuseMspRunOptions): Promise<{ ok: bool
 	const label = options.label ?? "muse serve";
 	const transcript = options.transcript;
 	const mspSessionId = toMuseSessionId(options.sessionId);
+	const steerGraceMs = options.steerGraceMs ?? 5_000;
 
 	let nextId = 1;
 	const pending = new Map<
@@ -221,6 +225,9 @@ export async function runMuseMsp(options: MuseMspRunOptions): Promise<{ ok: bool
 	let sessionIdOnWire = mspSessionId;
 	let activeTurnId: string | undefined;
 	const outstandingTurns = new Set<string>();
+	/** Accepted `turn/steer` commandIds not yet observed as consumed (either in-turn `userMessage` or `pure_followup` `turn/started`). */
+	const pendingSteers = new Set<string>();
+	let steerGraceTimer: NodeJS.Timeout | undefined;
 	const turnOrder: string[] = [];
 	const turnTerminals = new Map<string, { terminal: string; errorText?: string }>();
 	const turnAgentMessages = new Map<string, { itemId: string; phase?: string; text: string }[]>();
@@ -253,6 +260,13 @@ export async function runMuseMsp(options: MuseMspRunOptions): Promise<{ ok: bool
 	const clearTimers = () => {
 		for (const timer of timers) clearTimeout(timer);
 		timers.clear();
+		steerGraceTimer = undefined;
+	};
+	const clearSteerGraceTimer = () => {
+		if (steerGraceTimer === undefined) return;
+		clearTimeout(steerGraceTimer);
+		timers.delete(steerGraceTimer);
+		steerGraceTimer = undefined;
 	};
 
 	const rejectAllPending = (reason: Error) => {
@@ -353,11 +367,24 @@ export async function runMuseMsp(options: MuseMspRunOptions): Promise<{ ok: bool
 
 	const computeOutcome = (): { ok: boolean; output: string } | undefined => {
 		if (turnOrder.length === 0) return undefined;
-		const lastTurnId = turnOrder.at(-1)!;
-		const lastTerminal = turnTerminals.get(lastTurnId);
+		let lastTurnId = turnOrder.at(-1)!;
+		let lastTerminal = turnTerminals.get(lastTurnId);
+		if (lastTerminal === undefined && closing) {
+			// If a late notification raced after shutdown began, fall back to the last turn that actually settled.
+			for (let i = turnOrder.length - 1; i >= 0; i--) {
+				const candidate = turnOrder[i]!;
+				const term = turnTerminals.get(candidate);
+				if (term !== undefined) {
+					lastTurnId = candidate;
+					lastTerminal = term;
+					break;
+				}
+			}
+		}
 		if (lastTerminal === undefined) return undefined;
 
 		const outputs = turnOrder
+			.filter((tid) => turnTerminals.has(tid))
 			.map((tid) => bestOutputForTurn(tid))
 			.filter((text) => text !== "");
 		const combinedText = outputs.join("\n\n---\n\n");
@@ -397,7 +424,26 @@ export async function runMuseMsp(options: MuseMspRunOptions): Promise<{ ok: bool
 
 	const finishIfDrained = () => {
 		if (closing || settled) return;
-		if (outstandingTurns.size > 0 || inFlightControl > 0) return;
+		if (outstandingTurns.size > 0 || inFlightControl > 0) {
+			clearSteerGraceTimer();
+			return;
+		}
+		if (pendingSteers.size > 0) {
+			// When `turn/steer` arrives after T1's final model step starts, Muse lets T1 emit `turn/completed`
+			// without consuming the steer, then spawns a `pure_followup` successor turn (~25ms later) whose
+			// `turnId` equals the steer's `commandId`. Wait briefly for that successor turn before leaving.
+			if (steerGraceTimer === undefined) {
+				steerGraceTimer = trackTimer(
+					setTimeout(() => {
+						steerGraceTimer = undefined;
+						pendingSteers.clear();
+						finishIfDrained();
+					}, steerGraceMs),
+				);
+			}
+			return;
+		}
+		clearSteerGraceTimer();
 		closing = true;
 		void (async () => {
 			try {
@@ -409,13 +455,32 @@ export async function runMuseMsp(options: MuseMspRunOptions): Promise<{ ok: bool
 		})();
 	};
 
+	const consumePendingSteer = (commandId: string | undefined, fallbackOldest = false) => {
+		if (commandId !== undefined && pendingSteers.delete(commandId)) {
+			return true;
+		}
+		if (fallbackOldest && pendingSteers.size > 0) {
+			const oldest = pendingSteers.values().next().value;
+			if (oldest !== undefined) {
+				pendingSteers.delete(oldest);
+				return true;
+			}
+		}
+		return false;
+	};
+
 	const handleNotification = (method: string, params: Record<string, unknown> | undefined) => {
 		appendTranscript(method, params);
 		if (params === undefined) return;
 
 		if (method === "turn/started") {
+			if (closing) return;
 			const turnId = typeof params.turnId === "string" ? params.turnId : undefined;
+			const commandId = typeof params.commandId === "string" ? params.commandId : undefined;
+			clearSteerGraceTimer();
+			if (commandId !== undefined) pendingSteers.delete(commandId);
 			if (turnId !== undefined) {
+				pendingSteers.delete(turnId);
 				activeTurnId = turnId;
 				outstandingTurns.add(turnId);
 				if (!turnOrder.includes(turnId)) turnOrder.push(turnId);
@@ -448,6 +513,14 @@ export async function runMuseMsp(options: MuseMspRunOptions): Promise<{ ok: bool
 
 		if (method === "item/completed") {
 			const item = params.item as MspItem | undefined;
+			if (item?.kind === "userMessage") {
+				const cmdId = typeof item.commandId === "string" ? item.commandId : undefined;
+				if (item.steered === true || (cmdId !== undefined && pendingSteers.has(cmdId))) {
+					const removed = consumePendingSteer(cmdId, item.steered === true && cmdId === undefined);
+					if (removed && outstandingTurns.size === 0 && inFlightControl === 0) finishIfDrained();
+				}
+				return;
+			}
 			if (item?.kind === "agentMessage" && typeof item.itemId === "string") {
 				const turnId =
 					typeof item.turnId === "string"
@@ -476,6 +549,7 @@ export async function runMuseMsp(options: MuseMspRunOptions): Promise<{ ok: bool
 		if (method === "turn/unqueued") {
 			const turnId = typeof params.turnId === "string" ? params.turnId : undefined;
 			if (turnId !== undefined) {
+				pendingSteers.delete(turnId);
 				outstandingTurns.delete(turnId);
 				finishIfDrained();
 			}
@@ -589,6 +663,8 @@ export async function runMuseMsp(options: MuseMspRunOptions): Promise<{ ok: bool
 	const sendInterruptAndKill = async () => {
 		if (closed) return;
 		closing = true;
+		clearSteerGraceTimer();
+		pendingSteers.clear();
 		try {
 			await request(
 				"turn/interrupt",
@@ -706,30 +782,38 @@ export async function runMuseMsp(options: MuseMspRunOptions): Promise<{ ok: bool
 		async steer(message, effort) {
 			if (closing || closed) throw new WorkerRunEndedError();
 			inFlightControl++;
+			let shouldFallbackToQueue = false;
 			try {
 				if (closing || closed) throw new WorkerRunEndedError();
 				const eff = normalizeReasoningEffort(effort);
 				const expected = activeTurnId;
 				if (expected !== undefined) {
+					const steerCommandId = uuidv7();
+					pendingSteers.add(steerCommandId);
 					try {
 						const res = await request<{ turnId?: string }>("turn/steer", {
-							commandId: uuidv7(),
+							commandId: steerCommandId,
 							sessionId: sessionIdOnWire,
 							expectedTurnId: expected,
 							input: [{ type: "text", text: `Message from pclaw:\n\n${message}` }],
 							...(eff === undefined ? {} : { reasoningEffort: eff }),
 						});
 						const turnId = typeof res.turnId === "string" ? res.turnId : expected;
-						outstandingTurns.add(turnId);
+						if (!turnTerminals.has(turnId)) outstandingTurns.add(turnId);
 						return { disposition: "steered", turnId };
 					} catch (error) {
+						pendingSteers.delete(steerCommandId);
 						if (closing || closed) throw new WorkerRunEndedError();
 						// Expected turn likely just completed or changed: fall back cleanly to turn/start(ifBusy:"queue").
 						if (!(error instanceof MspRpcError)) throw error;
+						shouldFallbackToQueue = true;
 					}
+				} else {
+					shouldFallbackToQueue = true;
 				}
 			} finally {
 				inFlightControl--;
+				if (!shouldFallbackToQueue) finishIfDrained();
 			}
 			return enqueueTurn(message, effort);
 		},
