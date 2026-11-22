@@ -242,10 +242,11 @@ test("rich live list_workers output reports elapsed time, tool call count, and l
 
 		const toolResultJson = JSON.stringify(requests[1]);
 		assert.match(toolResultJson, /mcpherson: working \(2m \d+s, 2 tool calls — latest: web_search \\"McPherson model\\", edit_file report\.md\)/);
-		// Also verify message_worker tool description states idle-only
+		// Also verify message_worker tool description advertises live steer + queue + idle resume
 		const sysMsg = requests[0]!.messages[0] as { toolsAdded?: { name: string; description: string }[] };
 		const msgWorkerTool = sysMsg.toolsAdded?.find((t) => t.name === "message_worker");
-		assert.match(msgWorkerTool?.description ?? "", /idle workers/i);
+		assert.match(msgWorkerTool?.description ?? "", /steers it live mid-turn/i);
+		assert.match(msgWorkerTool?.description ?? "", /mode='queue'/i);
 	} finally {
 		await agent.harness.close(context);
 	}
@@ -378,16 +379,40 @@ test("decoupled worker progress monitor + Telegram ephemeral delete-and-replace 
 	const gateFile = join(dir, "worker-gate.txt");
 	const sessionDir = join(homeDir, "users", "henry", "worker-sessions");
 
-	// Fake Muse worker that writes live tool activity JSONL immediately, then waits for gateFile before finishing!
-	const fakeMuse = join(dir, "gated-muse.sh");
+	// Fake MSP v1 Muse worker that emits live toolCall activity immediately, then waits for gateFile before finishing!
+	const fakeMuse = join(dir, "gated-muse.mjs");
 	await writeFile(
 		fakeMuse,
-		`#!/usr/bin/env bash
-set -euo pipefail
-echo '{"payload":{"kind":"tool_call","call_id":"t1","arguments":{"query":"McPherson model"}}}'
-echo '{"payload":{"kind":"tool_result","call_id":"t1","text":"found 8 sources","correlation_facts":{"tool_name":"web_search","outcome":"success"}}}'
-while [ ! -f "${gateFile}" ]; do sleep 0.05; done
-echo '{"payload":{"kind":"run_terminal","terminal":"completed","text":"McPherson breakdown complete: 8 sources verified."}}'
+		`#!${process.execPath}
+import { existsSync } from "node:fs";
+import { createInterface } from "node:readline";
+let sessionId = "";
+const send = (msg) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...msg }) + "\\n");
+const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
+rl.on("line", (line) => {
+	if (!line.trim()) return;
+	const msg = JSON.parse(line);
+	if (msg.method === "initialize") {
+		send({ id: msg.id, result: { serverInfo: { name: "gated-muse", version: "1.0.0" } } });
+	} else if (msg.method === "session/start" || msg.method === "session/resume") {
+		sessionId = msg.params.sessionId;
+		send({ id: msg.id, result: { session: { sessionId, approvalMode: { mode: "allowAll" } } } });
+	} else if (msg.method === "turn/start") {
+		const turnId = msg.params.commandId;
+		send({ id: msg.id, result: { commandId: msg.params.commandId, disposition: "started", startedNewTurn: true, status: "accepted", turnId } });
+		send({ method: "turn/started", params: { sessionId, turnId, commandId: msg.params.commandId } });
+		send({ method: "item/completed", params: { sessionId, item: { itemId: "t1", kind: "toolCall", status: "completed", tool: "web_search", args: JSON.stringify({ query: "McPherson model" }), visibleOutput: "found 8 sources", turnId } } });
+		const poll = setInterval(() => {
+			if (!existsSync(${JSON.stringify(gateFile)})) return;
+			clearInterval(poll);
+			send({ method: "item/completed", params: { sessionId, item: { itemId: "a1", kind: "agentMessage", messagePhase: "finalAnswer", status: "completed", text: "McPherson breakdown complete: 8 sources verified.", turnId } } });
+			send({ method: "turn/completed", params: { sessionId, turnId, terminal: "completed" } });
+		}, 40);
+	} else if (msg.method === "session/leave") {
+		send({ id: msg.id, result: { commandId: msg.params.commandId, status: "accepted" } });
+		process.exit(0);
+	}
+});
 `,
 	);
 	await chmod(fakeMuse, 0o755);

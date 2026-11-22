@@ -255,22 +255,58 @@ test("delegate runs a worker, its report comes back, and message_worker reuses i
 	await agent.harness.close(context);
 });
 
-/** A stand-in for `muse exec --json`: logs its session id and prompt, and streams a run's events. */
+/** A stand-in for `muse serve` (MSP v1 JSON-RPC over stdio): logs session id, args, and prompt, and streams MSP events. */
 async function fakeMuse(): Promise<string> {
 	const command = join(dir, "fake-muse.mjs");
+	const logPath = join(dir, "muse-calls.log");
+	const statePath = join(dir, "muse-sessions.json");
 	await writeFile(
 		command,
 		`#!${process.execPath}
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createInterface } from "node:readline";
 const args = process.argv.slice(2);
-const session = args[args.indexOf("--session-id") + 1];
-const prompt = args.at(-1);
-appendFileSync(${JSON.stringify(join(dir, "muse-calls.log"))}, JSON.stringify({ session, prompt, args }) + "\\n");
-const event = (payload) => console.log(JSON.stringify({ schema_version: 1, recorded_at: 1, payload }));
-event({ kind: "turn_input_user", prompt });
-event({ kind: "tool_result", call_id: "c1", correlation_facts: { tool_name: "bash", outcome: "success" }, text: JSON.stringify({ command: "ls", output: "notes.txt" }) });
-console.log("{half a line");
-event({ kind: "run_terminal", terminal: "completed", reason: null, text: prompt.includes("fits") ? "yep, it fits" : "walnut case is $135" });
+const stateFile = ${JSON.stringify(statePath)};
+const loadSessions = () => (existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, "utf8")) : {});
+const saveSessions = (s) => writeFileSync(stateFile, JSON.stringify(s));
+let sessionId = "";
+const send = (msg) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...msg }) + "\\n");
+const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
+rl.on("line", (line) => {
+	if (!line.trim()) return;
+	const msg = JSON.parse(line);
+	if (msg.method === "initialize") {
+		send({ id: msg.id, result: { serverInfo: { name: "fake-muse", version: "1.0.0" } } });
+	} else if (msg.method === "session/start") {
+		sessionId = msg.params.sessionId;
+		const sessions = loadSessions();
+		sessions[sessionId] = true;
+		saveSessions(sessions);
+		send({ id: msg.id, result: { session: { sessionId, approvalMode: { mode: msg.params.approvalMode ?? "allowAll" } } } });
+	} else if (msg.method === "session/resume") {
+		const sessions = loadSessions();
+		if (!sessions[msg.params.sessionId]) {
+			send({ id: msg.id, error: { code: -32020, message: "session not found", data: { kind: "sessionNotFound" } } });
+			return;
+		}
+		sessionId = msg.params.sessionId;
+		send({ id: msg.id, result: { session: { sessionId, approvalMode: { mode: "allowAll" } } } });
+	} else if (msg.method === "turn/start") {
+		const prompt = msg.params.input.map((p) => p.text ?? "").join("\\n");
+		const turnId = msg.params.commandId;
+		appendFileSync(${JSON.stringify(logPath)}, JSON.stringify({ session: sessionId, prompt, args }) + "\\n");
+		send({ id: msg.id, result: { commandId: msg.params.commandId, disposition: "started", startedNewTurn: true, status: "accepted", turnId } });
+		send({ method: "turn/started", params: { sessionId, turnId, commandId: msg.params.commandId } });
+		send({ method: "item/completed", params: { sessionId, item: { itemId: "u-" + turnId, kind: "userMessage", status: "completed", text: prompt, turnId } } });
+		send({ method: "item/completed", params: { sessionId, item: { itemId: "t-" + turnId, kind: "toolCall", status: "completed", tool: "bash", args: JSON.stringify({ command: "ls" }), visibleOutput: "notes.txt", turnId } } });
+		const reply = prompt.includes("fits") ? "yep, it fits" : "walnut case is $135";
+		send({ method: "item/completed", params: { sessionId, item: { itemId: "a-" + turnId, kind: "agentMessage", messagePhase: "finalAnswer", status: "completed", text: reply, turnId } } });
+		send({ method: "turn/completed", params: { sessionId, turnId, terminal: "completed" } });
+	} else if (msg.method === "session/leave") {
+		send({ id: msg.id, result: { commandId: msg.params.commandId, status: "accepted" } });
+		process.exit(0);
+	}
+});
 `,
 	);
 	await chmod(command, 0o755);
@@ -307,7 +343,7 @@ test("a Muse worker gets pclaw's worker prompt once, keeps its Muse session, and
 	assert.equal(calls[0]!.session, calls[1]!.session);
 	assert.match(calls[0]!.prompt, /WORKER RULES[\s\S]*worker-cli\.ts search[\s\S]*Message from pclaw:\n\nThis is a quick job[\s\S]*find a walnut NAS case/);
 	assert.doesNotMatch(calls[1]!.prompt, /WORKER RULES/);
-	assert.ok(calls[0]!.args.includes("muse-wonder-full-1.0") && calls[0]!.args.includes("--no-foreign-personal-context"));
+	assert.ok(calls[0]!.args.includes("serve") && calls[0]!.args.includes("muse-wonder-full-1.0") && calls[0]!.args.includes("--disable-sandbox"));
 	const job = (await agent.harness.snapshot(Workers, conversation.id, context))?.workers.nas;
 	assert.equal(job?.provider, "muse");
 

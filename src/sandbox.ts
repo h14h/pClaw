@@ -5,7 +5,8 @@ import { basename, join, resolve, sep } from "node:path";
 import type { Config, UserSandboxConfig } from "./config.ts";
 import { isPagesEnabled } from "./config.ts";
 import { runLocalWorker, type WorkerOptions, type WorkerResult } from "./extensions/workers.ts";
-import { MUSE, musePreamble, museRun, museTranscript } from "./muse.ts";
+import { MUSE, musePreamble, museTranscript } from "./muse.ts";
+import { type LiveWorkerHandle, PCLAW_PWD_PREFIX, runMuseMsp } from "./muse-msp.ts";
 import type { ResolvedUser, UserRegistry } from "./users.ts";
 
 const REPORT_LIMIT = 12_000;
@@ -29,6 +30,7 @@ export type SandboxRunRequest = {
 	signal?: AbortSignal;
 	timeoutMs: number;
 	workerOptions: WorkerOptions;
+	onHandle?: (handle: LiveWorkerHandle) => void;
 };
 
 export type SandboxFile = {
@@ -135,7 +137,7 @@ export function createLocalSandbox(options: {
 				sessionDir: req.sessionDir,
 				...(options.allowPages === undefined ? {} : { allowPages: options.allowPages }),
 			};
-			return runLocalWorker(effective, req.sessionId, req.message, req.signal, req.thinking, req.job);
+			return runLocalWorker(effective, req.sessionId, req.message, req.signal, req.thinking, req.job, req.onHandle);
 		},
 		async putFile(localPath, filename) {
 			mkdirSync(inboxDir, { recursive: true, mode: 0o700 });
@@ -182,7 +184,25 @@ export type SshSandboxOptions = {
 	spawnFn?: typeof spawn;
 };
 
-/** Build the remote POSIX shell command that reads the prompt from stdin and runs `muse exec --json`. */
+/** Build the remote POSIX shell command that launches `muse serve` (MSP v1 over stdio) in `workDir`. */
+export function buildRemoteMuseServeCommand(options: {
+	museBin: string;
+	workDir: string;
+	model: string;
+}): string {
+	const workExpr = remotePathExpr(options.workDir);
+	const museExpr = remotePathExpr(options.museBin);
+	return [
+		"set -e",
+		'export PATH="$HOME/.local/bin:$PATH"',
+		`mkdir -p ${workExpr}`,
+		`cd ${workExpr}`,
+		`printf '${PCLAW_PWD_PREFIX}%s\\n' "$PWD"`,
+		`exec ${museExpr} serve --model ${shellQuote(options.model)} --disable-sandbox --disable-request-user-input`,
+	].join("; ");
+}
+
+/** Build the remote POSIX shell command that reads the prompt from stdin and runs `muse exec --json` (legacy). */
 export function buildRemoteMuseCommand(options: {
 	museBin: string;
 	workDir: string;
@@ -264,12 +284,12 @@ export function createSshSandbox(options: SshSandboxOptions): WorkerSandbox {
 		prepare() {
 			// Persistent VM is pre-provisioned; never create or mutate VMs here.
 		},
-		runWorker(req) {
+		async runWorker(req) {
 			if (req.job.provider !== MUSE) {
-				return Promise.resolve({
+				return {
 					ok: false,
 					output: `SSH sandbox requires workerProvider "muse" (got "${req.job.provider}").`,
-				});
+				};
 			}
 			mkdirSync(req.sessionDir, { recursive: true, mode: 0o700 });
 			const transcript = museTranscript(req.sessionDir, req.sessionId);
@@ -282,52 +302,29 @@ export function createSshSandbox(options: SshSandboxOptions): WorkerSandbox {
 				remote: true,
 			});
 			const prompt = `${first ? `${preamble}\n\n---\n\n` : ""}Message from pclaw:\n\n${req.message}`;
-			const remoteCmd = buildRemoteMuseCommand({
+			const remoteCmd = buildRemoteMuseServeCommand({
 				museBin,
 				workDir,
 				model: req.job.model,
-				effort: req.thinking,
+			});
+			const result = await runMuseMsp({
+				spawnProcess: () =>
+					spawnFn(sshCommand, [...SSH_BASE_ARGS, host, remoteCmd], {
+						stdio: ["pipe", "pipe", "pipe"],
+						env: sshEnv(),
+					}),
 				sessionId: req.sessionId,
+				model: req.job.model,
+				effort: req.thinking,
+				prompt,
+				transcript,
+				resume: !first,
+				timeoutMs: req.timeoutMs,
+				...(req.signal === undefined ? {} : { signal: req.signal }),
+				...(req.onHandle === undefined ? {} : { onHandle: req.onHandle }),
+				label: `${sshCommand} to ${host}`,
 			});
-			const run = museRun(transcript);
-			const timeout = AbortSignal.timeout(req.timeoutMs);
-			const combined = req.signal === undefined ? timeout : AbortSignal.any([timeout, req.signal]);
-
-			return new Promise<WorkerResult>((resolvePromise, rejectPromise) => {
-				const child = spawnFn(sshCommand, [...SSH_BASE_ARGS, host, remoteCmd], {
-					stdio: ["pipe", "pipe", "pipe"],
-					env: sshEnv(),
-					signal: combined,
-				});
-				let stderr = "";
-				child.stdout.on("data", (chunk: Buffer) => run.write(chunk.toString("utf8")));
-				child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
-				child.stdin.on("error", () => {
-					// EPIPE if ssh exited early; handled in close/error.
-				});
-				child.on("error", (error) => {
-					if (req.signal?.aborted) rejectPromise(req.signal.reason);
-					else if (timeout.aborted) {
-						resolvePromise({ ok: false, output: `Timed out after ${req.timeoutMs / 60_000} minutes.` });
-					} else {
-						resolvePromise({ ok: false, output: `Couldn't start ${sshCommand} to ${host}: ${error.message}` });
-					}
-				});
-				child.on("close", (code) => {
-					if (req.signal?.aborted || timeout.aborted) return;
-					const result = run.finish();
-					if (result !== undefined) {
-						resolvePromise({ ok: result.ok, output: clip(result.output) });
-						return;
-					}
-					const errors = stderr
-						.split("\n")
-						.filter((line) => line.trim() !== "" && !line.startsWith("muse: "))
-						.join("\n");
-					resolvePromise({ ok: false, output: clip(`exit ${code}\n${errors || "Remote Muse ended without a result."}`) });
-				});
-				child.stdin.end(prompt, "utf8");
-			});
+			return { ok: result.ok, output: clip(result.output) };
 		},
 		async putFile(localPath, filename, signal) {
 			const bytes = readFileSync(localPath);

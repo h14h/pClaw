@@ -6,9 +6,10 @@ import type { WorkerItem } from "./dashboard/types.ts";
 import { filterWorkerPrompt } from "./prompts.ts";
 
 /**
- * Muse Code as a worker harness: `muse exec` runs one turn of a Muse session headless and streams its events as JSONL.
- * pclaw keeps that stream as the job's transcript (`muse_<session id>.jsonl` beside pi's session files), reads the
- * report from the run's terminal event, and continues the same Muse session for follow-ups.
+ * Muse Code as a worker harness: `muse serve` runs an MSP v1 JSON-RPC session over stdio so workers support
+ * live mid-turn steering (`turn/steer`), queueing (`turn/start` with `ifBusy: "queue"`), and clean interrupts
+ * (`turn/interrupt`). pclaw logs the MSP event stream to `muse_<session id>.jsonl` beside pi's session files,
+ * parses both MSP v1 and legacy `muse exec --json` transcripts, and continues the same Muse session for follow-ups.
  */
 
 /** The worker provider id that sends jobs to Muse Code instead of pi. */
@@ -85,6 +86,18 @@ export function musePreamble(options: {
 	].join("\n\n");
 }
 
+export function museServeArgs(options: { model: string }): string[] {
+	return [
+		"serve",
+		"--model", options.model,
+		// Headless, with the same reach pi workers have: approvalMode is set to "allowAll" on the wire,
+		// and Muse's bubblewrap sandbox can't start on Ubuntu boxes that restrict unprivileged user namespaces.
+		// Omitting `--trust-workspace` keeps workspace skills/rules untrusted by default.
+		"--disable-sandbox",
+		"--disable-request-user-input",
+	];
+}
+
 export function museArgs(options: { model: string; effort: string; sessionId: string; cwd: string }, prompt: string): string[] {
 	return [
 		"exec", "--json",
@@ -113,14 +126,41 @@ type Payload = {
 	input?: Record<string, unknown>;
 	correlation_facts?: { tool_name?: string; outcome?: string };
 };
+type MspItemPayload = {
+	itemId?: string;
+	kind?: string;
+	status?: string;
+	text?: string;
+	tool?: string;
+	args?: string;
+	visibleOutput?: string;
+	failureReason?: string;
+	commandText?: string;
+	fallbackText?: string;
+};
+
 /** `received_at` is pclaw's own (milliseconds): Muse's `recorded_at` isn't wall-clock time. */
-type Event = { received_at?: number; payload?: Payload };
+type Event = {
+	received_at?: number;
+	payload?: Payload;
+	method?: string;
+	params?: { item?: MspItemPayload; terminal?: string; reason?: string; error?: { message?: string } };
+};
 
 function parse(line: string): Event | undefined {
 	try {
 		return JSON.parse(line) as Event;
 	} catch {
 		return undefined;
+	}
+}
+
+function parseToolArgs(raw: string | undefined): unknown {
+	if (raw === undefined || raw.trim() === "") return {};
+	try {
+		return JSON.parse(raw);
+	} catch {
+		return { raw };
 	}
 }
 
@@ -155,15 +195,81 @@ export function museRun(transcript: string) {
 
 const FROM_PCLAW = /^[\s\S]*?Message from pclaw:\s*/;
 
-/** A Muse transcript as the worker's dashboard transcript. Tolerates a half-written last line. */
+/** A Muse transcript (MSP v1 or legacy `muse exec`) as the worker's dashboard transcript. Tolerates a half-written last line. */
 export function parseMuseSession(jsonl: string): WorkerItem[] {
 	const items: WorkerItem[] = [];
 	const callArgs = new Map<string, Record<string, unknown>>();
+	const mspIndex = new Map<string, number>();
+
+	const upsertMsp = (itemId: string | undefined, item: WorkerItem) => {
+		if (itemId === undefined) {
+			items.push(item);
+			return;
+		}
+		const idx = mspIndex.get(itemId);
+		if (idx !== undefined) {
+			items[idx] = item;
+		} else {
+			mspIndex.set(itemId, items.length);
+			items.push(item);
+		}
+	};
+
 	for (const line of jsonl.split("\n")) {
 		const event = parse(line);
-		const payload = event?.payload;
+		if (event === undefined) continue;
+		const at = event.received_at ?? 0;
+
+		// MSP v1 notifications (`{ received_at, method, params }`)
+		if (event.method !== undefined && event.params !== undefined) {
+			const item = event.params.item;
+			if (item === undefined || typeof item.kind !== "string") continue;
+
+			if (item.kind === "userMessage" && event.method === "item/completed" && typeof item.text === "string") {
+				upsertMsp(item.itemId, { kind: "from-pclaw", at, text: item.text.replace(FROM_PCLAW, "") });
+			} else if (
+				item.kind === "toolCall" &&
+				(event.method === "item/started" || event.method === "item/updated" || event.method === "item/completed")
+			) {
+				const name = item.tool ?? "tool";
+				const result = item.visibleOutput ?? item.failureReason ?? "";
+				let args = parseToolArgs(item.args);
+				if (typeof args === "object" && args !== null && result !== "") {
+					try {
+						const parsed = JSON.parse(result) as Record<string, unknown>;
+						if (typeof parsed === "object" && parsed !== null) {
+							const picked: Record<string, unknown> = { ...(args as Record<string, unknown>) };
+							for (const key of ["command", "query", "url", "path", "file_path"] as const) {
+								if (typeof parsed[key] === "string" && picked[key] === undefined) picked[key] = parsed[key];
+							}
+							args = picked;
+						}
+					} catch {}
+				}
+				const isError =
+					item.status === "failed" ||
+					item.status === "rejected" ||
+					item.status === "timedOut" ||
+					item.status === "cancelled" ||
+					result.startsWith("tool denied");
+				upsertMsp(item.itemId, { kind: "tool", at, name, args, result, ...(isError ? { isError: true } : {}) });
+			} else if (item.kind === "webSearch" && event.method === "item/completed") {
+				upsertMsp(item.itemId, {
+					kind: "tool",
+					at,
+					name: "web_search",
+					args: item.fallbackText ? { query: item.fallbackText } : {},
+					result: item.text ?? item.fallbackText ?? "",
+				});
+			} else if (item.kind === "agentMessage" && event.method === "item/completed" && item.text?.trim()) {
+				upsertMsp(item.itemId, { kind: "text", at, text: item.text.trim() });
+			}
+			continue;
+		}
+
+		// Legacy `muse exec --json` events (`{ received_at, payload }`)
+		const payload = event.payload;
 		if (payload === undefined) continue;
-		const at = event?.received_at ?? 0;
 		if (payload.kind === "tool_call" && payload.call_id !== undefined) {
 			const args = payload.arguments ?? payload.input;
 			if (args !== undefined && typeof args === "object") callArgs.set(payload.call_id, args);

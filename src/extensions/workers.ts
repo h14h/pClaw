@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
@@ -20,7 +19,8 @@ import {
 } from "@earendil-works/pi-durable";
 import { type Config, isPagesEnabled, isT3Enabled } from "../config.ts";
 import type { WorkerItem } from "../dashboard/types.ts";
-import { MUSE, museArgs, musePreamble, museRun, museTranscript } from "../muse.ts";
+import { MUSE, musePreamble, museServeArgs, museTranscript } from "../muse.ts";
+import { type LiveWorkerHandle, runMuseMsp, uuidv7, WorkerRunEndedError } from "../muse-msp.ts";
 import { pairedClient, runT3Turn } from "../t3-client.ts";
 import { type PromptResolver, prompts } from "../prompts.ts";
 import type { WorkerSandbox } from "../sandbox.ts";
@@ -165,10 +165,11 @@ export function runLocalWorker(
 	signal: AbortSignal | undefined,
 	thinking: string,
 	job: Job,
+	onHandle?: (handle: LiveWorkerHandle) => void,
 ): Promise<WorkerResult> {
 	if (job.provider === T3) return runT3(options, job, sessionId, message, signal);
 	return job.provider === MUSE
-		? runMuse(options, job, sessionId, message, thinking, signal)
+		? runMuse(options, job, sessionId, message, thinking, signal, onHandle)
 		: runPi(options, job, sessionId, message, thinking, signal);
 }
 
@@ -180,9 +181,10 @@ export function runWorker(
 	signal?: AbortSignal,
 	depth: Depth = "deep",
 	job: Job = jobOf(options, {}),
+	onHandle?: (handle: LiveWorkerHandle) => void,
 ): Promise<WorkerResult> {
 	const thinking = depth === "quick" ? options.quickThinkingLevel : options.thinkingLevel;
-	return runLocalWorker(options, sessionId, message, signal, thinking, job);
+	return runLocalWorker(options, sessionId, message, signal, thinking, job, onHandle);
 }
 
 /** Where a T3 worker's thread id (its session) is kept, beside the pi/Muse session files. */
@@ -267,22 +269,41 @@ function runPi(options: WorkerOptions, job: Job, sessionId: string, message: str
 	);
 }
 
-function runMuse(options: WorkerOptions, job: Job, sessionId: string, message: string, thinking: string, signal?: AbortSignal): Promise<WorkerResult> {
+async function runMuse(
+	options: WorkerOptions,
+	job: Job,
+	sessionId: string,
+	message: string,
+	thinking: string,
+	signal?: AbortSignal,
+	onHandle?: (handle: LiveWorkerHandle) => void,
+): Promise<WorkerResult> {
 	const transcript = museTranscript(options.sessionDir, sessionId);
-	// pclaw's worker prompt goes in front of the session's first message; later turns are in the same Muse session.
+	// pclaw's worker prompt goes in front of the session's first message; later turns resume the same Muse session.
 	const first = !existsSync(transcript);
 	const prompt = `${first ? `${musePreamble(options)}\n\n---\n\n` : ""}Message from pclaw:\n\n${message}`;
-	const run = museRun(transcript);
-	const args = museArgs({ model: job.model, effort: thinking, sessionId, cwd: options.cwd }, prompt);
-	const finish = (code: number | null, _stdout: string, stderr: string): WorkerResult => {
-		const result = run.finish();
-		if (result !== undefined) return { ok: result.ok, output: clip(result.output) };
-		// Muse prints its setup notes to stderr as "muse: ..."; they're noise in a failure report.
-		const errors = stderr.split("\n").filter((line) => line.trim() !== "" && !line.startsWith("muse: ")).join("\n");
-		return { ok: false, output: clip(`exit ${code}\n${errors || "Muse ended without a result."}`) };
-	};
+	const args = museServeArgs({ model: job.model });
 	const extraEnv = options.allowPages === false ? { PCLAW_DISABLE_PAGES: "1" } : undefined;
-	return spawnWorker(options, options.museCommand, args, signal, finish, (chunk) => run.write(chunk), extraEnv);
+	const result = await runMuseMsp({
+		spawnProcess: () =>
+			spawn(options.museCommand, args, {
+				cwd: options.cwd,
+				...(extraEnv === undefined ? {} : { env: { ...process.env, ...extraEnv } }),
+				stdio: ["pipe", "pipe", "pipe"],
+			}),
+		sessionId,
+		workspaceRoot: resolve(options.cwd),
+		model: job.model,
+		effort: thinking,
+		prompt,
+		transcript,
+		resume: !first,
+		timeoutMs: options.timeoutMs,
+		...(signal === undefined ? {} : { signal }),
+		...(onHandle === undefined ? {} : { onHandle }),
+		label: options.museCommand,
+	});
+	return { ok: result.ok, output: clip(result.output) };
 }
 
 /** Run a worker process. `finish` reads its result; a timeout or a failure to start becomes a failed result. */
@@ -368,6 +389,10 @@ export type WorkerHooks = {
 };
 
 export function workersExtension(options: WorkerOptions, harness: { current?: Harness }, hooks: WorkerHooks = {}) {
+	/** Active live handles (Muse MSP `muse serve` runs) keyed by `${conversationId}:${workerName}`. */
+	const liveHandles = new Map<string, LiveWorkerHandle>();
+	const handleKey = (conversationId: ConversationId, name: string) => `${conversationId}:${name}`;
+
 	const Run = defineTask<RunInput, RunState, null>({
 		name: "pclaw.worker-run",
 		version: 1,
@@ -380,28 +405,42 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 				const message = task.input.depth === "quick" ? `${QUICK_NOTE}\n\n${task.input.message}` : task.input.message;
 				const job = jobOf(options, task.input);
 				const thinking = (task.input.depth ?? "deep") === "quick" ? options.quickThinkingLevel : options.thinkingLevel;
+				const key = handleKey(runtime.conversationId, task.input.name);
+				let registeredHandle: LiveWorkerHandle | undefined;
+				const onHandle = (handle: LiveWorkerHandle) => {
+					registeredHandle = handle;
+					liveHandles.set(key, handle);
+				};
 				let result: WorkerResult;
-				if (hooks.resolveSandbox !== undefined) {
-					const { sandbox, sessionDir } = await hooks.resolveSandbox(runtime, runtime.conversationId, context);
-					result = await sandbox.runWorker({
-						sessionId: task.input.sessionId,
-						sessionDir,
-						message: resumed ? RESUME : message,
-						thinking,
-						job,
-						...(context.abortSignal === undefined ? {} : { signal: context.abortSignal }),
-						timeoutMs: options.timeoutMs,
-						workerOptions: options,
-					});
-				} else {
-					result = await runWorker(
-						options,
-						task.input.sessionId,
-						resumed ? RESUME : message,
-						context.abortSignal,
-						task.input.depth,
-						job,
-					);
+				try {
+					if (hooks.resolveSandbox !== undefined) {
+						const { sandbox, sessionDir } = await hooks.resolveSandbox(runtime, runtime.conversationId, context);
+						result = await sandbox.runWorker({
+							sessionId: task.input.sessionId,
+							sessionDir,
+							message: resumed ? RESUME : message,
+							thinking,
+							job,
+							...(context.abortSignal === undefined ? {} : { signal: context.abortSignal }),
+							timeoutMs: options.timeoutMs,
+							workerOptions: options,
+							onHandle,
+						});
+					} else {
+						result = await runWorker(
+							options,
+							task.input.sessionId,
+							resumed ? RESUME : message,
+							context.abortSignal,
+							task.input.depth,
+							job,
+							onHandle,
+						);
+					}
+				} finally {
+					if (registeredHandle !== undefined && liveHandles.get(key) === registeredHandle) {
+						liveHandles.delete(key);
+					}
 				}
 				await runtime.commit(() => ({ status: "running", checkpoint: { phase: "report", ...result } }), context);
 			},
@@ -505,7 +544,7 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 					if (taken !== undefined && taken.status !== "failed" && taken.status !== "stopped") {
 						throw new Error(`There's already a worker named ${name}. Use message_worker, or pick a new name.`);
 					}
-					const sessionId = taken?.sessionId ?? randomUUID();
+					const sessionId = taken?.sessionId ?? uuidv7();
 					// In a channel the work lives in its own thread, so its report and any follow-ups land there.
 					const asking = { name, brief, sessionId, conversationId: api.conversationId, ...(ask === undefined ? {} : { ask }) };
 					const session = taken !== undefined ? undefined : await hooks.session?.(asking, context).catch((error: unknown) => {
@@ -535,11 +574,49 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 			defineTool({
 				name: "message_worker",
 				description:
-					"Send a follow-up, correction, answer, or go-ahead to an idle worker you started earlier. " +
-					"Only works on idle workers (not currently running ones — use list_workers to check status or stop_worker first). It remembers the job.",
-				parameters: obj({ name: str(), message: str() }, { open: true }),
-				execute: async ({ name, message }, api, context) => {
+					"Send a follow-up, correction, redirect, answer, or go-ahead to a worker you started earlier. " +
+					"If the worker is currently running, steers it live mid-turn (mode='steer', default) or queues a follow-up right after its current turn (mode='queue') without restarting it. " +
+					"If the worker is idle/stopped/failed, resumes its session with the follow-up. It remembers the job.",
+				parameters: obj(
+					{
+						name: str(),
+						message: str(),
+						mode: opt(
+							union([lit("steer"), lit("queue")], {
+								description:
+									'While the worker is running: "steer" (default) injects the message mid-turn to redirect immediately; "queue" runs it as a follow-up right after the current turn finishes. Ignored when idle.',
+							}),
+						),
+					},
+					{ open: true },
+				),
+				execute: async ({ name, message, mode = "steer" }, api, context) => {
 					const ask = await currentAsk(harness.current, api, api.conversationId, context);
+					const snapshot = (await api.snapshot(Workers, api.conversationId, context))?.workers[name];
+					if (snapshot === undefined) throw new Error(`No worker named ${name}.`);
+
+					if (snapshot.status === "working") {
+						const handle = liveHandles.get(handleKey(api.conversationId, name));
+						if (handle === undefined) {
+							throw new Error(`${name} is still working and does not support live steering right now. Wait for its report, or stop it first.`);
+						}
+						const thinking = (snapshot.depth ?? "deep") === "quick" ? options.quickThinkingLevel : options.thinkingLevel;
+						try {
+							if (mode === "queue") {
+								await handle.queue(message, thinking);
+								return { ...text(`Queued for ${name}.`), control: { terminate: true } };
+							}
+							const steered = await handle.steer(message, thinking);
+							return {
+								...text(steered.disposition === "steered" ? `Steered ${name} mid-run.` : `Queued for ${name}.`),
+								control: { terminate: true },
+							};
+						} catch (error) {
+							if (!(error instanceof WorkerRunEndedError)) throw error;
+							// Worker finished right as we tried to steer/queue; fall through to idle resume.
+						}
+					}
+
 					const outcome = await api.commit(async (tx) => {
 						const worker = (await tx.doc(Workers, api.conversationId)).workers[name];
 						if (worker === undefined) return `No worker named ${name}.`;
@@ -564,6 +641,8 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 					const worker = (await api.snapshot(Workers, api.conversationId, context))?.workers[name];
 					if (worker?.run === undefined) return text(`${name} isn't running.`);
 					if (harness.current === undefined) throw new Error("pclaw is still starting up.");
+					const handle = liveHandles.get(handleKey(api.conversationId, name));
+					if (handle !== undefined) await handle.interrupt().catch(() => undefined);
 					await harness.current.abortTask(worker.run, context);
 					return text(`Stopped ${name}.`);
 				},

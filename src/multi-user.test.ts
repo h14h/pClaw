@@ -25,7 +25,7 @@ import { MUSE, musePreamble, museTranscript, parseMuseSession } from "./muse.ts"
 import { cleanupNotesForUsers } from "./notes-cleanup.ts";
 import { createPromptResolver } from "./prompts.ts";
 import {
-	buildRemoteMuseCommand,
+	buildRemoteMuseServeCommand,
 	createLocalSandbox,
 	createSshSandbox,
 	remotePathExpr,
@@ -658,17 +658,55 @@ test("WorkerSandbox ssh: safe escaping, env isolation, JSONL streaming, putFile,
 	mkdirSync(sessionDir, { recursive: true });
 	mkdirSync(logDir, { recursive: true });
 
-	// Create a fake `muse` binary on the "VM" that logs its args & prompt and emits valid Muse JSONL.
-	const fakeMuse = join(root, "fake-muse.sh");
+	// Create a fake `muse serve` binary on the "VM" that speaks MSP v1 JSON-RPC, logs args/prompt/workspaceRoot, and streams MSP events.
+	const fakeMuse = join(root, "fake-muse.mjs");
 	await writeFile(
 		fakeMuse,
-		`#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\\n' "$@" > "${join(logDir, "muse-args.txt")}"
-prompt="\${@: -1}"
-printf '%s' "$prompt" > "${join(logDir, "muse-prompt.txt")}"
-echo '{"payload":{"kind":"turn_input_user","prompt":"ok"}}'
-echo '{"payload":{"kind":"run_terminal","terminal":"completed","text":"remote vm result ok"}}'
+		`#!${process.execPath}
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+const args = process.argv.slice(2);
+writeFileSync(${JSON.stringify(join(logDir, "muse-args.txt"))}, args.join("\\n") + "\\n");
+const stateFile = ${JSON.stringify(join(logDir, "muse-sessions.json"))};
+const loadSessions = () => (existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, "utf8")) : {});
+const saveSessions = (s) => writeFileSync(stateFile, JSON.stringify(s));
+let sessionId = "";
+const send = (msg) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...msg }) + "\\n");
+const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
+rl.on("line", (line) => {
+	if (!line.trim()) return;
+	const msg = JSON.parse(line);
+	if (msg.method === "initialize") {
+		send({ id: msg.id, result: { serverInfo: { name: "fake-muse", version: "1.0.0" } } });
+	} else if (msg.method === "session/start") {
+		sessionId = msg.params.sessionId;
+		writeFileSync(${JSON.stringify(join(logDir, "muse-workspace.txt"))}, String(msg.params.workspaceRoot ?? ""));
+		const sessions = loadSessions();
+		sessions[sessionId] = true;
+		saveSessions(sessions);
+		send({ id: msg.id, result: { session: { sessionId, approvalMode: { mode: msg.params.approvalMode ?? "allowAll" } } } });
+	} else if (msg.method === "session/resume") {
+		const sessions = loadSessions();
+		if (!sessions[msg.params.sessionId]) {
+			send({ id: msg.id, error: { code: -32020, message: "session not found", data: { kind: "sessionNotFound" } } });
+			return;
+		}
+		sessionId = msg.params.sessionId;
+		send({ id: msg.id, result: { session: { sessionId, approvalMode: { mode: "allowAll" } } } });
+	} else if (msg.method === "turn/start") {
+		const prompt = msg.params.input.map((p) => p.text ?? "").join("\\n");
+		const turnId = msg.params.commandId;
+		writeFileSync(${JSON.stringify(join(logDir, "muse-prompt.txt"))}, prompt);
+		send({ id: msg.id, result: { commandId: msg.params.commandId, disposition: "started", startedNewTurn: true, status: "accepted", turnId } });
+		send({ method: "turn/started", params: { sessionId, turnId, commandId: msg.params.commandId } });
+		send({ method: "item/completed", params: { sessionId, item: { itemId: "u-" + turnId, kind: "userMessage", status: "completed", text: prompt, turnId } } });
+		send({ method: "item/completed", params: { sessionId, item: { itemId: "a-" + turnId, kind: "agentMessage", messagePhase: "finalAnswer", status: "completed", text: "remote vm result ok", turnId } } });
+		send({ method: "turn/completed", params: { sessionId, turnId, terminal: "completed" } });
+	} else if (msg.method === "session/leave") {
+		send({ id: msg.id, result: { commandId: msg.params.commandId, status: "accepted" } });
+		process.exit(0);
+	}
+});
 `,
 	);
 	await chmod(fakeMuse, 0o755);
@@ -690,16 +728,14 @@ HOME="${fakeVmHome}" exec bash -c "$cmd"
 	// Verify helper quoting & preamble safety directly
 	assert.equal(shellQuote("a'b $(rm -rf /)"), `'a'\\''b $(rm -rf /)'`);
 	assert.equal(remotePathExpr("~/work"), '"$HOME"/\'work\'');
-	const remoteCmdPreview = buildRemoteMuseCommand({
+	const remoteCmdPreview = buildRemoteMuseServeCommand({
 		museBin: "~/.local/bin/muse",
 		workDir: "~/work",
 		model: "muse-wonder-full-1.0",
-		effort: "high",
-		sessionId: "sess-1",
 	});
 	assert.match(remoteCmdPreview, /export PATH="\$HOME\/\.local\/bin:\$PATH"/);
-	assert.match(remoteCmdPreview, /"\$HOME"\/'\.local\/bin\/muse' exec --json/);
-	assert.match(remoteCmdPreview, /--approval-mode never --disable-sandbox --disable-request-user-input --no-foreign-personal-context/);
+	assert.match(remoteCmdPreview, /exec "\$HOME"\/'\.local\/bin\/muse' serve --model 'muse-wonder-full-1\.0'/);
+	assert.match(remoteCmdPreview, /--disable-sandbox --disable-request-user-input/);
 
 	// Verify VM-safe preamble omits host worker-cli.ts, systemctl restart, and publish_page
 	const fakeWorkerOpts = makeFakeWorkers("ssh-worker-opts");

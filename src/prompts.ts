@@ -111,7 +111,7 @@ export function filterFrontPrompt(text: string, flags: PromptFeatureFlags = {}):
 				"`<worker-report>` is a worker finishing. It's for you, not them.",
 			)
 			.replace(/^A job's card already shows its status,[^\n]*\n*/gm, "")
-			.replace(/`message_worker` or `message_job`/g, "`message_worker`")
+			.replace(/ or `message_job`/g, "")
 			.replace(/ Never guess how something is going: `list_jobs` has the real state\./g, " Never guess how something is going: `list_workers` has the real state.")
 			.replace(/ If T3 is down, `start_job` still works: the job waits and starts itself\./g, "")
 			.replace(/^`<job-result>` records how a job ended[^\n]*\n*/gm, "");
