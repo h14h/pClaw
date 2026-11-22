@@ -448,6 +448,118 @@ test("extractReplyContext and buildTelegramUserInput normalize replies, quotes, 
 	}
 });
 
+test("buildTelegramUserInput saves and stages compressed photos while keeping them inline", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pclaw-tg-photo-"));
+	try {
+		const inboxDir = join(dir, "inbox");
+		const fakeApi = {
+			async getFile(fileId: string) {
+				return { file_id: fileId, file_path: `photos/${fileId}` };
+			},
+			async downloadFile(filePath: string) {
+				return new Uint8Array(Buffer.from(`bytes:${filePath}`));
+			},
+			async sendChatAction() {
+				return true;
+			},
+		};
+		const photoMsg = (id: number, fileId: string, extra: Partial<TelegramMessage> = {}): TelegramMessage => ({
+			message_id: id,
+			date: 1_700_000_400,
+			chat: { id: 101, type: "private" },
+			from: { id: 101, first_name: "Alice" },
+			photo: [
+				{ file_id: "thumb", width: 90, height: 90, file_size: 100 },
+				{ file_id: fileId, width: 1280, height: 960, file_size: 50_000 },
+			],
+			...extra,
+		});
+
+		// Single photo: inline ImageContent for the front model, plus a saved file staged to the VM inbox.
+		const staged: { localPath: string; filename: string }[] = [];
+		const stageFile = async (localPath: string, filename: string) => {
+			staged.push({ localPath, filename });
+			return `~/inbox/${filename}`;
+		};
+		const single = await buildTelegramUserInput([photoMsg(70, "big.jpg", { caption: "what's this plant?" })], {
+			api: fakeApi,
+			timeZone: "UTC",
+			inboxDir,
+			stageFile,
+		});
+		assert.ok(Array.isArray(single.content));
+		const singleImages = single.content.filter((p) => p.type === "image");
+		assert.equal(singleImages.length, 1);
+		assert.equal(singleImages[0]!.mimeType, "image/jpeg");
+		assert.equal(Buffer.from(singleImages[0]!.data, "base64").toString("utf8"), "bytes:photos/big.jpg");
+		const singleLocal = join(inboxDir, "tg-101-70-photo-70.jpg");
+		assert.equal(readFileSync(singleLocal, "utf8"), "bytes:photos/big.jpg");
+		assert.deepEqual(staged, [{ localPath: singleLocal, filename: "tg-101-70-photo-70.jpg" }]);
+		const singleText = single.content[0]!;
+		assert.equal(singleText.type, "text");
+		assert.match(singleText.text, /what's this plant\?/);
+		assert.match(singleText.text, /\[attached photo "photo-70\.jpg" \(image\/jpeg, \d+ bytes\), saved at ~\/inbox\/tg-101-70-photo-70\.jpg\]/);
+
+		// Album: each photo gets its own file (message id + MIME-derived extension), none overwritten.
+		staged.length = 0;
+		const album = await buildTelegramUserInput(
+			[
+				photoMsg(80, "a.jpg", { media_group_id: "g2", caption: "receipts" }),
+				photoMsg(81, "b.jpg", { media_group_id: "g2" }),
+				photoMsg(82, "c.png", { media_group_id: "g2" }),
+			],
+			{ api: fakeApi, timeZone: "UTC", inboxDir, stageFile },
+		);
+		assert.ok(Array.isArray(album.content));
+		assert.equal(album.content.filter((p) => p.type === "image").length, 3);
+		assert.deepEqual(
+			staged.map((s) => s.filename),
+			["tg-101-80-photo-80.jpg", "tg-101-81-photo-81.jpg", "tg-101-82-photo-82.png"],
+		);
+		assert.equal(readFileSync(join(inboxDir, "tg-101-80-photo-80.jpg"), "utf8"), "bytes:photos/a.jpg");
+		assert.equal(readFileSync(join(inboxDir, "tg-101-81-photo-81.jpg"), "utf8"), "bytes:photos/b.jpg");
+		assert.equal(readFileSync(join(inboxDir, "tg-101-82-photo-82.png"), "utf8"), "bytes:photos/c.png");
+		for (const name of ["tg-101-80-photo-80.jpg", "tg-101-81-photo-81.jpg", "tg-101-82-photo-82.png"]) {
+			assert.ok(album.plainText.includes(`saved at ~/inbox/${name}]`), `missing staged path for ${name}`);
+		}
+
+		// Staging failure: warn, keep the inline image, and point at the local copy.
+		const originalWarn = console.warn;
+		const warnings: unknown[][] = [];
+		console.warn = (...args: unknown[]) => {
+			warnings.push(args);
+		};
+		let failed: Awaited<ReturnType<typeof buildTelegramUserInput>>;
+		try {
+			failed = await buildTelegramUserInput([photoMsg(90, "d.jpg")], {
+				api: fakeApi,
+				timeZone: "UTC",
+				inboxDir,
+				stageFile: async () => {
+					throw new Error("Connection refused");
+				},
+			});
+		} finally {
+			console.warn = originalWarn;
+		}
+		assert.equal(warnings.length, 1);
+		assert.ok(Array.isArray(failed.content));
+		const failedImages = failed.content.filter((p) => p.type === "image");
+		assert.equal(failedImages.length, 1);
+		assert.equal(Buffer.from(failedImages[0]!.data, "base64").toString("utf8"), "bytes:photos/d.jpg");
+		assert.match(
+			failed.plainText,
+			/\[attached photo "photo-90\.jpg" \(image\/jpeg, \d+ bytes\), saved locally at .*tg-101-90-photo-90\.jpg, but staging to workspace failed: Connection refused\]/,
+		);
+
+		// No staging hook: the local inbox path is given instead.
+		const local = await buildTelegramUserInput([photoMsg(91, "e.jpg")], { api: fakeApi, timeZone: "UTC", inboxDir });
+		assert.ok(local.plainText.includes(`saved at ${join(inboxDir, "tg-101-91-photo-91.jpg")}]`));
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
 test("createTelegramApi falls back to plain text on 400 parse errors, maps reactions, and uploads documents", async () => {
 	const calls: { method: string; body: unknown }[] = [];
 	let failHtmlOnce = true;

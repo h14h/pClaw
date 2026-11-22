@@ -91,14 +91,14 @@ else
   echo "Warning: local 'muse' binary not found in PATH (set MUSE_BIN=/path/to/muse to copy it)." >&2
 fi
 
-# 4. Install PDF inspection essentials (poppler-utils, pypdf, pdfplumber) idempotently.
-echo "==> Installing poppler-utils and Python PDF tools (pypdf, pdfplumber) on '${VM_HOST}'"
+# 4. Install CLI and PDF essentials (poppler-utils, ripgrep, curl, jq, pypdf, pdfplumber, pymupdf) idempotently.
+echo "==> Installing poppler-utils, ripgrep, curl, jq and Python PDF tools (pypdf, pdfplumber, pymupdf) on '${VM_HOST}'"
 ssh "${SSH_OPTS[@]}" "$VM_HOST" '
   set -euo pipefail
   sudo apt-get update -qq
-  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq poppler-utils python3
-  sudo uv pip install --system --break-system-packages pypdf pdfplumber
-  python3 -c "import pypdf, pdfplumber; print(\"PDF libs OK:\", pypdf.__version__, pdfplumber.__version__)"
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq poppler-utils python3 ripgrep curl jq
+  sudo uv pip install --system --break-system-packages pypdf pdfplumber pymupdf
+  python3 -c "import pypdf, pdfplumber, pymupdf; print(\"PDF libs OK:\", pypdf.__version__, pdfplumber.__version__, \"pymupdf\")"
   pdftotext -v 2>&1 | head -n 1 || true
 '
 

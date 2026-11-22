@@ -723,6 +723,50 @@ function saveToInbox(inboxDir: string, message: TelegramMessage, originalName: s
 	return savedPath;
 }
 
+function photoExtension(mime: string): string {
+	switch (mime) {
+		case "image/png":
+			return ".png";
+		case "image/webp":
+			return ".webp";
+		case "image/gif":
+			return ".gif";
+		default:
+			return ".jpg";
+	}
+}
+
+/**
+ * Save a compressed Telegram photo to the inbox (and stage it to the user's workspace when a hook is given)
+ * so workers can open the file by path. Returns the note for the user turn; never throws, because the inline
+ * image already reached the front model.
+ */
+async function savePhoto(
+	inboxDir: string,
+	message: TelegramMessage,
+	mime: string,
+	bytes: Uint8Array,
+	stageFile: BuildInputOptions["stageFile"],
+): Promise<string> {
+	const name = `photo-${message.message_id}${photoExtension(mime)}`;
+	let savedPath: string;
+	try {
+		savedPath = saveToInbox(inboxDir, message, name, bytes);
+	} catch (error) {
+		console.error("[pclaw] couldn't save Telegram photo to inbox", error);
+		return `[attached photo "${name}" (${mime}, ${bytes.byteLength} bytes), shown inline but not saved to a file]`;
+	}
+	if (stageFile === undefined) return `[attached photo "${name}" (${mime}, ${bytes.byteLength} bytes), saved at ${savedPath}]`;
+	try {
+		const stagedPath = await stageFile(savedPath, basename(savedPath));
+		return `[attached photo "${name}" (${mime}, ${bytes.byteLength} bytes), saved at ${stagedPath}]`;
+	} catch (error) {
+		const reason = error instanceof Error ? error.message : String(error);
+		console.warn("[pclaw] couldn't stage Telegram photo to sandbox", error);
+		return `[attached photo "${name}" (${mime}, ${bytes.byteLength} bytes), saved locally at ${savedPath}, but staging to workspace failed: ${reason}]`;
+	}
+}
+
 export type BuildInputOptions = {
 	api: Pick<TelegramApi, "getFile" | "downloadFile" | "sendChatAction">;
 	timeZone: string;
@@ -740,7 +784,7 @@ export type BuildInputOptions = {
 
 /**
  * Normalize one Telegram message (or a batched album of messages sharing `media_group_id`) into a `UserInput`
- * for Pi Durable, handling photos (`ImageContent` <= 10 MB), voice/audio transcription (`speechUrl`),
+ * for Pi Durable, handling photos (`ImageContent` <= 10 MB, also saved to inbox), voice/audio transcription (`speechUrl`),
  * documents (<= 20 MB saved to inbox), and reply/quote context.
  */
 export async function buildTelegramUserInput(
@@ -771,7 +815,7 @@ export async function buildTelegramUserInput(
 		const body = (message.text ?? message.caption ?? "").trim();
 		if (body !== "") textLines.push(body);
 
-		// 1. Photos: pick largest PhotoSize (photo[-1]), <= 10 MB -> ImageContent.
+		// 1. Photos: pick largest PhotoSize (photo[-1]), <= 10 MB -> ImageContent, plus a saved (and staged) file for workers.
 		if (message.photo !== undefined && message.photo.length > 0) {
 			const largest = message.photo[message.photo.length - 1]!;
 			if (largest.file_size !== undefined && largest.file_size > MAX_IMAGE_BYTES) {
@@ -786,12 +830,10 @@ export async function buildTelegramUserInput(
 						if (bytes.byteLength > MAX_IMAGE_BYTES) {
 							notes.push(`[attached photo (${bytes.byteLength} bytes), larger than the 10 MB image limit]`);
 						} else {
-							const mime = mimeFromPath(file.file_path);
-							parts.push({
-								type: "image",
-								data: Buffer.from(bytes).toString("base64"),
-								mimeType: mime.startsWith("image/") ? mime : "image/jpeg",
-							});
+							const detected = mimeFromPath(file.file_path);
+							const mime = detected.startsWith("image/") ? detected : "image/jpeg";
+							parts.push({ type: "image", data: Buffer.from(bytes).toString("base64"), mimeType: mime });
+							notes.push(await savePhoto(inboxDir, message, mime, bytes, options.stageFile));
 						}
 					}
 				} catch (error) {
