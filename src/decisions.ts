@@ -229,30 +229,37 @@ export type MessageFacts = {
 	/** It was spoken. One read of a long memo can miss an ask at the end, so it gets its own hint. */
 	voice?: boolean;
 	project?: { project: string; machine: string };
+	/** When false, omit T3 / machine-check / project hints while keeping all non-T3 hints active. */
+	allowT3?: boolean;
 };
 
 /** Simple questions can read as research, so that hint needs a firmer read unless the answer has to be looked up. */
 const WORKER_THRESHOLD = 0.7;
 
 export function messageGuidance(answers: Answers, facts: MessageFacts = {}, templates?: Record<string, string>): string | undefined {
+	const allowT3 = facts.allowT3 !== false;
 	const picks: string[] = [];
 	const size = pick(answers.job_size);
 	const inJob = pick(answers.in_job).choice;
 	const fresh = yes(answers.fresh_check) >= 0.5;
 	// A question about running work mentions the work, so it reads as new work unless this comes first.
 	if ((yes(answers.asks_status) >= 0.5 && facts.liveJobs === true) || inJob === "status") picks.push("message.status");
-	else if (inJob === "steer") picks.push("message.steer");
+	else if (allowT3 && inJob === "steer") picks.push("message.steer");
 	else if (facts.voice === true) picks.push("message.voice");
 	else if (yes(answers.thinking_aloud) >= 0.7 && yes(answers.firm_ask) < 0.3) picks.push("message.thinking_aloud");
-	else if (size.choice === "t3_job" && size.p >= 0.5) {
+	else if (allowT3 && size.choice === "t3_job" && size.p >= 0.5) {
 		picks.push("message.t3_job");
 		if (facts.project !== undefined) picks.push("message.project");
-	} else if (fresh) picks.push(facts.namesMachine === true ? "message.machine_check" : "message.fresh");
-	else if (size.choice === "quick_worker" && size.p >= WORKER_THRESHOLD) picks.push("message.quick_worker");
+	} else if (fresh) picks.push(allowT3 && facts.namesMachine === true ? "message.machine_check" : "message.fresh");
+	else if ((size.choice === "quick_worker" && size.p >= WORKER_THRESHOLD) || (!allowT3 && size.choice === "t3_job" && size.p >= WORKER_THRESHOLD)) {
+		picks.push("message.quick_worker");
+	}
 	const noise = pick(answers.noise_feedback);
 	if (noise.choice !== undefined && noise.choice !== "neither" && noise.p >= 0.5) picks.push(`message.${noise.choice}`);
 	if (yes(answers.hard_to_undo) >= 0.5) picks.push("caution");
-	return renderGuidance(answers, picks, facts.project ?? {}, templates);
+	const rendered = renderGuidance(answers, picks, allowT3 ? (facts.project ?? {}) : {}, templates);
+	if (rendered === undefined || allowT3) return rendered;
+	return rendered.replaceAll("`list_jobs`", "`list_workers`");
 }
 
 export const projectQuestion = (projects: { title: string; machine: string }[]): Questions => ({

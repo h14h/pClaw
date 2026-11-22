@@ -3,6 +3,7 @@ import { basename, extname, join } from "node:path";
 import type { Context } from "@earendil-works/chord/context";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import {
+	AssistantEntry,
 	type Conversation,
 	type ConversationId,
 	defineDoc,
@@ -34,6 +35,7 @@ const MAX_FILE_BYTES = 20 * 1024 * 1024;
 /** Telegram typing indicators expire after ~5s. */
 const TYPING_REFRESH_MS = 4_000;
 const MEDIA_GROUP_DEBOUNCE_MS = 600;
+const CAPTIONLESS_FILE_DEBOUNCE_MS = 2_000;
 const QUOTE_LIMIT = 800;
 const RESYNC_ON_ATTACH = 10;
 const POLL_TIMEOUT_SECONDS = 30;
@@ -198,6 +200,8 @@ export type TelegramApi = {
 	): Promise<TelegramMessage[]>;
 	sendChatAction(chatId: number | string, action: "typing" | "upload_document" | "upload_photo", signal?: AbortSignal): Promise<boolean>;
 	setMessageReaction(chatId: number | string, messageId: number, emoji: string | undefined, signal?: AbortSignal): Promise<boolean>;
+	deleteMessage(chatId: number | string, messageId: number, signal?: AbortSignal): Promise<boolean>;
+	deleteMyCommands(signal?: AbortSignal): Promise<boolean>;
 	getFile(fileId: string, signal?: AbortSignal): Promise<TelegramFile>;
 	downloadFile(filePath: string, signal?: AbortSignal): Promise<Uint8Array<ArrayBuffer>>;
 	sendDocument(chatId: number | string, file: OutboundFileInput, options?: SendMediaOptions, signal?: AbortSignal): Promise<TelegramMessage>;
@@ -267,6 +271,9 @@ export function createTelegramApi(options: {
 				sent.push(message);
 			} catch (error) {
 				if (!isTelegramParseError(error)) throw error;
+				console.warn(
+					`[pclaw] Telegram sendMessage HTML parse fallback to plain text: ${error instanceof TelegramApiError ? error.description : String(error)}`,
+				);
 				// Plain-text fallback so Telegram 400 entity parse errors never drop a reply.
 				const plainChunks = splitPlainText(stripTelegramHtml(chunk), TELEGRAM_MAX_MESSAGE);
 				for (const [plainIdx, plain] of plainChunks.entries()) {
@@ -338,6 +345,9 @@ export function createTelegramApi(options: {
 			return await sendForm(buildForm(htmlCaption, htmlCaption === undefined ? undefined : "HTML"));
 		} catch (error) {
 			if (!isTelegramParseError(error) || htmlCaption === undefined) throw error;
+			console.warn(
+				`[pclaw] Telegram ${method} HTML parse fallback to plain text: ${error instanceof TelegramApiError ? error.description : String(error)}`,
+			);
 			const plainCaption = splitPlainText(stripTelegramHtml(htmlCaption), TELEGRAM_MAX_CAPTION)[0];
 			return sendForm(buildForm(plainCaption, undefined));
 		}
@@ -361,6 +371,15 @@ export function createTelegramApi(options: {
 				signal,
 			);
 		},
+		deleteMessage: async (chatId, messageId, signal) => {
+			try {
+				return await call<boolean>("deleteMessage", { chat_id: chatId, message_id: messageId }, signal);
+			} catch (error) {
+				if (error instanceof TelegramApiError && error.status === 400) return false;
+				throw error;
+			}
+		},
+		deleteMyCommands: (signal) => call<boolean>("deleteMyCommands", {}, signal),
 		getFile: (fileId, signal) => call<TelegramFile>("getFile", { file_id: fileId }, signal),
 		downloadFile: async (filePath, signal) => {
 			const response = await fetchFn(`${base}/file/bot${options.token}/${filePath.replace(/^\/+/, "")}`, {
@@ -562,6 +581,92 @@ export function createMediaGroupBuffer(options: {
 		},
 		async flushAll() {
 			for (const key of [...pending.keys()]) runFlush(key);
+			await Promise.all([...inFlight]);
+		},
+		stop() {
+			for (const entry of pending.values()) clearTimeout(entry.timer);
+			pending.clear();
+		},
+	};
+}
+
+function isCaptionlessMediaBatch(messages: readonly TelegramMessage[]): boolean {
+	if (messages.length === 0) return false;
+	return messages.every((msg) => {
+		const hasMedia = msg.document !== undefined || (msg.photo !== undefined && msg.photo.length > 0);
+		const hasAudio = msg.voice !== undefined || msg.audio !== undefined;
+		const hasText = (msg.text ?? msg.caption ?? "").trim() !== "";
+		return hasMedia && !hasAudio && !hasText;
+	});
+}
+
+/**
+ * Briefly hold a captionless document/photo (~2s default) so if the same user sends their instruction text
+ * right after the file, both merge into one turn instead of kicking off a bare-file worker prematurely.
+ */
+export function createCaptionlessFileBuffer(options: {
+	delayMs?: number;
+	onFlush: (messages: TelegramMessage[]) => void | Promise<void>;
+	onError?: (error: unknown) => void;
+}) {
+	const delayMs = options.delayMs ?? CAPTIONLESS_FILE_DEBOUNCE_MS;
+	const pending = new Map<string, { messages: TelegramMessage[]; timer: NodeJS.Timeout }>();
+	const inFlight = new Set<Promise<void>>();
+
+	const dispatch = (messages: TelegramMessage[]) => {
+		const promise = Promise.resolve()
+			.then(() => options.onFlush(messages))
+			.catch((error: unknown) => {
+				if (options.onError !== undefined) options.onError(error);
+				else console.error("[pclaw] telegram captionless file flush failed", error);
+			})
+			.finally(() => {
+				inFlight.delete(promise);
+			});
+		inFlight.add(promise);
+	};
+
+	const flushKey = (key: string) => {
+		const entry = pending.get(key);
+		if (entry === undefined) return;
+		pending.delete(key);
+		clearTimeout(entry.timer);
+		dispatch(entry.messages);
+	};
+
+	return {
+		enqueue(messages: TelegramMessage[]) {
+			const primary = messages[0];
+			if (primary === undefined) return;
+			if (delayMs <= 0) {
+				dispatch(messages);
+				return;
+			}
+			const key = `${primary.chat.id}:${primary.from?.id ?? "anon"}`;
+			const existing = pending.get(key);
+			if (existing !== undefined) {
+				const merged = [...existing.messages, ...messages];
+				if (isCaptionlessMediaBatch(messages)) {
+					existing.messages = merged;
+					clearTimeout(existing.timer);
+					existing.timer = setTimeout(() => flushKey(key), delayMs);
+					return;
+				}
+				// User sent follow-up text (or captioned media): merge and flush right away.
+				pending.delete(key);
+				clearTimeout(existing.timer);
+				dispatch(merged);
+				return;
+			}
+			if (isCaptionlessMediaBatch(messages)) {
+				const timer = setTimeout(() => flushKey(key), delayMs);
+				pending.set(key, { messages: [...messages], timer });
+				return;
+			}
+			dispatch(messages);
+		},
+		async flushAll() {
+			for (const key of [...pending.keys()]) flushKey(key);
 			await Promise.all([...inFlight]);
 		},
 		stop() {
@@ -802,6 +907,7 @@ export type StartTelegramOptions = {
 	apiBase?: string;
 	fetchFn?: typeof fetch;
 	mediaGroupDelayMs?: number;
+	captionlessDebounceMs?: number;
 	pollTimeoutSeconds?: number;
 	inboxDir?: string;
 	voiceDir?: string;
@@ -862,9 +968,60 @@ export async function startTelegram(
 	const { jobs } = agent;
 	const me = await api.getMe();
 	console.log(`[pclaw] on Telegram as ${me.username !== undefined ? `@${me.username}` : me.id}`);
+	await api.deleteMyCommands().catch((error: unknown) =>
+		console.warn(`[pclaw] Telegram deleteMyCommands failed: ${error instanceof Error ? error.message : error}`),
+	);
 	if (ownerId === undefined && allowedUsers.size === 0 && !agent.users.enabled) {
 		console.log("[pclaw] Waiting for a Telegram DM. The first person to message it becomes its owner.");
 	}
+
+	/** Ephemeral status bubbles & delegate acks in Telegram DMs, dissolved when replaced or when the final answer lands. */
+	type EphemeralState = {
+		ackMessageIds: number[];
+		progressMessageId?: number;
+		userSpokeAfterAck: boolean;
+		pendingFinish: boolean;
+	};
+	const ephemeral = new Map<string, EphemeralState>();
+	const ephemeralFor = (addr: string): EphemeralState => {
+		let state = ephemeral.get(addr);
+		if (state === undefined) {
+			state = { ackMessageIds: [], userSpokeAfterAck: false, pendingFinish: false };
+			ephemeral.set(addr, state);
+		}
+		return state;
+	};
+	const deleteEphemeralIds = async (chatId: string | number, ids: number[]) => {
+		for (const messageId of ids) {
+			await api.deleteMessage(chatId, messageId).catch((error: unknown) =>
+				console.warn(`[pclaw] Telegram deleteMessage ${messageId} failed: ${error instanceof Error ? error.message : error}`),
+			);
+		}
+	};
+
+	const unregisterProgress = agent.progressSurfaces.register("telegram", {
+		async update({ address, message }) {
+			const parsed = parseTelegramAddress(address);
+			if (parsed === undefined || parsed.kind !== "dm") return;
+			const state = ephemeralFor(address);
+			if (state.progressMessageId !== undefined) {
+				const previous = state.progressMessageId;
+				delete state.progressMessageId;
+				await deleteEphemeralIds(parsed.chatId, [previous]);
+			}
+			const sent = await api.sendFormattedMessage(parsed.chatId, message, {
+				disableNotification: false,
+				disableLinkPreview: true,
+			});
+			const lastId = sent.at(-1)?.message_id;
+			if (lastId !== undefined) state.progressMessageId = lastId;
+		},
+		async finish({ address }) {
+			const parsed = parseTelegramAddress(address);
+			if (parsed === undefined || parsed.kind !== "dm") return;
+			ephemeralFor(address).pendingFinish = true;
+		},
+	});
 
 	const unregisterFiles = agent.fileSenders.register("telegram", async (addr, file) => {
 		const parsed = parseTelegramAddress(addr);
@@ -886,6 +1043,18 @@ export async function startTelegram(
 
 	const deliveries = new Map<string, { stop(): Promise<void> }>();
 
+	async function isDelegateAckEntry(conversation: Conversation, entryId: EntryId): Promise<boolean> {
+		const entries = (await conversation.context(context)).entries;
+		const record = entries.find((each) => each.id === entryId);
+		if (record === undefined || !AssistantEntry.is(record)) return false;
+		const message = record.model?.[0] as { content?: { type?: string; name?: string }[] } | undefined;
+		return Boolean(
+			message?.content?.some(
+				(part) => part.type === "toolCall" && (part.name === "delegate" || part.name === "message_worker"),
+			),
+		);
+	}
+
 	function outbox(addr: string, conversation: Conversation): Outbox {
 		const parsed = parseTelegramAddress(addr);
 		let typing: NodeJS.Timeout | undefined;
@@ -894,10 +1063,37 @@ export async function startTelegram(
 				if (parsed === undefined) throw new Error(`Invalid Telegram address ${addr}`);
 				const mode = jobs.delivery(addr, text);
 				if (mode === "moved") return;
+				const isAck = parsed.kind === "dm" && (await isDelegateAckEntry(conversation, entry));
 				const sent = await api.sendFormattedMessage(parsed.chatId, text, {
 					disableNotification: mode === "silent",
 					disableLinkPreview: true,
 				});
+				if (parsed.kind === "dm") {
+					if (isAck) {
+						const state = ephemeralFor(addr);
+						state.ackMessageIds = sent.map((msg) => msg.message_id);
+						state.userSpokeAfterAck = false;
+					} else {
+						const state = ephemeral.get(addr);
+						if (state !== undefined) {
+							const workersDoc = await agent.harness.snapshot(Workers, conversation.id, context);
+							const anyWorking = Object.values(workersDoc?.workers ?? {}).some((worker) => worker.status === "working");
+							if (state.pendingFinish || !anyWorking) {
+								const toDelete: number[] = [];
+								if (state.progressMessageId !== undefined) {
+									toDelete.push(state.progressMessageId);
+									delete state.progressMessageId;
+								}
+								if (!state.userSpokeAfterAck && state.ackMessageIds.length > 0) {
+									toDelete.push(...state.ackMessageIds);
+									state.ackMessageIds = [];
+								}
+								state.pendingFinish = false;
+								if (toDelete.length > 0) await deleteEphemeralIds(parsed.chatId, toDelete);
+							}
+						}
+					}
+				}
 				if (sent.length > 0) {
 					await conversation.commit(async (tx) => {
 						const doc = await tx.doc(TelegramSentMessages);
@@ -1013,6 +1209,10 @@ export async function startTelegram(
 		const conversation = await agent.conversationFor(auth.addr, context);
 		await agent.describe(conversation.id, { label }, context);
 		await attach(auth.addr, conversation);
+		if (!auth.isGroup) {
+			const state = ephemeral.get(auth.addr);
+			if (state !== undefined && state.ackMessageIds.length > 0) state.userSpokeAfterAck = true;
+		}
 
 		const inboxDir = options.inboxDir ?? userPaths?.inbox;
 		const voiceDir = options.voiceDir ?? userPaths?.voice;
@@ -1034,14 +1234,12 @@ export async function startTelegram(
 		// Ignore empty messages with no attachments or text (e.g. service messages like pinned/join notices).
 		if (built.plainText === "" && typeof built.content === "string") return;
 
-		const guidance = agent.t3Enabled
-			? await jobs.guideMessage({
-					id: `tg-${primary.chat.id}-${primary.message_id}`,
-					text: built.plainText,
-					channel: auth.isGroup ? auth.label : "telegram direct message",
-					...(built.hasVoice ? { voice: true } : {}),
-				})
-			: undefined;
+		const guidance = await jobs.guideMessage({
+			id: `tg-${primary.chat.id}-${primary.message_id}`,
+			text: built.plainText,
+			channel: auth.isGroup ? auth.label : "telegram direct message",
+			...(built.hasVoice ? { voice: true } : {}),
+		});
 
 		const content: UserInput =
 			guidance === undefined
@@ -1090,9 +1288,15 @@ export async function startTelegram(
 		);
 	}
 
+	const captionlessBuffer = createCaptionlessFileBuffer({
+		delayMs: options.captionlessDebounceMs ?? CAPTIONLESS_FILE_DEBOUNCE_MS,
+		onFlush: (batch) => handleMessageBatch(batch),
+		onError: (error) => console.error("[pclaw] couldn't handle a Telegram message batch", error),
+	});
+
 	const albumBuffer = createMediaGroupBuffer({
 		delayMs: options.mediaGroupDelayMs ?? MEDIA_GROUP_DEBOUNCE_MS,
-		onFlush: (batch) => handleMessageBatch(batch),
+		onFlush: (batch) => captionlessBuffer.enqueue(batch),
 		onError: (error) => console.error("[pclaw] couldn't handle a Telegram media group", error),
 	});
 
@@ -1137,9 +1341,7 @@ export async function startTelegram(
 						if (update.message.media_group_id !== undefined) {
 							albumBuffer.add(update.message);
 						} else {
-							await handleMessageBatch([update.message]).catch((error: unknown) =>
-								console.error("[pclaw] couldn't handle a Telegram message", error),
-							);
+							captionlessBuffer.enqueue([update.message]);
 						}
 					} else if (update.message_reaction !== undefined) {
 						await handleReactionUpdate(update.message_reaction).catch((error: unknown) =>
@@ -1164,8 +1366,10 @@ export async function startTelegram(
 		api,
 		stop: async () => {
 			unregisterFiles();
+			unregisterProgress();
 			abort.abort();
 			albumBuffer.stop();
+			captionlessBuffer.stop();
 			clearInterval(keepTyping);
 			await pollLoop;
 			for (const delivery of deliveries.values()) await delivery.stop();

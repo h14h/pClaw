@@ -60,7 +60,11 @@ export function soulExtension(timeZoneOrOptions: string | SoulOptions) {
 		sections: [
 			section(
 				"front",
-				() => (opts.prompts !== undefined ? opts.prompts.frontPrompt(opts.flags) : frontPrompt(opts.flags)),
+				async (input, context) => {
+					const channel = await channelOf(input.read, input.conversationId, context);
+					const flags = { ...opts.flags, ...(channel === undefined ? {} : { channel }) };
+					return opts.prompts !== undefined ? opts.prompts.frontPrompt(flags) : frontPrompt(flags);
+				},
 				{ tag: false },
 			),
 			section("time-zone", async (input, context) => {

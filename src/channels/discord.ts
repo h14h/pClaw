@@ -517,15 +517,13 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 			const userTimeZone = user?.timeZone ?? config.timeZone;
 			const userSandbox = user === undefined ? undefined : agent.sandboxes.sandboxForUser(user);
 			const memo = await hear(message, userPaths?.voice ?? paths.voice);
-			const guidance = agent.t3Enabled
-				? await jobs.guideMessage({
-						id: message.id,
-						text: [message.content, memo?.text].filter(Boolean).join("\n"),
-						channel: "name" in message.channel && message.channel.name !== null ? message.channel.name : "direct message",
-						...(message.channel.isThread() ? { discordThreadId: message.channelId } : {}),
-						...(memo === undefined ? {} : { voice: true }),
-					})
-				: undefined;
+			const guidance = await jobs.guideMessage({
+				id: message.id,
+				text: [message.content, memo?.text].filter(Boolean).join("\n"),
+				channel: "name" in message.channel && message.channel.name !== null ? message.channel.name : "direct message",
+				...(message.channel.isThread() ? { discordThreadId: message.channelId } : {}),
+				...(memo === undefined ? {} : { voice: true }),
+			});
 			const extra = [...route.extra, ...(await replyContext(message, client.user!.id, userTimeZone)), ...(guidance === undefined ? [] : [guidance])];
 			// Messages sent while pclaw is working join the current run at its next step, like a person cutting in.
 			await route.conversation.submit(

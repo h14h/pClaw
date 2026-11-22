@@ -20,7 +20,7 @@ export function quickSearchExtension() {
 				name: "quick_search",
 				description:
 					"One quick web search (a second or two) for a question a single lookup settles: opening hours, a time, a " +
-					"price, a date, a quick fact. Answer from what the sources say. If they don't clearly settle it, say so or " +
+					"price, a date, a quick fact. Call directly with no preamble text. Answer from what the sources say. If they don't clearly settle it, say so or " +
 					"delegate; never fill the gap with a guess. Comparisons, research, and anything needing several sources go " +
 					"to delegate instead.",
 				parameters: obj({ query: str({ description: "A specific query." }) }, { open: true }),

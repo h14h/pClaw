@@ -19,10 +19,12 @@ import {
 	type Tx,
 } from "@earendil-works/pi-durable";
 import { type Config, isPagesEnabled, isT3Enabled } from "../config.ts";
+import type { WorkerItem } from "../dashboard/types.ts";
 import { MUSE, museArgs, musePreamble, museRun, museTranscript } from "../muse.ts";
 import { pairedClient, runT3Turn } from "../t3-client.ts";
 import { type PromptResolver, prompts } from "../prompts.ts";
 import type { WorkerSandbox } from "../sandbox.ts";
+import { formatWorkerProgress } from "../worker-progress.ts";
 import { currentAsk, FAILED, isEmoji, Reactions, setReaction, WORKING } from "./reactions.ts";
 
 /**
@@ -354,7 +356,9 @@ export type WorkerHooks = {
 	/** A new worker is starting. Returns the conversation it should live in, when that's not the one that asked. */
 	session?: (worker: { name: string; brief: string; sessionId: string; conversationId: ConversationId; ask?: string }, context: Context) => Promise<Conversation | undefined>;
 	/** A run ended and its report is about to go in. */
-	reporting?: (worker: { name: string; conversationId: ConversationId; ok: boolean }, context: Context) => Promise<void>;
+	reporting?: (worker: { name: string; sessionId: string; conversationId: ConversationId; ok: boolean }, context: Context) => Promise<void>;
+	/** Read live transcript items for a worker session (for rich `list_workers` progress). */
+	workerItems?: (sessionId: string) => WorkerItem[];
 	/** Resolve the sandbox and sessionDir for a conversation (per-user isolation + local/ssh execution). */
 	resolveSandbox?: (
 		read: DocumentReader,
@@ -413,7 +417,9 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 						return undefined;
 					}, context);
 				}
-				await hooks.reporting?.({ name: task.input.name, conversationId: runtime.conversationId, ok }, context).catch((error: unknown) => console.error(`[pclaw] worker report ${task.input.name}`, error));
+				await hooks.reporting
+					?.({ name: task.input.name, sessionId: task.input.sessionId, conversationId: runtime.conversationId, ok }, context)
+					.catch((error: unknown) => console.error(`[pclaw] worker report ${task.input.name}`, error));
 				const conversation = await runtime.conversation(runtime.conversationId, context);
 				await conversation?.submit(
 					{
@@ -529,7 +535,8 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 			defineTool({
 				name: "message_worker",
 				description:
-					"Send a follow-up, correction, answer, or go-ahead to a worker you started earlier. It remembers the job.",
+					"Send a follow-up, correction, answer, or go-ahead to an idle worker you started earlier. " +
+					"Only works on idle workers (not currently running ones — use list_workers to check status or stop_worker first). It remembers the job.",
 				parameters: obj({ name: str(), message: str() }, { open: true }),
 				execute: async ({ name, message }, api, context) => {
 					const ask = await currentAsk(harness.current, api, api.conversationId, context);
@@ -563,13 +570,26 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 			}),
 			defineTool({
 				name: "list_workers",
-				description: "List workers and what each is doing.",
+				description: "List workers and what each is doing, including live elapsed time, tool call count, and recent actions for running workers.",
 				parameters: obj({}, { open: true }),
 				execute: async (_args, api, context) => {
 					const workers = Object.entries((await api.snapshot(Workers, api.conversationId, context))?.workers ?? {});
 					if (workers.length === 0) return text("No workers yet.");
 					workers.sort(([, a], [, b]) => b.updatedAt - a.updatedAt);
-					return text(workers.map(([name, worker]) => `${name}: ${worker.status}. ${worker.brief.slice(0, 160)}`).join("\n"));
+					const now = Date.now();
+					return text(
+						workers
+							.map(([name, worker]) => {
+								const brief = worker.brief.slice(0, 160);
+								if (worker.status === "working" && hooks.workerItems !== undefined) {
+									const items = hooks.workerItems(worker.sessionId);
+									const progress = formatWorkerProgress(items, worker.startedAt, now);
+									return `${name}: working (${progress}). ${brief}`;
+								}
+								return `${name}: ${worker.status}. ${brief}`;
+							})
+							.join("\n"),
+					);
 				},
 			}),
 		],

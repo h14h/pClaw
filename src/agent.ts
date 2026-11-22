@@ -23,7 +23,14 @@ import { type Notes, notesExtension, type NotesResolver } from "./extensions/not
 import { formattingExtension, soulExtension } from "./extensions/soul.ts";
 import { createJobs, JobStore, type Jobs, t3Backend } from "./extensions/jobs.ts";
 import { t3Extension } from "./extensions/t3.ts";
-import { type Decisions, decisionClient, followUpGuidance, followUpQuestions } from "./decisions.ts";
+import {
+	type Decisions,
+	decisionClient,
+	followUpGuidance,
+	followUpQuestions,
+	messageGuidance,
+	messageQuestions,
+} from "./decisions.ts";
 import { applyProfile, loadProfile } from "./profiles.ts";
 import { createPromptResolver, type PromptResolver } from "./prompts.ts";
 import { addressOf, ConversationInfo, Routes } from "./routes.ts";
@@ -31,8 +38,9 @@ import { SandboxManager } from "./sandbox.ts";
 import { stamp } from "./time.ts";
 import type { WorkerItem } from "./dashboard/types.ts";
 import { workerItems } from "./dashboard/views.ts";
-import { prepareWorkspace, type WorkerOptions, workerOptions, workersExtension } from "./extensions/workers.ts";
+import { prepareWorkspace, type WorkerOptions, workerOptions, Workers, workersExtension } from "./extensions/workers.ts";
 import { UserRegistry } from "./users.ts";
+import { ProgressSurfaces } from "./worker-progress.ts";
 
 export type Agent = {
 	harness: Harness;
@@ -46,6 +54,10 @@ export type Agent = {
 	sandboxes: SandboxManager;
 	/** Per-channel outbound file sender hooks (`send_file`). */
 	fileSenders: FileSenders;
+	/** Per-channel live worker progress surfaces (e.g. Telegram ephemeral DM bubbles). */
+	progressSurfaces: ProgressSurfaces;
+	/** Read live transcript items for a worker session across all sandbox session dirs. */
+	workerItems(sessionId: string): WorkerItem[];
 	/** Per-agent prompt resolver (supports `voiceFile` / `personaDir` without global mutation). */
 	prompts: PromptResolver;
 	/** The conversation for `address`, created on first use. */
@@ -63,16 +75,81 @@ export type Agent = {
 	setModel(choice: { provider: string; model: string; thinkingLevel: ModelThinkingLevel }, context: Context): Promise<void>;
 };
 
-function disabledJobs(decisions: Decisions, storeFile: string): Jobs {
+function disabledJobs(
+	decisions: Decisions,
+	storeFile: string,
+	harness: { current?: Harness },
+	context: Context,
+): Jobs {
 	const store = new JobStore(storeFile);
 	const emptyExtension = { name: "pclaw.jobs.disabled" } as Jobs["extension"];
 	const noopBackend = {} as Jobs["backend"];
+	async function activeWorkerNames(): Promise<string[]> {
+		const h = harness.current;
+		if (h === undefined) return [];
+		const routes = (await h.snapshot(Routes, context))?.conversations ?? {};
+		const names: string[] = [];
+		for (const id of Object.values(routes)) {
+			const doc = await h.snapshot(Workers, id, context);
+			for (const [name, worker] of Object.entries(doc?.workers ?? {})) {
+				if (worker.status === "working") names.push(name);
+			}
+		}
+		return names;
+	}
+	async function guideMessage(input: {
+		id: string;
+		text: string;
+		channel: string;
+		discordThreadId?: string;
+		voice?: boolean;
+	}): Promise<string | undefined> {
+		if (input.text.trim() === "") return undefined;
+		decisions.record({
+			type: "message",
+			id: `message:${input.id}`,
+			modality: input.voice === true ? "voice" : "text",
+			words: input.text.trim().split(/\s+/).length,
+			channel: input.discordThreadId ?? input.channel,
+		});
+		if (!decisions.configured) return undefined;
+		const active = await activeWorkerNames();
+		const decided = await decisions.ask({
+			id: `message:${input.id}`,
+			site: "message",
+			timeoutMs: 1_500,
+			state: {
+				channel: input.channel,
+				message: input.text.slice(-4_000),
+				active_jobs: active.slice(0, 10),
+			},
+			questions: messageQuestions(false),
+		});
+		if (decided === undefined) return undefined;
+		const guidance = messageGuidance(decided.answers, {
+			allowT3: false,
+			liveJobs: active.length > 0,
+			...(input.voice === true ? { voice: true } : {}),
+		});
+		const shown = decided.arm === "guided" ? guidance : undefined;
+		if (guidance !== undefined) {
+			decisions.record({
+				type: "guidance",
+				id: decided.id,
+				site: "message",
+				arm: decided.arm,
+				guidance,
+				shown: shown !== undefined,
+			});
+		}
+		return shown;
+	}
 	return {
 		extension: emptyExtension,
 		store,
 		surface: {},
 		decisions,
-		guideMessage: async () => undefined,
+		guideMessage,
 		delivery: () => undefined,
 		stop: async () => undefined,
 		startKeeper: () => ({ stop() {}, tick: async () => undefined }),
@@ -133,6 +210,16 @@ export async function openAgent(
 			...(options.spawnFn === undefined ? {} : { spawnFn: options.spawnFn }),
 		});
 	const fileSenders = new FileSenders();
+	const progressSurfaces = new ProgressSurfaces();
+	const findWorkerItems =
+		options.workerItems ??
+		((sessionId: string) => {
+			for (const dir of sandboxes.allSessionDirs()) {
+				const items = workerItems(dir, sessionId);
+				if (items.length > 0) return items;
+			}
+			return [];
+		});
 
 	const notesResolver: NotesResolver = users.enabled
 		? async (read, conversationId, ctx) => {
@@ -190,12 +277,28 @@ export async function openAgent(
 	install(
 		workersExtension(workers, current, {
 			log: decisions.record,
+			workerItems: findWorkerItems,
 			...(t3Enabled
 				? {
 						session: async (worker, ctx) => sessions.current?.openSession(worker, ctx),
-						reporting: async (worker, ctx) => sessions.current?.workerReporting(worker, ctx),
 					}
 				: {}),
+			reporting: async (worker, ctx) => {
+				if (t3Enabled) await sessions.current?.workerReporting(worker, ctx);
+				if (current.current !== undefined) {
+					const addr = await addressOf(current.current, worker.conversationId, ctx);
+					const channel = addr?.split(":")[0];
+					const surface = channel === undefined ? undefined : progressSurfaces.get(channel);
+					if (addr !== undefined && surface?.finish !== undefined) {
+						await surface.finish({
+							address: addr,
+							workerName: worker.name,
+							sessionId: worker.sessionId,
+							ok: worker.ok,
+						});
+					}
+				}
+			},
 			resolveSandbox: async (read, conversationId, ctx) => {
 				const addr = await addressOf(read, conversationId, ctx);
 				const resolved = sandboxes.forAddress(addr);
@@ -225,16 +328,6 @@ export async function openAgent(
 	install(reactionsExtension(current));
 	install(quickSearchExtension());
 
-	const findWorkerItems =
-		options.workerItems ??
-		((sessionId: string) => {
-			for (const dir of sandboxes.allSessionDirs()) {
-				const items = workerItems(dir, sessionId);
-				if (items.length > 0) return items;
-			}
-			return [];
-		});
-
 	let jobs: Jobs;
 	if (t3Enabled) {
 		jobs = createJobs({
@@ -260,7 +353,12 @@ export async function openAgent(
 			}),
 		);
 	} else {
-		jobs = disabledJobs(decisions, options.homeDir === undefined ? paths.jobs : join(options.homeDir, "jobs.json"));
+		jobs = disabledJobs(
+			decisions,
+			options.homeDir === undefined ? paths.jobs : join(options.homeDir, "jobs.json"),
+			current,
+			context,
+		);
 	}
 
 	if (hasDeferredTools) registry.install(createToolSearchExtension());
@@ -355,6 +453,8 @@ export async function openAgent(
 		users,
 		sandboxes,
 		fileSenders,
+		progressSurfaces,
+		workerItems: findWorkerItems,
 		prompts: promptResolver,
 		conversationFor,
 		addresses,

@@ -22,6 +22,7 @@ import { MUSE } from "./muse.ts";
 import { listProfiles, loadProfile, registerProfiles } from "./profiles.ts";
 import { useProfile } from "./prompts.ts";
 import { chooseService, serviceReady, services } from "./search.ts";
+import { startWorkerProgressMonitor } from "./worker-progress.ts";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -187,6 +188,17 @@ async function start(): Promise<void> {
 		context,
 	);
 	const jobKeeper = agent.t3Enabled ? agent.jobs.startKeeper(context, config.jobPollSeconds * 1000, config.jobProgressSeconds * 1000) : undefined;
+	const workerProgress = startWorkerProgressMonitor(
+		agent,
+		{
+			models,
+			config,
+			decisions: agent.jobs.decisions,
+			everyMs: config.jobPollSeconds * 1000,
+			refreshMs: config.jobProgressSeconds * 1000,
+		},
+		context,
+	);
 	console.log(`[pclaw] jobs ${agent.t3Enabled ? "on" : "off"}, users ${agent.users.enabled ? agent.users.all().length : "single-owner"}, decision model ${config.decisionUrl ?? "off"}`);
 
 	let stopping = false;
@@ -197,6 +209,7 @@ async function start(): Promise<void> {
 		contextKeeper.stop();
 		notesCleanup.stop();
 		jobKeeper?.stop();
+		workerProgress.stop();
 		await discord?.stop();
 		await telegram?.stop();
 		await dashboard.stop();

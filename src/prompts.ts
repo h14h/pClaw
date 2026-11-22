@@ -16,6 +16,8 @@ function here(name: string): string {
 export type PromptFeatureFlags = {
 	allowT3?: boolean;
 	allowPages?: boolean;
+	/** Active channel ("telegram", "discord", etc.), for stripping channel-specific instructions. */
+	channel?: string;
 };
 
 export type PromptResolverOptions = {
@@ -88,6 +90,12 @@ export type PromptResolver = {
  */
 export function filterFrontPrompt(text: string, flags: PromptFeatureFlags = {}): string {
 	let out = text;
+	if (flags.allowT3 === false || flags.channel === "telegram") {
+		out = out.replace(
+			/ In a channel a thread opens under their message, and that thread is the session: updates, the result, and follow-ups all stay in it\. Each thread is its own conversation, and they may have several going\./g,
+			"",
+		);
+	}
 	if (flags.allowT3 === false) {
 		out = out
 			.replace(
@@ -104,7 +112,7 @@ export function filterFrontPrompt(text: string, flags: PromptFeatureFlags = {}):
 			)
 			.replace(/^A job's card already shows its status,[^\n]*\n*/gm, "")
 			.replace(/`message_worker` or `message_job`/g, "`message_worker`")
-			.replace(/ Never guess how something is going: `list_jobs` has the real state\./g, "")
+			.replace(/ Never guess how something is going: `list_jobs` has the real state\./g, " Never guess how something is going: `list_workers` has the real state.")
 			.replace(/ If T3 is down, `start_job` still works: the job waits and starts itself\./g, "")
 			.replace(/^`<job-result>` records how a job ended[^\n]*\n*/gm, "");
 	}

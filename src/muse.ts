@@ -101,7 +101,18 @@ export function museArgs(options: { model: string; effort: string; sessionId: st
 	];
 }
 
-type Payload = { kind?: string; terminal?: string; reason?: string | null; text?: string; prompt?: string; call_id?: string; correlation_facts?: { tool_name?: string; outcome?: string } };
+type Payload = {
+	kind?: string;
+	terminal?: string;
+	reason?: string | null;
+	text?: string;
+	prompt?: string;
+	call_id?: string;
+	tool_name?: string;
+	arguments?: Record<string, unknown>;
+	input?: Record<string, unknown>;
+	correlation_facts?: { tool_name?: string; outcome?: string };
+};
 /** `received_at` is pclaw's own (milliseconds): Muse's `recorded_at` isn't wall-clock time. */
 type Event = { received_at?: number; payload?: Payload };
 
@@ -147,21 +158,31 @@ const FROM_PCLAW = /^[\s\S]*?Message from pclaw:\s*/;
 /** A Muse transcript as the worker's dashboard transcript. Tolerates a half-written last line. */
 export function parseMuseSession(jsonl: string): WorkerItem[] {
 	const items: WorkerItem[] = [];
+	const callArgs = new Map<string, Record<string, unknown>>();
 	for (const line of jsonl.split("\n")) {
 		const event = parse(line);
 		const payload = event?.payload;
 		if (payload === undefined) continue;
 		const at = event?.received_at ?? 0;
-		if (payload.kind === "turn_input_user" && payload.prompt !== undefined) {
+		if (payload.kind === "tool_call" && payload.call_id !== undefined) {
+			const args = payload.arguments ?? payload.input;
+			if (args !== undefined && typeof args === "object") callArgs.set(payload.call_id, args);
+		} else if (payload.kind === "turn_input_user" && payload.prompt !== undefined) {
 			items.push({ kind: "from-pclaw", at, text: payload.prompt.replace(FROM_PCLAW, "") });
 		} else if (payload.kind === "tool_result") {
-			const name = payload.correlation_facts?.tool_name ?? "tool";
+			const name = payload.correlation_facts?.tool_name ?? payload.tool_name ?? "tool";
 			const result = payload.text ?? "";
-			let args: unknown = {};
+			let args: unknown = payload.call_id !== undefined ? (callArgs.get(payload.call_id) ?? {}) : {};
 			try {
-				// Shell results carry the command they ran.
-				const command = (JSON.parse(result) as { command?: unknown }).command;
-				if (typeof command === "string") args = { command };
+				// Shell and JSON tool results often carry command / query / path / url metadata.
+				const parsed = JSON.parse(result) as Record<string, unknown>;
+				if (typeof parsed === "object" && parsed !== null) {
+					const picked: Record<string, unknown> = typeof args === "object" && args !== null ? { ...(args as Record<string, unknown>) } : {};
+					for (const key of ["command", "query", "url", "path", "file_path"] as const) {
+						if (typeof parsed[key] === "string" && picked[key] === undefined) picked[key] = parsed[key];
+					}
+					args = picked;
+				}
 			} catch {}
 			items.push({ kind: "tool", at, name, args, result, ...(payload.correlation_facts?.outcome === "failure" || result.startsWith("tool denied") ? { isError: true } : {}) });
 		} else if (payload.kind === "run_terminal" && payload.text?.trim()) {
