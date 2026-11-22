@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, extname, join } from "node:path";
 import type { Context } from "@earendil-works/chord/context";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
@@ -18,6 +18,7 @@ import { Reactions } from "../extensions/reactions.ts";
 import { Workers } from "../extensions/workers.ts";
 import { type Heard, memoLabel, transcribe } from "../speech.ts";
 import { stamp } from "../time.ts";
+import { ReplyThreads } from "./reply-threads.ts";
 import {
 	markdownToTelegramHtml,
 	normalizeTelegramReaction,
@@ -169,6 +170,11 @@ export type OutboundFileInput =
 	| string
 	| { data: Uint8Array; filename: string; mimeType?: string };
 
+/** `allow_sending_without_reply` so a reply to a deleted message still goes out instead of failing with a 400. */
+export type TelegramReplyParameters = { message_id: number; allow_sending_without_reply?: boolean };
+
+const replyParameters = (messageId: number): TelegramReplyParameters => ({ message_id: messageId, allow_sending_without_reply: true });
+
 export type SendMediaOptions = {
 	caption?: string;
 	replyToMessageId?: number;
@@ -187,7 +193,7 @@ export type TelegramApi = {
 			text: string;
 			parse_mode?: "HTML";
 			link_preview_options?: { is_disabled: boolean };
-			reply_parameters?: { message_id: number };
+			reply_parameters?: TelegramReplyParameters;
 			disable_notification?: boolean;
 		},
 		signal?: AbortSignal,
@@ -241,7 +247,7 @@ export function createTelegramApi(options: {
 			text: string;
 			parse_mode?: "HTML";
 			link_preview_options?: { is_disabled: boolean };
-			reply_parameters?: { message_id: number };
+			reply_parameters?: TelegramReplyParameters;
 			disable_notification?: boolean;
 		},
 		signal?: AbortSignal,
@@ -261,7 +267,7 @@ export function createTelegramApi(options: {
 		const linkPreview = { is_disabled: sendOptions?.disableLinkPreview ?? true };
 		const sent: TelegramMessage[] = [];
 		for (const [index, chunk] of chunks.entries()) {
-			const reply = index === 0 && sendOptions?.replyToMessageId !== undefined ? { reply_parameters: { message_id: sendOptions.replyToMessageId } } : {};
+			const reply = index === 0 && sendOptions?.replyToMessageId !== undefined ? { reply_parameters: replyParameters(sendOptions.replyToMessageId) } : {};
 			const silent = sendOptions?.disableNotification === true ? { disable_notification: true } : {};
 			try {
 				const message = await sendMessage(
@@ -311,7 +317,7 @@ export function createTelegramApi(options: {
 				if (parseMode !== undefined) form.set("parse_mode", parseMode);
 			}
 			if (sendOptions?.replyToMessageId !== undefined) {
-				form.set("reply_parameters", JSON.stringify({ message_id: sendOptions.replyToMessageId }));
+				form.set("reply_parameters", JSON.stringify(replyParameters(sendOptions.replyToMessageId)));
 			}
 			if (sendOptions?.disableNotification === true) form.set("disable_notification", "true");
 			return form;
@@ -498,8 +504,16 @@ function senderName(user: TelegramUser | undefined): string {
 	return user.username !== undefined ? `@${user.username}` : `user ${user.id}`;
 }
 
-/** Extract `[replying to ...]` / `[quoting ...]` context from `reply_to_message` and `quote`. */
-export function extractReplyContext(message: TelegramMessage, botId: number | undefined, timeZone: string): string[] {
+/**
+ * Extract `[replying to ...]` / `[quoting ...]` context from `reply_to_message` and `quote`. A replied-to photo or file
+ * keeps its label even when it had a caption, and `savedAt` (where pclaw saved it) is named when given.
+ */
+export function extractReplyContext(
+	message: TelegramMessage,
+	botId: number | undefined,
+	timeZone: string,
+	savedAt?: string,
+): string[] {
 	const reply = message.reply_to_message;
 	const quoteText = message.quote?.text?.trim();
 	if (reply === undefined && (quoteText === undefined || quoteText === "")) return [];
@@ -515,24 +529,22 @@ export function extractReplyContext(message: TelegramMessage, botId: number | un
 
 	const when = reply?.date === undefined ? "" : ` from ${stamp(reply.date * 1000, timeZone)}`;
 
+	const what =
+		reply === undefined ? "message"
+		: reply.photo !== undefined && reply.photo.length > 0 ? "photo"
+		: reply.document !== undefined ? `file "${reply.document.file_name ?? "document"}"`
+		: reply.voice !== undefined || reply.audio !== undefined ? "voice message"
+		: "message";
+	const saved = savedAt === undefined ? "" : ` (saved at ${savedAt})`;
+
 	if (quoteText !== undefined && quoteText !== "") {
-		return [`[quoting ${whose} message${when}: "${clip(quoteText)}"]`];
+		return [`[quoting ${whose} ${what}${when}${saved}: "${clip(quoteText)}"]`];
 	}
 
 	if (reply === undefined) return [];
 	const body = (reply.text ?? reply.caption ?? "").trim();
-	if (body !== "") {
-		return [`[replying to ${whose} message${when}: "${clip(body)}"]`];
-	}
-	if (reply.photo !== undefined && reply.photo.length > 0) {
-		return [`[replying to ${whose} photo${when}]`];
-	}
-	if (reply.document !== undefined) {
-		return [`[replying to ${whose} file "${reply.document.file_name ?? "document"}"${when}]`];
-	}
-	if (reply.voice !== undefined || reply.audio !== undefined) {
-		return [`[replying to ${whose} voice message${when}]`];
-	}
+	if (body !== "") return [`[replying to ${whose} ${what}${when}${saved}: "${clip(body)}"]`];
+	if (what !== "message") return [`[replying to ${whose} ${what}${when}${saved}]`];
 	return [];
 }
 
@@ -714,7 +726,12 @@ function sanitizeFilename(name: string): string {
 	return base === "" || base === "." || base === ".." ? "file" : base.slice(0, 120);
 }
 
-function saveToInbox(inboxDir: string, message: TelegramMessage, originalName: string, bytes: Uint8Array): string {
+function saveToInbox(
+	inboxDir: string,
+	message: Pick<TelegramMessage, "chat" | "message_id">,
+	originalName: string,
+	bytes: Uint8Array,
+): string {
 	mkdirSync(inboxDir, { recursive: true, mode: 0o700 });
 	const safe = sanitizeFilename(originalName);
 	const savedName = `tg-${message.chat.id}-${message.message_id}-${safe}`;
@@ -767,6 +784,78 @@ async function savePhoto(
 	}
 }
 
+/** A file pclaw already saved for this Telegram message, if any (`tg-<chat>-<message>-<name>`). */
+function findInInbox(inboxDir: string, chatId: number, messageId: number): string | undefined {
+	const prefix = `tg-${chatId}-${messageId}-`;
+	try {
+		const name = readdirSync(inboxDir).find((each) => each.startsWith(prefix));
+		return name === undefined ? undefined : join(inboxDir, name);
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * When they swipe-reply to an earlier photo or file, bring it back: reuse the copy saved in the inbox (or download it
+ * again, for ones from before pclaw saved photos), stage it to their workspace, and show images inline again so the
+ * front model sees what they're pointing at. Never throws: the text of the reply context still goes in.
+ */
+async function replyMedia(
+	message: TelegramMessage,
+	inboxDir: string,
+	options: Pick<BuildInputOptions, "api" | "stageFile">,
+): Promise<{ savedAt?: string; image?: ImageContent }> {
+	const reply = message.reply_to_message;
+	if (reply === undefined) return {};
+	const photo = reply.photo !== undefined && reply.photo.length > 0 ? reply.photo[reply.photo.length - 1]! : undefined;
+	const doc = reply.document;
+	if (photo === undefined && doc === undefined) return {};
+	const limit = photo !== undefined ? MAX_IMAGE_BYTES : MAX_FILE_BYTES;
+	const size = photo?.file_size ?? doc?.file_size;
+	if (size !== undefined && size > limit) return {};
+	const chatId = message.chat.id;
+	try {
+		let localPath = findInInbox(inboxDir, chatId, reply.message_id);
+		let bytes: Uint8Array;
+		let mime: string;
+		if (localPath !== undefined) {
+			bytes = new Uint8Array(readFileSync(localPath));
+			mime = doc?.mime_type ?? mimeFromPath(localPath);
+		} else {
+			const file = await options.api.getFile((photo ?? doc)!.file_id);
+			if (file.file_path === undefined) throw new Error("Telegram returned no file path");
+			bytes = await options.api.downloadFile(file.file_path);
+			if (bytes.byteLength > limit) return {};
+			if (photo !== undefined) {
+				const detected = mimeFromPath(file.file_path);
+				mime = detected.startsWith("image/") ? detected : "image/jpeg";
+			} else {
+				mime = doc!.mime_type ?? mimeFromPath(doc!.file_name ?? file.file_path);
+			}
+			const name = photo !== undefined ? `photo-${reply.message_id}${photoExtension(mime)}` : (doc!.file_name ?? `document-${reply.message_id}`);
+			localPath = saveToInbox(inboxDir, { chat: message.chat, message_id: reply.message_id }, name, bytes);
+		}
+		const imageMime = photo !== undefined && !mime.startsWith("image/") ? "image/jpeg" : mime.split(";")[0]!;
+		const image: ImageContent | undefined =
+			imageMime.startsWith("image/") && bytes.byteLength <= MAX_IMAGE_BYTES
+				? { type: "image", data: Buffer.from(bytes).toString("base64"), mimeType: imageMime }
+				: undefined;
+		let savedAt: string | undefined = localPath;
+		if (options.stageFile !== undefined) {
+			try {
+				savedAt = await options.stageFile(localPath, basename(localPath));
+			} catch (error) {
+				console.warn(`[pclaw] couldn't stage a replied-to Telegram file: ${error instanceof Error ? error.message : String(error)}`);
+				savedAt = undefined;
+			}
+		}
+		return { ...(savedAt === undefined ? {} : { savedAt }), ...(image === undefined ? {} : { image }) };
+	} catch (error) {
+		console.warn(`[pclaw] couldn't bring back a replied-to Telegram file: ${error instanceof Error ? error.message : String(error)}`);
+		return {};
+	}
+}
+
 export type BuildInputOptions = {
 	api: Pick<TelegramApi, "getFile" | "downloadFile" | "sendChatAction">;
 	timeZone: string;
@@ -801,14 +890,15 @@ export async function buildTelegramUserInput(
 	const voiceDir = options.voiceDir ?? paths.voice;
 	const transcribeFn = options.transcribeFn ?? transcribe;
 
-	// Extract reply/quote context from the first message in the batch that carries one.
+	// Extract reply/quote context from the first message in the batch that carries one. A replied-to photo or file
+	// comes back too: inline for images, and saved where workers can open it.
 	const replyLines: string[] = [];
 	for (const message of messages) {
-		const ctx = extractReplyContext(message, options.botId, options.timeZone);
-		if (ctx.length > 0) {
-			replyLines.push(...ctx);
-			break;
-		}
+		if (extractReplyContext(message, options.botId, options.timeZone).length === 0) continue;
+		const media = await replyMedia(message, inboxDir, options);
+		replyLines.push(...extractReplyContext(message, options.botId, options.timeZone, media.savedAt));
+		if (media.image !== undefined) parts.push(media.image);
+		break;
 	}
 
 	for (const message of messages) {
@@ -1065,7 +1155,10 @@ export async function startTelegram(
 		},
 	});
 
-	const unregisterFiles = agent.fileSenders.register("telegram", async (addr, file) => {
+	/** Which ask each chat is on, so a reply that lands after the chat moved on quotes the message it answers. */
+	const threads = new ReplyThreads("telegram");
+
+	const unregisterFiles = agent.fileSenders.register("telegram", async (addr, file, meta) => {
 		const parsed = parseTelegramAddress(addr);
 		if (parsed === undefined) throw new Error(`Invalid Telegram address ${addr}`);
 		const payload = {
@@ -1073,7 +1166,14 @@ export async function startTelegram(
 			filename: file.filename,
 			...(file.mimeType === undefined ? {} : { mimeType: file.mimeType }),
 		};
-		const sendOptions = file.caption === undefined ? undefined : { caption: file.caption };
+		const replyTo = threads.target(addr, meta?.replyTo);
+		const sendOptions: SendMediaOptions | undefined =
+			file.caption === undefined && replyTo === undefined
+				? undefined
+				: {
+						...(file.caption === undefined ? {} : { caption: file.caption }),
+						...(replyTo === undefined ? {} : { replyToMessageId: Number(replyTo) }),
+					};
 		if (file.asPhoto === true) {
 			await api.sendChatAction(parsed.chatId, "upload_photo").catch(() => undefined);
 			await api.sendPhoto(parsed.chatId, payload, sendOptions);
@@ -1081,6 +1181,7 @@ export async function startTelegram(
 			await api.sendChatAction(parsed.chatId, "upload_document").catch(() => undefined);
 			await api.sendDocument(parsed.chatId, payload, sendOptions);
 		}
+		threads.sent(addr, meta?.replyTo);
 	});
 
 	const deliveries = new Map<string, { stop(): Promise<void> }>();
@@ -1101,15 +1202,19 @@ export async function startTelegram(
 		const parsed = parseTelegramAddress(addr);
 		let typing: NodeJS.Timeout | undefined;
 		return {
-			async send(text, entry) {
+			async send(text, entry, meta) {
 				if (parsed === undefined) throw new Error(`Invalid Telegram address ${addr}`);
 				const mode = jobs.delivery(addr, text);
 				if (mode === "moved") return;
 				const isAck = parsed.kind === "dm" && (await isDelegateAckEntry(conversation, entry));
+				const replyTo = threads.target(addr, meta?.replyTo);
 				const sent = await api.sendFormattedMessage(parsed.chatId, text, {
 					disableNotification: mode === "silent",
 					disableLinkPreview: true,
+					...(replyTo === undefined ? {} : { replyToMessageId: Number(replyTo) }),
 				});
+				// An ack dissolves once the answer lands, so it doesn't move the chat on.
+				if (!isAck) threads.sent(addr, meta?.replyTo);
 				if (parsed.kind === "dm") {
 					if (isAck) {
 						const state = ephemeralFor(addr);
@@ -1207,7 +1312,9 @@ export async function startTelegram(
 	async function attach(addr: string, conversation: Conversation) {
 		if (deliveries.has(addr)) return;
 		deliveries.set(addr, { stop: async () => undefined });
-		const delivery = await deliver(agent.harness, conversation.id, outbox(addr, conversation), context);
+		const delivery = await deliver(agent.harness, conversation.id, outbox(addr, conversation), context, {
+			askOf: (userEntry) => agent.askOf(conversation.id, userEntry, context),
+		});
 		const unsync = await syncReactions(addr, conversation);
 		deliveries.set(addr, {
 			stop: async () => {
@@ -1252,6 +1359,7 @@ export async function startTelegram(
 		const conversation = await agent.conversationFor(auth.addr, context);
 		await agent.describe(conversation.id, { label }, context);
 		await attach(auth.addr, conversation);
+		threads.heard(auth.addr, primary.message_id);
 		if (!auth.isGroup) {
 			const state = ephemeral.get(auth.addr);
 			if (state !== undefined && state.ackMessageIds.length > 0) state.userSpokeAfterAck = true;

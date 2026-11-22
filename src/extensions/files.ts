@@ -1,8 +1,9 @@
 import type { Context } from "@earendil-works/chord/context";
 import { bool, obj, opt, str } from "@earendil-works/pi-schema";
-import { type ConversationId, defineExtension, defineTool, type DocumentReader } from "@earendil-works/pi-durable";
+import { type ConversationId, defineExtension, defineTool, type DocumentReader, type Harness } from "@earendil-works/pi-durable";
 import { addressOf } from "../routes.ts";
 import type { WorkerSandbox } from "../sandbox.ts";
+import { currentAsk } from "./reactions.ts";
 
 /** Telegram Bot API upload limit is 50 MB. */
 export const DEFAULT_MAX_OUTBOUND_FILE_BYTES = 50 * 1024 * 1024;
@@ -15,7 +16,8 @@ export type OutboundFilePayload = {
 	asPhoto?: boolean;
 };
 
-export type ChannelFileSender = (address: string, file: OutboundFilePayload) => Promise<void>;
+/** `replyTo` is the person's message the run is about ("telegram:<id>"), so a channel can thread the file to it. */
+export type ChannelFileSender = (address: string, file: OutboundFilePayload, meta?: { replyTo?: string }) => Promise<void>;
 
 /** Registry of per-channel outbound file senders (registered by telegram.ts, discord.ts, etc.). */
 export class FileSenders {
@@ -42,6 +44,8 @@ export type SandboxForConversation = (
 export function filesExtension(options: {
 	fileSenders: FileSenders;
 	resolveSandbox: SandboxForConversation;
+	/** For finding the message the current run answers. */
+	harness?: { current?: Harness };
 	maxBytes?: number;
 }) {
 	const maxBytes = options.maxBytes ?? DEFAULT_MAX_OUTBOUND_FILE_BYTES;
@@ -70,12 +74,17 @@ export function filesExtension(options: {
 					const { sandbox } = await options.resolveSandbox(api, api.conversationId, context);
 					if (sandbox === undefined) throw new Error("No workspace is available for sending files in this conversation.");
 					const file = await sandbox.getFile(path, maxBytes, context.abortSignal);
-					await sender(address, {
-						data: file.data,
-						filename: file.filename,
-						...(caption === undefined ? {} : { caption }),
-						...(asPhoto === undefined ? {} : { asPhoto }),
-					});
+					const replyTo = await currentAsk(options.harness?.current, api, api.conversationId, context).catch(() => undefined);
+					await sender(
+						address,
+						{
+							data: file.data,
+							filename: file.filename,
+							...(caption === undefined ? {} : { caption }),
+							...(asPhoto === undefined ? {} : { asPhoto }),
+						},
+						replyTo === undefined ? undefined : { replyTo },
+					);
 					return { output: [{ type: "text" as const, text: `Sent ${file.filename} (${file.sizeBytes} bytes).` }] };
 				},
 			}),

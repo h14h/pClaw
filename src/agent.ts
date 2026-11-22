@@ -17,7 +17,7 @@ import { filesExtension, FileSenders } from "./extensions/files.ts";
 import { followUpsExtension, type TimeZoneResolver } from "./extensions/follow-ups.ts";
 import { memoryExtension } from "./extensions/memory.ts";
 import { quickSearchExtension } from "./extensions/quick-search.ts";
-import { reactionsExtension } from "./extensions/reactions.ts";
+import { askOfRequest, reactionsExtension } from "./extensions/reactions.ts";
 import { recallExtension } from "./extensions/recall.ts";
 import { type Notes, notesExtension, type NotesResolver } from "./extensions/notes.ts";
 import { formattingExtension, soulExtension } from "./extensions/soul.ts";
@@ -73,6 +73,12 @@ export type Agent = {
 	describe(id: ConversationId, info: { label: string; parent?: ConversationId }, context: Context): Promise<void>;
 	/** Switch every conversation to another front model, from the next request on. */
 	setModel(choice: { provider: string; model: string; thinkingLevel: ModelThinkingLevel }, context: Context): Promise<void>;
+	/**
+	 * The person's message a user entry stands for ("telegram:<id>", "discord:<id>"): their own message, or, for a
+	 * worker's report, the message that asked for the job. Read from durable submission records, so it doesn't depend
+	 * on the run still being live. Undefined for follow-ups, job updates, reactions, and the like.
+	 */
+	askOf(conversationId: ConversationId, userEntry: EntryId, context: Context): Promise<string | undefined>;
 };
 
 function disabledJobs(
@@ -309,6 +315,7 @@ export async function openAgent(
 	install(
 		filesExtension({
 			fileSenders,
+			harness: current,
 			resolveSandbox: async (read, conversationId, ctx) => {
 				const addr = await addressOf(read, conversationId, ctx);
 				const resolved = sandboxes.forAddress(addr);
@@ -445,6 +452,35 @@ export async function openAgent(
 		}
 	}
 
+	/** User entry -> ask, by conversation. A placed submission never changes its entry, so results are kept. */
+	const asks = new Map<string, string | null>();
+	const ASK_SCAN_LIMIT = 500;
+	async function askOf(conversationId: ConversationId, userEntry: EntryId, context: Context): Promise<string | undefined> {
+		const key = `${conversationId}:${userEntry}`;
+		const known = asks.get(key);
+		if (known !== undefined) return known ?? undefined;
+		let requestId: string | undefined;
+		let found = false;
+		let scanned = 0;
+		let cursor: Parameters<Storage["scanSubmissions"]>[2];
+		do {
+			const page = await storage.scanSubmissions({ conversationId, order: "descending" }, 100, cursor, context);
+			const match = page.items.find((record) => record.entry === userEntry);
+			if (match !== undefined) {
+				found = true;
+				requestId = match.requestId;
+			}
+			scanned += page.items.length;
+			cursor = page.next;
+		} while (!found && cursor !== undefined && scanned < ASK_SCAN_LIMIT);
+		// Not found yet could mean an entry from another conversation (a fork's parent): don't remember a miss.
+		if (!found) return undefined;
+		const ask = requestId === undefined ? undefined : await askOfRequest(harness, conversationId, requestId, context);
+		if (asks.size >= 2_000) asks.delete(asks.keys().next().value!);
+		asks.set(key, ask ?? null);
+		return ask;
+	}
+
 	harness.resume();
 	return {
 		harness,
@@ -461,5 +497,6 @@ export async function openAgent(
 		forkFor,
 		describe,
 		setModel,
+		askOf,
 	};
 }

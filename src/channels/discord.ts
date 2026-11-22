@@ -19,6 +19,7 @@ import {
 	Events,
 	GatewayIntentBits,
 	type Message,
+	type MessageCreateOptions,
 	MessageFlags,
 	Partials,
 	type SendableChannels,
@@ -33,6 +34,7 @@ import { Workers } from "../extensions/workers.ts";
 import { sanitizeFilename } from "../sandbox.ts";
 import { type Heard, memoLabel, transcribe } from "../speech.ts";
 import { stamp } from "../time.ts";
+import { ReplyThreads } from "./reply-threads.ts";
 
 const MAX_MESSAGE = 2000;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -136,6 +138,35 @@ export function splitMessage(text: string, limit = MAX_MESSAGE): string[] {
 }
 
 const clip = (text: string) => (text.length > QUOTE_LIMIT ? `${text.slice(0, QUOTE_LIMIT)}…` : text);
+
+/**
+ * Discord's native reply to `messageId`: quoted above the message, still sent if that message is gone, and without
+ * the reply's own mention, so a quote never pings more than the message would on its own.
+ */
+export function discordReply(messageId: string, ping: boolean): Pick<MessageCreateOptions, "reply" | "allowedMentions"> {
+	return {
+		reply: { messageReference: messageId, failIfNotExists: false },
+		allowedMentions: { parse: ping ? ["users"] : [], repliedUser: false },
+	};
+}
+
+/**
+ * The messages one reply goes out as. About a job: silent unless the front model asked to notify, and then only the
+ * first message does (with an owner mention unless `quiet`). `replyTo` quotes that message on the first chunk only.
+ */
+export function discordMessages(
+	text: string,
+	options: { mode: "ping" | "silent" | "plain" | undefined; ownerId?: string; quiet?: boolean; replyTo?: string },
+): MessageCreateOptions[] {
+	return splitMessage(text).map((chunk, index) => {
+		const ping = options.mode === "ping" && index === 0 && options.quiet !== true;
+		return {
+			content: ping ? `<@${options.ownerId}> ${chunk}`.slice(0, MAX_MESSAGE) : chunk,
+			...(options.mode === "silent" || (options.mode === "ping" && !ping) ? { flags: MessageFlags.SuppressNotifications as const } : {}),
+			...(index === 0 && options.replyTo !== undefined ? discordReply(options.replyTo, ping) : {}),
+		};
+	});
+}
 
 async function toInput(
 	message: Message,
@@ -254,33 +285,39 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 		return channel?.isSendable() ? channel : undefined;
 	}
 
-	const unregisterFiles = agent.fileSenders.register("discord", async (addr, file) => {
+	/** Which ask each conversation is on, so a reply that lands after it moved on quotes the message it answers. */
+	const threads = new ReplyThreads("discord");
+
+	const unregisterFiles = agent.fileSenders.register("discord", async (addr, file, meta) => {
 		const channel = await target(addr);
 		if (channel === undefined) throw new Error(`Can't reach ${addr}`);
+		const replyTo = threads.target(addr, meta?.replyTo);
 		await channel.send({
 			...(file.caption !== undefined && file.caption.trim() !== "" ? { content: file.caption.slice(0, MAX_MESSAGE) } : {}),
 			files: [{ attachment: Buffer.from(file.data), name: file.filename }],
+			...(replyTo === undefined ? {} : discordReply(replyTo, false)),
 		});
+		threads.sent(addr, meta?.replyTo);
 	});
 
 	function outbox(addr: string, conversation: Conversation): Outbox {
 		let typing: NodeJS.Timeout | undefined;
 		return {
-			async send(text, entry) {
+			async send(text, entry, meta) {
 				const channel = await target(addr);
 				if (channel === undefined) throw new Error(`Can't reach ${addr}`);
 				const sent: string[] = [];
-				// About a job: silent unless the front model asked to notify, and then only the first message does.
 				const mode = jobs.delivery(addr, text);
 				if (mode === "moved") return;
-				for (const [index, chunk] of splitMessage(text).entries()) {
-					const ping = mode === "ping" && index === 0 && config.discordQuiet !== true;
-					const message = await channel.send({
-						content: ping ? `<@${ownerId}> ${chunk}`.slice(0, MAX_MESSAGE) : chunk,
-						...(mode === "silent" || (mode === "ping" && !ping) ? { flags: MessageFlags.SuppressNotifications } : {}),
-					});
-					sent.push(message.id);
-				}
+				const replyTo = threads.target(addr, meta?.replyTo);
+				const messages = discordMessages(text, {
+					mode,
+					...(ownerId === undefined ? {} : { ownerId }),
+					quiet: config.discordQuiet === true,
+					...(replyTo === undefined ? {} : { replyTo }),
+				});
+				for (const options of messages) sent.push((await channel.send(options)).id);
+				threads.sent(addr, meta?.replyTo);
 				await conversation.commit(async (tx) => {
 					const doc = await tx.doc(SentMessages);
 					for (const id of sent) doc.messages[id] = { conversation: conversation.id, entry };
@@ -344,7 +381,9 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 	async function attach(addr: string, conversation: Conversation) {
 		if (deliveries.has(addr)) return;
 		deliveries.set(addr, { stop: async () => undefined });
-		const delivery = await deliver(agent.harness, conversation.id, outbox(addr, conversation), context);
+		const delivery = await deliver(agent.harness, conversation.id, outbox(addr, conversation), context, {
+			askOf: (userEntry) => agent.askOf(conversation.id, userEntry, context),
+		});
 		const unsync = await syncReactions(addr, conversation);
 		deliveries.set(addr, {
 			stop: async () => {
@@ -512,6 +551,7 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 			const route = await conversationFor(message);
 			if (route === undefined) return;
 			await attach(route.addr, route.conversation);
+			threads.heard(route.addr, message.id);
 			const user = agent.users.resolveAddress(route.addr);
 			const userPaths = user === undefined ? undefined : agent.users.pathsFor(user.id);
 			const userTimeZone = user?.timeZone ?? config.timeZone;

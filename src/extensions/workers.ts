@@ -359,7 +359,10 @@ const RESUME =
 	"pclaw restarted while you were working on this, so your last turn was cut off. Check what you'd already done, " +
 	"finish the job, and report as usual. Don't redo anything that already happened.";
 
-export const CLOSE_HINT = "(Their message that asked for this shows its status as a reaction. Use `react` to close it while you reply.)";
+export const CLOSE_HINT =
+	"(Their message that asked for this shows its status as a reaction. Use `react` with a fitting emoji for the topic " +
+	"and outcome (don't default to 👍; never use a positive reaction on bad, missing, or failed results) to close it " +
+	"while you reply.)";
 
 export function reportMessage(name: string, result: WorkerResult, hint = false): string {
 	const report = `<worker-report worker="${name}" status="${result.ok ? "done" : "failed"}">\n${result.output}\n</worker-report>`;

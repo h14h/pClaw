@@ -11,10 +11,19 @@ import {
 	UserEntry,
 } from "@earendil-works/pi-durable";
 
+/** What delivery knows about an outgoing reply beyond its text. */
+export type SendMeta = {
+	/**
+	 * The person's message this reply answers ("telegram:<id>", "discord:<id>"): the one that started the run, or, for a
+	 * worker's report, the one that asked for the job. A channel may thread the reply to it.
+	 */
+	replyTo?: string;
+};
+
 /** Where a conversation's replies go: a Discord DM, a terminal. */
 export type Outbox = {
 	/** `entry` is the transcript entry the text came from, so a channel can map its messages back to it. */
-	send(text: string, entry: EntryId): Promise<void>;
+	send(text: string, entry: EntryId, meta?: SendMeta): Promise<void>;
 	/** Called with true when the agent starts working on something and false when it's done. */
 	working(busy: boolean): void;
 };
@@ -97,6 +106,13 @@ export async function deliver(
 	conversationId: ConversationId,
 	outbox: Outbox,
 	context: Context,
+	options: {
+		/**
+		 * The message ref a user entry stands for (see `SendMeta.replyTo`). Replies are matched to the newest user entry
+		 * before them in the transcript, which is durable, so this holds after the run ends or pclaw restarts.
+		 */
+		askOf?: (userEntry: EntryId) => Promise<string | undefined>;
+	} = {},
 ): Promise<{ stop(): Promise<void> }> {
 	const conversation = await harness.conversation(conversationId, context);
 	if (conversation === undefined) throw new Error(`No conversation ${conversationId}`);
@@ -105,20 +121,38 @@ export async function deliver(
 	let lastQueued: EntryId | undefined;
 	const collector = replyCollector();
 	let heldEntry: EntryId | undefined;
-	const send = async (text: string | undefined, entry: EntryId | undefined) => {
+	let heldUser: EntryId | undefined;
+	/** The newest user entry seen so far in transcript order: what the next assistant entry answers. */
+	let lastUser: EntryId | undefined;
+	const askOf = async (user: EntryId | undefined): Promise<string | undefined> => {
+		if (user === undefined || options.askOf === undefined) return undefined;
+		try {
+			return await options.askOf(user);
+		} catch (error) {
+			console.warn("[pclaw] couldn't resolve which message a reply answers", error);
+			return undefined;
+		}
+	};
+	const send = async (text: string | undefined, entry: EntryId | undefined, user: EntryId | undefined) => {
 		if (text === undefined || entry === undefined) return;
 		try {
-			await outbox.send(text, entry);
+			const replyTo = await askOf(user);
+			await outbox.send(text, entry, replyTo === undefined ? undefined : { replyTo });
 		} catch (error) {
 			console.error("[pclaw] delivery failed", error);
 		}
 	};
 	const sendInOrder = (entry: EntryRecord) => {
 		lastQueued = entry.id;
+		const user = lastUser;
 		queue = queue.then(async () => {
 			const reply = readReply(entry);
-			if (reply?.kind === "interim" && reply.text !== "") heldEntry = entry.id;
-			await send(reply === undefined ? undefined : collector.take(reply), reply?.kind === "final" && reply.text === undefined ? heldEntry : entry.id);
+			if (reply?.kind === "interim" && reply.text !== "") {
+				heldEntry = entry.id;
+				heldUser = user;
+			}
+			const fromHeld = reply?.kind === "final" && reply.text === undefined;
+			await send(reply === undefined ? undefined : collector.take(reply), fromHeld ? heldEntry : entry.id, fromHeld ? heldUser : user);
 			await conversation.commit(async (tx) => {
 				(await tx.doc(Delivered, conversationId)).last = entry.id;
 			}, context);
@@ -126,7 +160,11 @@ export async function deliver(
 	};
 	/** A run ended (or a new one began) with text still held: send it. */
 	const flushInOrder = () => {
-		queue = queue.then(() => send(collector.flush(), heldEntry));
+		queue = queue.then(() => send(collector.flush(), heldEntry, heldUser));
+	};
+	const userInOrder = (entry: EntryRecord) => {
+		flushInOrder();
+		lastUser = entry.id;
 	};
 
 	// Attach first, then read the transcript, so nothing committed in between is missed. Entry IDs only grow, so
@@ -136,9 +174,10 @@ export async function deliver(
 		// A cursor that compaction has hidden counts as caught up; resending the visible transcript would be worse.
 		const index = last === undefined ? -1 : entries.findIndex((entry) => entry.id === last);
 		const start = index === -1 ? entries.length : index + 1;
+		lastUser = entries.slice(0, start).findLast((entry) => UserEntry.is(entry))?.id;
 		for (const entry of entries.slice(start)) {
 			if (AssistantEntry.is(entry)) sendInOrder(entry);
-			else if (UserEntry.is(entry)) flushInOrder();
+			else if (UserEntry.is(entry)) userInOrder(entry);
 		}
 		if (last === undefined && entries.length > 0) {
 			const end = entries[entries.length - 1]!.id;
@@ -162,7 +201,7 @@ export async function deliver(
 		if (entry.id <= seen) return;
 		seen = entry.id;
 		if (AssistantEntry.is(entry)) sendInOrder(entry);
-		else if (UserEntry.is(entry)) flushInOrder();
+		else if (UserEntry.is(entry)) userInOrder(entry);
 	};
 	watch.start(async (call) => {
 		if (call.kind === "failed") {

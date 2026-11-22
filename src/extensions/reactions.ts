@@ -63,6 +63,19 @@ export async function currentAsk(
 	if (latest === undefined || harness === undefined) return undefined;
 	const requestId = (await (await harness.submission(latest, context))?.status(context))?.requestId;
 	if (requestId === undefined) return undefined;
+	return askOfRequest(read, conversationId, requestId, context);
+}
+
+/**
+ * The message a submission stands for, by its request ID: the person's own message, or, for a worker's report, the
+ * message that asked for that job (recorded in `reports` before the report is submitted). Undefined otherwise.
+ */
+export async function askOfRequest(
+	read: DocumentReader,
+	conversationId: ConversationId,
+	requestId: string,
+	context: Context,
+): Promise<string | undefined> {
 	const viaReport = (await read.snapshot(Reactions, conversationId, context))?.reports[requestId];
 	if (viaReport !== undefined) return viaReport;
 	// A message from the person: "<channel>:<message id>". Follow-ups, reports, and their reactions have other shapes.
