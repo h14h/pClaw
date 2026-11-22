@@ -575,6 +575,61 @@ test("reactions track a delegated ask: topical badge while working, the model's 
 	await agent.harness.close(context);
 });
 
+test("on Telegram, reactions become native ones (👀 while working) and react says when it swapped; Discord stays verbatim", async () => {
+	const { faux, models } = setup();
+	let reactResult = "";
+	faux.setResponses([
+		fauxAssistantMessage(
+			[fauxText("on it"), fauxToolCall("delegate", { name: "dino", brief: "find a dinosaur museum", emoji: "🦖" })],
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage(fauxToolCall("react", { emoji: "✅" }), { stopReason: "toolUse" }),
+		(request) => {
+			reactResult = JSON.stringify(request.messages.at(-1));
+			return fauxAssistantMessage("field museum, open til 5");
+		},
+		fauxAssistantMessage(fauxToolCall("react", { emoji: "🪨" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage("NO_REPLY"),
+		fauxAssistantMessage(
+			[fauxText("on it"), fauxToolCall("delegate", { name: "dino2", brief: "find another one", emoji: "🦖" })],
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage(fauxToolCall("react", { emoji: "🪨" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage("found one"),
+	]);
+	const agent = await openAgent(
+		await openNodeSqliteStorage(join(dir, "reactions-telegram.sqlite")),
+		{ config, models, notes: new Notes(join(dir, "notes-9t.md")), workers: await fakeWorkers() },
+		context,
+	);
+	const telegram = await agent.conversationFor("telegram:dm:1", context);
+	const discord = await agent.conversationFor("discord:dm:2", context);
+	const tg = inbox();
+	const dc = inbox();
+	const tgDelivery = await deliver(agent.harness, telegram.id, tg.outbox, context);
+	const dcDelivery = await deliver(agent.harness, discord.id, dc.outbox, context);
+	const asks = async (id: typeof telegram.id) => (await agent.harness.snapshot(Reactions, id, context))?.asks ?? {};
+
+	await telegram.submit({ type: "input", content: "find me a dinosaur museum", requestId: "telegram:100" }, context);
+	await tg.until(1);
+	assert.equal((await asks(telegram.id))["telegram:100"], "👀");
+	await tg.until(2);
+	assert.equal((await asks(telegram.id))["telegram:100"], "👍");
+	assert.match(reactResult, /Reacted 👍 \(Telegram does not support ✅/);
+
+	await (await telegram.submit({ type: "input", content: "rock on", requestId: "telegram:101" }, context)).wait(context);
+	assert.equal((await asks(telegram.id))["telegram:101"], "🗿");
+
+	await discord.submit({ type: "input", content: "find another", requestId: "discord:300" }, context);
+	await dc.until(1);
+	assert.equal((await asks(discord.id))["discord:300"], "🦖");
+	await dc.until(2);
+	assert.equal((await asks(discord.id))["discord:300"], "🪨");
+	await tgDelivery.stop();
+	await dcDelivery.stop();
+	await agent.harness.close(context);
+});
+
 test("a failed job marks its ask with a warning", async () => {
 	const { faux, models } = setup();
 	faux.setResponses([

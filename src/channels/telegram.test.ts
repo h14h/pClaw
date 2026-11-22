@@ -16,6 +16,7 @@ import {
 	isTelegramReactionEmoji,
 	markdownToTelegramHtml,
 	normalizeTelegramReaction,
+	REACTION_FALLBACK_ENTRIES,
 	splitPlainText,
 	splitTelegramHtml,
 	stripTelegramHtml,
@@ -235,13 +236,36 @@ test("normalizeTelegramReaction enforces Telegram's exact ReactionTypeEmoji whit
 	assert.equal(normalizeTelegramReaction("🚀"), "🔥");
 
 	// Unknown topical emojis fall back to a valid Telegram emoji (never REACTION_INVALID).
-	const fallbackResult = normalizeTelegramReaction("🍜");
+	const fallbackResult = normalizeTelegramReaction("🦖");
 	assert.ok(fallbackResult !== undefined && whitelist.has(fallbackResult));
-	assert.equal(normalizeTelegramReaction("🍜", "👀"), "👀");
+	assert.equal(normalizeTelegramReaction("🦖", "👀"), "👀");
 
 	// Empty clears reaction.
 	assert.equal(normalizeTelegramReaction(""), undefined);
 	assert.equal(normalizeTelegramReaction("   "), undefined);
+});
+
+test("every Telegram reaction fallback lands on a native reaction, with topical picks", () => {
+	const whitelist = new Set<string>(TELEGRAM_REACTION_EMOJIS);
+	for (const [source, target] of REACTION_FALLBACK_ENTRIES) {
+		assert.ok(whitelist.has(target), `${source} -> ${target} isn't a Telegram reaction`);
+		assert.equal(normalizeTelegramReaction(source, "🦄"), target);
+	}
+	assert.equal(normalizeTelegramReaction("🍕", "👀"), "🌭");
+	assert.equal(normalizeTelegramReaction("🍜", "👀"), "🌭");
+	assert.equal(normalizeTelegramReaction("🍺", "👀"), "🍾");
+	assert.equal(normalizeTelegramReaction("🍰", "👀"), "🍓");
+	assert.equal(normalizeTelegramReaction("🎿", "👀"), "☃");
+	assert.equal(normalizeTelegramReaction("⛷️", "👀"), "☃");
+	assert.equal(normalizeTelegramReaction("❄️", "👀"), "☃");
+	assert.equal(normalizeTelegramReaction("🌤️", "👀"), "⚡");
+	assert.equal(normalizeTelegramReaction("📧", "👀"), "✍");
+	assert.equal(normalizeTelegramReaction("✉️", "👀"), "✍");
+	assert.equal(normalizeTelegramReaction("🪨", "👀"), "🗿");
+	assert.equal(normalizeTelegramReaction("🎮", "👀"), "👾");
+	assert.equal(normalizeTelegramReaction("🕹️", "👀"), "👾");
+	assert.equal(normalizeTelegramReaction("💰", "👀"), "🏆");
+	assert.equal(normalizeTelegramReaction("🎶", "👀"), "🎉");
 });
 
 test("authorizeTelegramMessage enforces owner pairing, allowlist, and group rules", () => {

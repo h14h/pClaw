@@ -102,7 +102,7 @@ const CANONICAL_REACTION_MAP = new Map<string, string>(
  * Semantic mapping from common emojis not in Telegram's bot reaction whitelist (including pclaw's `⏳` and `⚠️`,
  * and common model picks like `✅`, `❌`, `🖥️`, `🚀`) to valid Telegram `ReactionTypeEmoji` values.
  */
-const REACTION_FALLBACK_ENTRIES: readonly [string, string][] = [
+export const REACTION_FALLBACK_ENTRIES: readonly [string, string][] = [
 	// Working / waiting / searching
 	["⏳", "👀"],
 	["⌛", "👀"],
@@ -166,7 +166,7 @@ const REACTION_FALLBACK_ENTRIES: readonly [string, string][] = [
 	["📝", "✍"],
 	["📋", "✍"],
 	["📄", "✍"],
-	["📚", "🤓"],
+	["📚", "✍"],
 	["📖", "🤓"],
 	["✏", "✍"],
 	["🖊", "✍"],
@@ -208,6 +208,58 @@ const REACTION_FALLBACK_ENTRIES: readonly [string, string][] = [
 	["😮", "🤯"],
 	["😲", "🤯"],
 	["😳", "😱"],
+	// Food / drink
+	["🍕", "🌭"],
+	["🍣", "🌭"],
+	["🍜", "🌭"],
+	["🍔", "🌭"],
+	["🌮", "🌭"],
+	["🍗", "🌭"],
+	["🥗", "🌭"],
+	["🦃", "🌭"],
+	["🥪", "🌭"],
+	["🍝", "🌭"],
+	["🍰", "🍓"],
+	["🍎", "🍓"],
+	["🍒", "🍓"],
+	["🍦", "🍓"],
+	["☕", "🍾"],
+	["🍺", "🍾"],
+	["🍻", "🍾"],
+	["🍷", "🍾"],
+	// Winter / snow / ski
+	["🎿", "☃"],
+	["⛷", "☃"],
+	["❄", "☃"],
+	["🏔", "☃"],
+	["🏂", "☃"],
+	["⛄", "☃"],
+	// Weather
+	["🌤", "⚡"],
+	["☀", "⚡"],
+	["🌧", "⚡"],
+	["⛈", "⚡"],
+	["🌩", "⚡"],
+	["🌪", "⚡"],
+	// Mail / chat
+	["📧", "✍"],
+	["✉", "✍"],
+	["💬", "✍"],
+	// Gaming / arcade
+	["🎮", "👾"],
+	["🕹", "👾"],
+	["🎲", "👾"],
+	// Money / finance / wins
+	["💵", "🏆"],
+	["💰", "🏆"],
+	["💸", "🏆"],
+	["📈", "🏆"],
+	["🏅", "🏆"],
+	// Rock / stone
+	["🪨", "🗿"],
+	// Music
+	["🎵", "🎉"],
+	["🎶", "🎉"],
 ];
 
 const SEMANTIC_REACTION_MAP = new Map<string, string>(

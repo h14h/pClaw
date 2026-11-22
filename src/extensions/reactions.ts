@@ -10,6 +10,7 @@ import {
 	LiveDoc,
 	type Tx,
 } from "@earendil-works/pi-durable";
+import { isTelegramReactionEmoji, normalizeTelegramReaction } from "../channels/telegram-format.ts";
 
 /**
  * Reactions as status. Each of the person's messages that asked for something can carry one reaction from pclaw,
@@ -77,17 +78,24 @@ export function reactionsExtension(harness: { current?: Harness }) {
 				description:
 					"Put one emoji reaction on their message: the one you're answering, or, when you're relaying a worker's " +
 					"report, the message that asked for the job. Pick the literal emoji when there is one (🍜 for ramen, 🖥️ for " +
-					"a computer), ✅ or 🎉 when a job is done and the news is good, something warmer for hard news, and never ✅ " +
+					"a computer), a positive one that fits the topic and your voice (🎉, 🔥, 💯, ✅) when a job is done and the news is good, something warmer for hard news, and never ✅ " +
 					"on bad news. A reaction can be the whole reply: for \"thanks\" or \"ok sounds good\", react and reply NO_REPLY. " +
-					"It replaces any reaction you put there before; pass \"none\" to clear it.",
+					"It replaces any reaction you put there before; pass \"none\" to clear it. Follow your app's formatting guide for " +
+					"which reactions it supports.",
 				parameters: obj({ emoji: str({ description: "One emoji, or \"none\"." }) }, { open: true }),
 				execute: async ({ emoji }, api, context) => {
 					const value = emoji.trim() === "none" ? "" : emoji.trim();
 					if (value !== "" && !isEmoji(value)) throw new Error(`"${emoji}" isn't a single emoji.`);
 					const ref = await currentAsk(harness.current, api, api.conversationId, context);
 					if (ref === undefined) return { output: [{ type: "text" as const, text: "There's no message of theirs to react to here." }] };
-					await api.commit((tx) => setReaction(tx, api.conversationId, ref, value), context);
-					return { output: [{ type: "text" as const, text: value === "" ? "Cleared." : `Reacted ${value}.` }] };
+					// Telegram only takes its own reaction set: store what they'll actually see, and say so when it had to swap one in.
+					const mapped = value !== "" && ref.startsWith("telegram:") ? (normalizeTelegramReaction(value, "👌") ?? value) : value;
+					await api.commit((tx) => setReaction(tx, api.conversationId, ref, mapped), context);
+					const text =
+						mapped === "" ? "Cleared."
+						: mapped !== value && !isTelegramReactionEmoji(value) ? `Reacted ${mapped} (Telegram does not support ${value}; pick from your formatting guide's supported reactions).`
+						: `Reacted ${mapped}.`;
+					return { output: [{ type: "text" as const, text }] };
 				},
 			}),
 		],

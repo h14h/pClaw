@@ -25,6 +25,7 @@ import { pairedClient, runT3Turn } from "../t3-client.ts";
 import { type PromptResolver, prompts } from "../prompts.ts";
 import type { WorkerSandbox } from "../sandbox.ts";
 import { formatWorkerProgress } from "../worker-progress.ts";
+import { normalizeTelegramReaction } from "../channels/telegram-format.ts";
 import { currentAsk, FAILED, isEmoji, Reactions, setReaction, STEERED, WORKING } from "./reactions.ts";
 
 /**
@@ -533,13 +534,15 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 					emoji: opt(
 						str({
 							description:
-								"A reaction for their message while the job runs: the literal emoji for the topic if there is one (🖥️ for a computer, 🍜 for ramen). Defaults to ⏳.",
+								"A reaction for their message while the job runs: the literal emoji for the topic if there is one (🖥️ for a computer, 🍜 for ramen), from your app's formatting guide's supported reactions when it lists them. Defaults to ⏳.",
 						}),
 					),
 				}, { open: true }),
 				execute: async ({ name, brief, emoji, depth = "quick" }, api, context) => {
 					const ask = await currentAsk(harness.current, api, api.conversationId, context);
-					const badge = emoji !== undefined && isEmoji(emoji.trim()) ? emoji.trim() : WORKING;
+					const picked = emoji !== undefined && isEmoji(emoji.trim()) ? emoji.trim() : WORKING;
+					// Telegram only takes its own reaction set: store what they'll actually see, and keep a working look when unmapped.
+					const badge = ask?.startsWith("telegram:") ? (normalizeTelegramReaction(picked, "👀") ?? "👀") : picked;
 					const taken = (await api.snapshot(Workers, api.conversationId, context))?.workers[name];
 					if (taken !== undefined && taken.status !== "failed" && taken.status !== "stopped") {
 						throw new Error(`There's already a worker named ${name}. Use message_worker, or pick a new name.`);
