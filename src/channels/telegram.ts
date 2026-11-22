@@ -3,7 +3,6 @@ import { basename, extname, join } from "node:path";
 import type { Context } from "@earendil-works/chord/context";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import {
-	AssistantEntry,
 	type Conversation,
 	type ConversationId,
 	defineDoc,
@@ -18,7 +17,7 @@ import { Reactions } from "../extensions/reactions.ts";
 import { Workers } from "../extensions/workers.ts";
 import { type Heard, memoLabel, transcribe } from "../speech.ts";
 import { stamp } from "../time.ts";
-import { ReplyThreads } from "./reply-threads.ts";
+import { isDelegateAck, ReplyThreads } from "./reply-threads.ts";
 import {
 	markdownToTelegramHtml,
 	normalizeTelegramReaction,
@@ -1131,8 +1130,11 @@ export async function startTelegram(
 		}
 	};
 
+	/** Which ask each chat is on, so replies leave breadcrumbs back to their topic once topics interleave. */
+	const threads = new ReplyThreads("telegram");
+
 	const unregisterProgress = agent.progressSurfaces.register("telegram", {
-		async update({ address, message }) {
+		async update({ address, message, replyTo, silent }) {
 			const parsed = parseTelegramAddress(address);
 			if (parsed === undefined || parsed.kind !== "dm") return;
 			const state = ephemeralFor(address);
@@ -1141,12 +1143,17 @@ export async function startTelegram(
 				delete state.progressMessageId;
 				await deleteEphemeralIds(parsed.chatId, [previous]);
 			}
+			// Once they've talked about something else, an update quotes the ask it's about.
+			const quoted = threads.target(address, replyTo, { forceQuote: state.userSpokeAfterAck || silent === true });
 			const sent = await api.sendFormattedMessage(parsed.chatId, message, {
-				disableNotification: false,
+				disableNotification: silent === true,
 				disableLinkPreview: true,
+				...(quoted === undefined ? {} : { replyToMessageId: Number(quoted) }),
 			});
 			const lastId = sent.at(-1)?.message_id;
 			if (lastId !== undefined) state.progressMessageId = lastId;
+			// The chat is on the work's topic now, so the next side-chat reply quotes its own ask.
+			threads.sent(address, replyTo);
 		},
 		async finish({ address }) {
 			const parsed = parseTelegramAddress(address);
@@ -1154,9 +1161,6 @@ export async function startTelegram(
 			ephemeralFor(address).pendingFinish = true;
 		},
 	});
-
-	/** Which ask each chat is on, so a reply that lands after the chat moved on quotes the message it answers. */
-	const threads = new ReplyThreads("telegram");
 
 	const unregisterFiles = agent.fileSenders.register("telegram", async (addr, file, meta) => {
 		const parsed = parseTelegramAddress(addr);
@@ -1166,7 +1170,9 @@ export async function startTelegram(
 			filename: file.filename,
 			...(file.mimeType === undefined ? {} : { mimeType: file.mimeType }),
 		};
-		const replyTo = threads.target(addr, meta?.replyTo);
+		const conversationId = (await agent.addresses(context))[addr];
+		const workingAsks = conversationId === undefined ? [] : await agent.activeWorkerAsks(conversationId, context);
+		const replyTo = threads.quote(addr, meta?.replyTo, { workingAsks });
 		const sendOptions: SendMediaOptions | undefined =
 			file.caption === undefined && replyTo === undefined
 				? undefined
@@ -1174,29 +1180,19 @@ export async function startTelegram(
 						...(file.caption === undefined ? {} : { caption: file.caption }),
 						...(replyTo === undefined ? {} : { replyToMessageId: Number(replyTo) }),
 					};
+		let posted: TelegramMessage;
 		if (file.asPhoto === true) {
 			await api.sendChatAction(parsed.chatId, "upload_photo").catch(() => undefined);
-			await api.sendPhoto(parsed.chatId, payload, sendOptions);
+			posted = await api.sendPhoto(parsed.chatId, payload, sendOptions);
 		} else {
 			await api.sendChatAction(parsed.chatId, "upload_document").catch(() => undefined);
-			await api.sendDocument(parsed.chatId, payload, sendOptions);
+			posted = await api.sendDocument(parsed.chatId, payload, sendOptions);
 		}
+		threads.posted(addr, [posted.message_id]);
 		threads.sent(addr, meta?.replyTo);
 	});
 
 	const deliveries = new Map<string, { stop(): Promise<void> }>();
-
-	async function isDelegateAckEntry(conversation: Conversation, entryId: EntryId): Promise<boolean> {
-		const entries = (await conversation.context(context)).entries;
-		const record = entries.find((each) => each.id === entryId);
-		if (record === undefined || !AssistantEntry.is(record)) return false;
-		const message = record.model?.[0] as { content?: { type?: string; name?: string }[] } | undefined;
-		return Boolean(
-			message?.content?.some(
-				(part) => part.type === "toolCall" && (part.name === "delegate" || part.name === "message_worker"),
-			),
-		);
-	}
 
 	function outbox(addr: string, conversation: Conversation): Outbox {
 		const parsed = parseTelegramAddress(addr);
@@ -1206,15 +1202,19 @@ export async function startTelegram(
 				if (parsed === undefined) throw new Error(`Invalid Telegram address ${addr}`);
 				const mode = jobs.delivery(addr, text);
 				if (mode === "moved") return;
-				const isAck = parsed.kind === "dm" && (await isDelegateAckEntry(conversation, entry));
-				const replyTo = threads.target(addr, meta?.replyTo);
+				const isAck = parsed.kind === "dm" && (await isDelegateAck(conversation, entry, context));
+				const workingAsks = await agent.activeWorkerAsks(conversation.id, context);
+				const replyTo = threads.quote(addr, meta?.replyTo, { isAck, workingAsks });
 				const sent = await api.sendFormattedMessage(parsed.chatId, text, {
 					disableNotification: mode === "silent",
 					disableLinkPreview: true,
 					...(replyTo === undefined ? {} : { replyToMessageId: Number(replyTo) }),
 				});
 				// An ack dissolves once the answer lands, so it doesn't move the chat on.
-				if (!isAck) threads.sent(addr, meta?.replyTo);
+				if (!isAck) {
+					threads.posted(addr, sent.map((msg) => msg.message_id));
+					threads.sent(addr, meta?.replyTo);
+				}
 				if (parsed.kind === "dm") {
 					if (isAck) {
 						const state = ephemeralFor(addr);
@@ -1359,7 +1359,14 @@ export async function startTelegram(
 		const conversation = await agent.conversationFor(auth.addr, context);
 		await agent.describe(conversation.id, { label }, context);
 		await attach(auth.addr, conversation);
-		threads.heard(auth.addr, primary.message_id);
+		// In a forum topic every message "replies" to the topic's opening message; that's not a swipe back.
+		const swiped = primary.reply_to_message;
+		const jumpTarget = swiped === undefined || "forum_topic_created" in swiped ? undefined : swiped.message_id;
+		threads.heard(
+			auth.addr,
+			messages.map((message) => message.message_id),
+			jumpTarget,
+		);
 		if (!auth.isGroup) {
 			const state = ephemeral.get(auth.addr);
 			if (state !== undefined && state.ackMessageIds.length > 0) state.userSpokeAfterAck = true;

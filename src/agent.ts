@@ -79,6 +79,8 @@ export type Agent = {
 	 * on the run still being live. Undefined for follow-ups, job updates, reactions, and the like.
 	 */
 	askOf(conversationId: ConversationId, userEntry: EntryId, context: Context): Promise<string | undefined>;
+	/** The asks of the conversation's workers that are working now, "" for one with no ask on record. */
+	activeWorkerAsks(conversationId: ConversationId, context: Context): Promise<string[]>;
 };
 
 function disabledJobs(
@@ -481,6 +483,11 @@ export async function openAgent(
 		return ask;
 	}
 
+	async function activeWorkerAsks(conversationId: ConversationId, context: Context): Promise<string[]> {
+		const doc = await harness.snapshot(Workers, conversationId, context);
+		return Object.values(doc?.workers ?? {}).flatMap((worker) => (worker.status === "working" ? [worker.ask ?? ""] : []));
+	}
+
 	harness.resume();
 	return {
 		harness,
@@ -498,5 +505,6 @@ export async function openAgent(
 		describe,
 		setModel,
 		askOf,
+		activeWorkerAsks,
 	};
 }

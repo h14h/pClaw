@@ -1,5 +1,6 @@
 import type { Context } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai/models";
+import { AssistantEntry, type ConversationId, type EntryRecord, UserEntry } from "@earendil-works/pi-durable";
 import type { Agent } from "./agent.ts";
 import type { Config } from "./config.ts";
 import type { WorkerItem } from "./dashboard/types.ts";
@@ -10,6 +11,11 @@ import { type PromptResolver, readPrompt } from "./prompts.ts";
 
 const SECRETS = /(password|passwd|token|secret|api[_-]?key|authorization)/i;
 const DEFAULT_QUIET_CONFIRM_MS = 105_000;
+/** No new worker activity for this long is a stall worth interrupting a side conversation for. */
+export const STALL_MS = 180_000;
+/** Activity that's worth breaking into a side conversation for: a failure, a snag, a retry, a blocker, a pivot. */
+const INTERRUPT_WORTHY =
+	/(^|\n)failed |\b(error|errors|failed|failure|fails|retry|retrying|retried|workaround|not found|no such file|missing|blocked|denied|forbidden|unauthorized|timed out|timeout|cannot|can't|couldn't|unable|exception|traceback|crash(ed)?|pivot(ing)?|switching approach|giving up)\b/i;
 
 export type WorkerProgressUpdateEvent = {
 	address: string;
@@ -17,6 +23,10 @@ export type WorkerProgressUpdateEvent = {
 	sessionId: string;
 	message: string;
 	status?: string;
+	/** The person's message the work answers ("telegram:<id>"), for quoting once the chat has moved on. */
+	replyTo?: string;
+	/** Post without a notification: they're mid-conversation about something else. */
+	silent?: boolean;
 };
 
 export type WorkerProgressFinishEvent = {
@@ -107,6 +117,70 @@ const WORKER_PROGRESS_TASK = `Right now a background worker is partway through a
 - "message": one crisp, concrete line (at most 160 characters) strictly following your voice guide above — match its capitalization, grammar, and brevity (do not switch to lowercase if your voice uses normal capitalization). State what changed, what was found, or what stage is underway now. Never narrate raw tool names, file paths, shell commands, or secrets. Never repeat what you already said.
 - Return null for "message" if nothing meaningful happened yet unless the prompt notes it has been quiet and asks for a brief confirmation that work is still moving.`;
 
+/** Whether fresh worker activity is worth interrupting a side conversation for. */
+export function interruptWorthy(activity: string): boolean {
+	return INTERRUPT_WORTHY.test(activity);
+}
+
+/** The person chatting about something else while a worker runs. */
+export type SideChat = {
+	/** How long ago they last wrote. */
+	lastUserAgoMs: number;
+	/** The last few turns of the conversation, oldest first, clipped. */
+	recent: string[];
+};
+
+function entryText(entry: EntryRecord): string {
+	const content = (entry.model?.[0] as { content?: unknown } | undefined)?.content;
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.flatMap((part: { type?: string; text?: string }) => (part.type === "text" && typeof part.text === "string" ? [part.text] : []))
+		.join("\n");
+}
+
+function entryTime(entry: EntryRecord): number | undefined {
+	const timestamp = (entry.model?.[0] as { timestamp?: unknown } | undefined)?.timestamp;
+	return typeof timestamp === "number" ? timestamp : undefined;
+}
+
+/** A message the person typed (or spoke): stamped "[...]" input, not a worker report, job result, or reaction. */
+function isChat(text: string): boolean {
+	return text.startsWith("[") && !/^\[[^\]\n]*\]\n\[reacted /.test(text);
+}
+
+const clipTurn = (text: string) => {
+	const flat = text.replace(/^\[[^\]\n]*\]\n/, "").replace(/\s+/g, " ").trim();
+	return flat.length > 200 ? `${flat.slice(0, 199)}…` : flat;
+};
+
+/**
+ * Whether the person has been chatting since a worker started at `startedAt`, read from the conversation's entries:
+ * undefined when they haven't (they're waiting on this work), else how recently and what about.
+ */
+export function sideChatSince(entries: readonly EntryRecord[], startedAt: number, now: number): SideChat | undefined {
+	let lastUserAt: number | undefined;
+	const turns: string[] = [];
+	for (const entry of entries) {
+		const user = UserEntry.is(entry);
+		if (!user && !AssistantEntry.is(entry)) continue;
+		const text = entryText(entry).trim();
+		if (text === "") continue;
+		if (user) {
+			if (!isChat(text)) continue;
+			const at = entryTime(entry);
+			if (at !== undefined && at >= startedAt) lastUserAt = at;
+			turns.push(`They said: ${clipTurn(text)}`);
+		} else turns.push(`You said: ${clipTurn(text)}`);
+	}
+	if (lastUserAt === undefined) return undefined;
+	return { lastUserAgoMs: Math.max(0, now - lastUserAt), recent: turns.slice(-3) };
+}
+
+/** What a progress update may say while they're talking about something else. */
+export const SIDE_CHAT_RULE =
+	'Stay quiet: return null for "message" for normal progress, even good progress. Only write a message if the work failed, hit a snag and is retrying or working around it, is blocked or missing something, changed course in a big way, or has stalled badly: something they would want to know even mid-conversation. If you do, keep it short, say what the work is about so it is clear which topic it belongs to, and phrase it so it sits naturally next to that conversation instead of cutting across it.';
+
 /** Voice-compliant system prompt for live worker progress updates. */
 export function workerProgressPrompt(prompts?: PromptResolver): string {
 	return `${(prompts?.read("voice") ?? readPrompt("voice")).trim()}\n\n${WORKER_PROGRESS_TASK}`;
@@ -123,6 +197,10 @@ export async function generateWorkerProgressUpdate(options: {
 	activity: string;
 	hint?: string;
 	quietConfirm?: boolean;
+	/** They're chatting about something else: speak only if something went wrong or needs them. */
+	sideChat?: SideChat;
+	/** How long the worker has shown no new activity, when that's a stall. */
+	stalledMs?: number;
 	signal?: AbortSignal;
 }): Promise<{ status?: string; message?: string }> {
 	try {
@@ -131,12 +209,23 @@ export async function generateWorkerProgressUpdate(options: {
 		const quietNote = options.quietConfirm
 			? `Elapsed: ${formatElapsed(options.elapsedMs)}. It has been quiet for a while and the worker is actively progressing; send one short confirmation of what it's doing now.`
 			: `Elapsed: ${formatElapsed(options.elapsedMs)}.`;
+		const side = options.sideChat;
+		const sideNote =
+			side === undefined
+				? []
+				: [
+						`They're in a side conversation about something else right now (they last wrote ${formatElapsed(side.lastUserAgoMs)} ago), while this work runs in the background. The conversation so far:\n${side.recent.join("\n") || "(nothing yet)"}`,
+						SIDE_CHAT_RULE,
+					];
+		const stallNote = options.stalledMs === undefined ? [] : [`The worker has shown no new activity for ${formatElapsed(options.stalledMs)}.`];
 		const content = [
 			`Task (${options.workerName}):\n${options.brief.slice(0, 800)}`,
 			`Already told them: ${options.told.join(" / ") || "nothing"}`,
-			quietNote,
+			side === undefined ? quietNote : `Elapsed: ${formatElapsed(options.elapsedMs)}.`,
+			...stallNote,
+			...sideNote,
 			...(options.hint === undefined ? [] : [options.hint]),
-			`Recent activity:\n${options.activity}`,
+			`Recent activity:\n${options.activity || "(nothing new)"}`,
 		].join("\n\n");
 		const reply = await options.models.completeSimple(
 			model,
@@ -163,6 +252,11 @@ type TrackedRun = {
 	lastNoteAt?: number;
 	position: number;
 	told: string[];
+	/** Worker items seen so far, and when that count last grew: for telling a stall. */
+	seen: number;
+	lastActivityAt: number;
+	/** A stall was already reported; reset when activity resumes. */
+	stallNoted: boolean;
 };
 
 export type WorkerProgressMonitorOptions = {
@@ -173,6 +267,7 @@ export type WorkerProgressMonitorOptions = {
 	refreshMs?: number;
 	firstUpdateMs?: number;
 	quietConfirmMs?: number;
+	stallMs?: number;
 	now?: () => number;
 };
 
@@ -191,7 +286,20 @@ export function startWorkerProgressMonitor(
 	const refreshMs = options.refreshMs ?? Math.max(10, options.config.jobProgressSeconds) * 1000;
 	const firstUpdateMs = options.firstUpdateMs ?? Math.min(refreshMs, 30_000);
 	const quietConfirmMs = options.quietConfirmMs ?? DEFAULT_QUIET_CONFIRM_MS;
+	const stallMs = options.stallMs ?? STALL_MS;
 	const nowFn = options.now ?? Date.now;
+
+	/** Whether they've been chatting since `startedAt` in this conversation; read-only. */
+	const sideChat = async (conversationId: ConversationId, startedAt: number, now: number) => {
+		try {
+			const conversation = await agent.harness.conversation(conversationId, context);
+			if (conversation === undefined) return undefined;
+			return sideChatSince((await conversation.context(context)).entries, startedAt, now);
+		} catch (error) {
+			console.error("[pclaw] worker progress: couldn't read the conversation", error);
+			return undefined;
+		}
+	};
 
 	const tracked = new Map<string, TrackedRun>();
 	let running = false;
@@ -221,6 +329,9 @@ export function startWorkerProgressMonitor(
 							lastCheckedAt: worker.startedAt ?? now,
 							position: 0,
 							told: [],
+							seen: 0,
+							lastActivityAt: worker.startedAt ?? now,
+							stallNoted: false,
 						};
 						tracked.set(key, state);
 					}
@@ -233,6 +344,59 @@ export function startWorkerProgressMonitor(
 					const freshActivity = describeActivity(fresh);
 					const quietAge = now - (state.lastNoteAt ?? state.startedAt);
 					const quietDue = quietAge >= quietConfirmMs;
+					if (items.length > state.seen) {
+						state.seen = items.length;
+						state.lastActivityAt = now;
+						state.stallNoted = false;
+					}
+					const replyTo = worker.ask === undefined ? {} : { replyTo: worker.ask };
+
+					// They're talking about something else: only a failure, a snag, or a bad stall is worth breaking in for.
+					const side = await sideChat(conversationId, worker.startedAt ?? state.startedAt, now);
+					if (side !== undefined) {
+						const stalledMs = now - state.lastActivityAt;
+						const stalled = !state.stallNoted && stalledMs >= stallMs;
+						const worthy = freshActivity !== "" && interruptWorthy(freshActivity);
+						state.position = items.length;
+						state.lastCheckedAt = now;
+						const sideId = `worker-progress:${name}:${worker.sessionId}:${items.length}`;
+						if (!worthy && !stalled) {
+							options.decisions.record({ type: "progress", id: sideId, job: name, arm: "side-chat", posted: false });
+							continue;
+						}
+						if (stalled) state.stallNoted = true;
+						const update = await generateWorkerProgressUpdate({
+							models: options.models,
+							config: options.config,
+							prompts: agent.prompts,
+							workerName: name,
+							brief: worker.brief,
+							elapsedMs: now - state.startedAt,
+							told: state.told,
+							activity: freshActivity,
+							sideChat: side,
+							...(stalled ? { stalledMs } : {}),
+						});
+						let posted = false;
+						if (update.message !== undefined && update.message !== "") {
+							await surface
+								.update({
+									address,
+									workerName: name,
+									sessionId: worker.sessionId,
+									message: update.message,
+									...(update.status === undefined ? {} : { status: update.status }),
+									...replyTo,
+									silent: true,
+								})
+								.catch((error: unknown) => console.error(`[pclaw] progress surface ${channel}/${name}`, error));
+							state.lastNoteAt = now;
+							state.told = [...state.told, update.message].slice(-5);
+							posted = true;
+						}
+						options.decisions.record({ type: "progress", id: sideId, job: name, arm: "side-chat", stalled, posted });
+						continue;
+					}
 
 					if (freshActivity === "" && (!quietDue || items.length === 0)) {
 						state.lastCheckedAt = now;
@@ -302,6 +466,7 @@ export function startWorkerProgressMonitor(
 								sessionId: worker.sessionId,
 								message,
 								...(status === undefined ? {} : { status }),
+								...replyTo,
 							})
 							.catch((error: unknown) => console.error(`[pclaw] progress surface ${channel}/${name}`, error));
 						state.lastNoteAt = now;

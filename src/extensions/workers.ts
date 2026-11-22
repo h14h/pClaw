@@ -53,6 +53,8 @@ type Worker = Partial<Job> & {
 	run?: TaskId;
 	startedAt?: number;
 	updatedAt: number;
+	/** The person's message the current run answers ("telegram:<id>"), so its updates can quote it. */
+	ask?: string;
 };
 
 export const Workers = defineDoc<{ workers: Record<string, Worker> }>({
@@ -566,7 +568,7 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 						const job = existing === undefined ? { provider: options.provider, model: options.model } : jobOf(options, existing);
 						const run = await tx.createTask(Run, { name, sessionId, message: brief, depth, ...job, ...runAsk }, background);
 						const now = Date.now();
-						doc.workers[name] = { ...job, sessionId, brief, depth, status: "working", run, startedAt: now, updatedAt: now };
+						doc.workers[name] = { ...job, sessionId, brief, depth, status: "working", run, startedAt: now, updatedAt: now, ...runAsk };
 					};
 					await api.commit(async (tx) => {
 						if (ask !== undefined) await setReaction(tx, api.conversationId, ask, badge);
@@ -637,6 +639,8 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 						const job = jobOf(options, worker);
 						worker.run = await tx.createTask(Run, { name, sessionId: worker.sessionId, message, depth: worker.depth ?? "deep", ...job, ...(ask === undefined ? {} : { ask }) }, background);
 						Object.assign(worker, job);
+						if (ask === undefined) delete worker.ask;
+						else worker.ask = ask;
 						worker.status = "working";
 						worker.startedAt = worker.updatedAt = Date.now();
 						return undefined;

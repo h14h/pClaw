@@ -34,7 +34,7 @@ import { Workers } from "../extensions/workers.ts";
 import { sanitizeFilename } from "../sandbox.ts";
 import { type Heard, memoLabel, transcribe } from "../speech.ts";
 import { stamp } from "../time.ts";
-import { ReplyThreads } from "./reply-threads.ts";
+import { isDelegateAck, ReplyThreads } from "./reply-threads.ts";
 
 const MAX_MESSAGE = 2000;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -291,12 +291,15 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 	const unregisterFiles = agent.fileSenders.register("discord", async (addr, file, meta) => {
 		const channel = await target(addr);
 		if (channel === undefined) throw new Error(`Can't reach ${addr}`);
-		const replyTo = threads.target(addr, meta?.replyTo);
-		await channel.send({
+		const conversationId = (await agent.addresses(context))[addr];
+		const workingAsks = conversationId === undefined ? [] : await agent.activeWorkerAsks(conversationId, context);
+		const replyTo = threads.quote(addr, meta?.replyTo, { workingAsks });
+		const posted = await channel.send({
 			...(file.caption !== undefined && file.caption.trim() !== "" ? { content: file.caption.slice(0, MAX_MESSAGE) } : {}),
 			files: [{ attachment: Buffer.from(file.data), name: file.filename }],
 			...(replyTo === undefined ? {} : discordReply(replyTo, false)),
 		});
+		threads.posted(addr, [posted.id]);
 		threads.sent(addr, meta?.replyTo);
 	});
 
@@ -309,7 +312,9 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 				const sent: string[] = [];
 				const mode = jobs.delivery(addr, text);
 				if (mode === "moved") return;
-				const replyTo = threads.target(addr, meta?.replyTo);
+				const isAck = addr.startsWith("discord:dm:") && (await isDelegateAck(conversation, entry, context));
+				const workingAsks = await agent.activeWorkerAsks(conversation.id, context);
+				const replyTo = threads.quote(addr, meta?.replyTo, { isAck, workingAsks });
 				const messages = discordMessages(text, {
 					mode,
 					...(ownerId === undefined ? {} : { ownerId }),
@@ -317,7 +322,9 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 					...(replyTo === undefined ? {} : { replyTo }),
 				});
 				for (const options of messages) sent.push((await channel.send(options)).id);
-				threads.sent(addr, meta?.replyTo);
+				threads.posted(addr, sent);
+				// Like on Telegram, an ack is about work just handed off: its report still owes the ask a reply.
+				if (!isAck) threads.sent(addr, meta?.replyTo);
 				await conversation.commit(async (tx) => {
 					const doc = await tx.doc(SentMessages);
 					for (const id of sent) doc.messages[id] = { conversation: conversation.id, entry };
@@ -551,7 +558,7 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 			const route = await conversationFor(message);
 			if (route === undefined) return;
 			await attach(route.addr, route.conversation);
-			threads.heard(route.addr, message.id);
+			threads.heard(route.addr, message.id, message.reference?.messageId);
 			const user = agent.users.resolveAddress(route.addr);
 			const userPaths = user === undefined ? undefined : agent.users.pathsFor(user.id);
 			const userTimeZone = user?.timeZone ?? config.timeZone;
