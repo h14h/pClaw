@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { appendFileSync } from "node:fs";
+import type { Models } from "@earendil-works/pi-ai/models";
 import { readPrompt } from "./prompts.ts";
 
 /**
@@ -7,6 +8,10 @@ import { readPrompt } from "./prompts.ts";
  * probabilities in one forward pass, with no generated text. Its answers pick sections of src/prompts/guidance.md, and
  * those reach the front model inside `<guidance>`, which it's free to ignore. Nothing here decides what pclaw does:
  * with no decision model configured, or when it's unreachable, there's simply no hint.
+ *
+ * d1 runs at home, so it's asked with a tight timeout. When it isn't configured, or doesn't answer in time, a small
+ * structured prompt to a cloud model (`fallback`) answers the same questions in the same shape, so callers never
+ * care which one answered. The log says which (`backend`).
  *
  * Every call lands in decisions.jsonl. A share of events (`holdout`) are controls: the question is asked and logged,
  * but the hint isn't shown, so hinted and unhinted behavior can be compared. See docs/decision-evals.md.
@@ -18,9 +23,19 @@ export type Question =
 export type Questions = Record<string, Question>;
 export type Answer = { noul?: number; probability?: number; choice?: string; confidence?: number; probabilities?: Record<string, number> };
 export type Answers = Record<string, Answer>;
-export type Site = "job-turn" | "message" | "project" | "follow-up" | "progress";
+export type Site = "job-turn" | "message" | "project" | "follow-up" | "progress" | "in-worker";
 export type Arm = "guided" | "control";
-export type Decided = { id: string; site: Site; arm: Arm; answers: Answers };
+export type Backend = "d1" | "fallback";
+export type Decided = { id: string; site: Site; arm: Arm; answers: Answers; backend?: Backend };
+
+/** A cloud model that answers when d1 can't: the front model, asked for a few numbers with no tools. */
+export type DecisionFallback = {
+	models: Models;
+	provider: string;
+	model: string;
+	/** How long the fallback may take. */
+	timeoutMs?: number;
+};
 
 export type Decisions = {
 	readonly configured: boolean;
@@ -36,14 +51,19 @@ export function armOf(id: string, holdout: number): Arm {
 	return createHash("sha256").update(id).digest()[0]! / 256 < holdout ? "control" : "guided";
 }
 
+/** The longest d1 is waited on, whatever a caller asks: a home ISP outage must never stall a reply. */
+export const D1_TIMEOUT_MS = 2_500;
+const FALLBACK_TIMEOUT_MS = 4_000;
+
 export function decisionClient(options: {
 	url?: string;
 	logFile: string;
 	holdout?: number;
 	timeoutMs?: number;
 	fetchFn?: typeof fetch;
+	fallback?: DecisionFallback;
 }): Decisions {
-	const { url, logFile, holdout = 0.2, timeoutMs = 2_500, fetchFn = fetch } = options;
+	const { url, logFile, holdout = 0.2, timeoutMs = D1_TIMEOUT_MS, fetchFn = fetch, fallback } = options;
 	const record: Decisions["record"] = (event) => {
 		try {
 			appendFileSync(logFile, `${JSON.stringify({ at: new Date().toISOString(), ...event })}\n`, { mode: 0o600 });
@@ -51,36 +71,105 @@ export function decisionClient(options: {
 			console.error("[pclaw] couldn't write the decision log", error);
 		}
 	};
+	const askD1 = async (stateText: string, questions: Questions, limit: number): Promise<Answers> => {
+		const response = await fetchFn(`${url!.replace(/\/$/, "")}/v1/decisions`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ state: stateText, questions }),
+			signal: AbortSignal.timeout(Math.min(limit, D1_TIMEOUT_MS)),
+		});
+		if (!response.ok) throw new Error(`decision model returned ${response.status}: ${(await response.text()).slice(0, 200)}`);
+		const { answers } = (await response.json()) as { answers: Answers };
+		return answers;
+	};
 	return {
-		configured: url !== undefined,
+		configured: url !== undefined || fallback !== undefined,
 		record,
 		ask: async ({ id, site, state, questions, job, timeoutMs: limit = timeoutMs }) => {
-			if (url === undefined) return undefined;
+			if (url === undefined && fallback === undefined) return undefined;
 			const arm = armOf(id, holdout);
-			const started = performance.now();
 			const stateText = typeof state === "string" ? state : JSON.stringify(state);
 			const base = { type: "decision", id, site, arm, templates: templatesVersion(), ...(job === undefined ? {} : { job }), state: stateText.slice(0, STATE_LOG_LIMIT) };
-			try {
-				const response = await fetchFn(`${url.replace(/\/$/, "")}/v1/decisions`, {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ state: stateText, questions }),
-					signal: AbortSignal.timeout(limit),
-				});
-				if (!response.ok) throw new Error(`decision model returned ${response.status}: ${(await response.text()).slice(0, 200)}`);
-				const { answers } = (await response.json()) as { answers: Answers };
-				const ms = Math.round(performance.now() - started);
-				record({ ...base, ok: true, ms, answers });
-				console.log(`[pclaw] decide ${site} ${arm} ${ms}ms ${brief(answers)}${job === undefined ? "" : ` job=${job}`}`);
-				return { id, site, arm, answers };
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				record({ ...base, ok: false, ms: Math.round(performance.now() - started), error: message });
-				console.error(`[pclaw] decide ${site} failed, going without a hint: ${message}`);
-				return undefined;
+			const suffix = job === undefined ? "" : ` job=${job}`;
+			const attempts: [Backend, () => Promise<Answers>][] = [
+				...(url === undefined ? [] : [["d1", () => askD1(stateText, questions, limit)] as [Backend, () => Promise<Answers>]]),
+				...(fallback === undefined ? [] : [["fallback", () => askFallback(fallback, stateText, questions)] as [Backend, () => Promise<Answers>]]),
+			];
+			for (const [backend, attempt] of attempts) {
+				const started = performance.now();
+				try {
+					const answers = await attempt();
+					const ms = Math.round(performance.now() - started);
+					record({ ...base, backend, ok: true, ms, answers });
+					console.log(`[pclaw] decide ${site} ${arm} ${backend} ${ms}ms ${brief(answers)}${suffix}`);
+					return { id, site, arm, answers, backend };
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					record({ ...base, backend, ok: false, ms: Math.round(performance.now() - started), error: message });
+					console.error(`[pclaw] decide ${site} ${backend} failed${backend === "d1" && fallback !== undefined ? ", trying the fallback" : ", going without a hint"}: ${message}`);
+				}
 			}
+			return undefined;
 		},
 	};
+}
+
+const FALLBACK_SYSTEM =
+	"You label a situation for a router. Read the state, then answer every question. Reply with one JSON object and nothing else. " +
+	'For a yes/no question, the value is the probability of yes, a number from 0 to 1. For a pick-one question, the value is "<option>:<confidence>", ' +
+	"the option's key and a confidence from 0 to 1.";
+
+/** The fallback's prompt: the state, then each question with its options. */
+export function fallbackPrompt(stateText: string, questions: Questions): string {
+	const lines = Object.entries(questions).map(([name, question]) =>
+		question.type === "noul"
+			? `- ${name} (yes/no): ${question.instructions}`
+			: `- ${name} (pick one of ${Object.entries(question.criteria).map(([key, text]) => `${key} = ${text}`).join("; ")}): ${question.instructions}`,
+	);
+	return `State:\n${stateText.slice(0, STATE_LOG_LIMIT)}\n\nQuestions:\n${lines.join("\n")}\n\nJSON keys: ${Object.keys(questions).join(", ")}`;
+}
+
+const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
+
+/** Read the fallback's JSON into d1's answer shape. Questions it skipped or garbled are left out. */
+export function parseFallbackAnswers(raw: string, questions: Questions): Answers {
+	const parsed = JSON.parse(/\{[\s\S]*\}/.exec(raw)?.[0] ?? "{}") as Record<string, unknown>;
+	const answers: Answers = {};
+	for (const [name, question] of Object.entries(questions)) {
+		const value = parsed[name];
+		if (question.type === "noul") {
+			const p = typeof value === "number" ? value : typeof value === "boolean" ? (value ? 1 : 0) : typeof value === "string" ? Number(value) : Number.NaN;
+			if (Number.isFinite(p)) answers[name] = { noul: clamp01(p) };
+			continue;
+		}
+		let choice: string | undefined;
+		let confidence: number | undefined;
+		if (typeof value === "string") {
+			const at = value.lastIndexOf(":");
+			const tail = at === -1 ? Number.NaN : Number(value.slice(at + 1));
+			choice = (Number.isFinite(tail) ? value.slice(0, at) : value).trim();
+			if (Number.isFinite(tail)) confidence = clamp01(tail);
+		} else if (value !== null && typeof value === "object") {
+			const record = value as { choice?: unknown; confidence?: unknown };
+			if (typeof record.choice === "string") choice = record.choice.trim();
+			if (typeof record.confidence === "number") confidence = clamp01(record.confidence);
+		}
+		if (choice !== undefined && choice in question.criteria) answers[name] = { choice, confidence: confidence ?? 0.75 };
+	}
+	if (Object.keys(answers).length === 0) throw new Error(`fallback gave no usable answers: ${raw.slice(0, 120)}`);
+	return answers;
+}
+
+async function askFallback(fallback: DecisionFallback, stateText: string, questions: Questions): Promise<Answers> {
+	const model = fallback.models.getModel(fallback.provider, fallback.model);
+	if (model === undefined) throw new Error(`unknown fallback model ${fallback.provider}/${fallback.model}`);
+	const reply = await fallback.models.completeSimple(
+		model,
+		{ systemPrompt: FALLBACK_SYSTEM, messages: [{ role: "user", content: fallbackPrompt(stateText, questions), timestamp: Date.now() }] },
+		{ temperature: 0, maxTokens: 150, signal: AbortSignal.timeout(fallback.timeoutMs ?? FALLBACK_TIMEOUT_MS) },
+	);
+	if (reply.stopReason === "error" || reply.stopReason === "aborted") throw new Error(reply.errorMessage ?? `fallback ${reply.stopReason}`);
+	return parseFallbackAnswers(reply.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join(""), questions);
 }
 
 /** The probability behind a yes/no answer. */
@@ -262,6 +351,55 @@ export function messageGuidance(answers: Answers, facts: MessageFacts = {}, temp
 	return rendered.replaceAll("`list_jobs`", "`list_workers`");
 }
 
+// Decision set: a message arrived while one or more workers are running in this conversation (a DM included).
+
+export type WorkerIntent = "steer" | "status" | "side_chat" | "new_work";
+export const WORKER_INTENTS: readonly WorkerIntent[] = ["steer", "status", "side_chat", "new_work"];
+
+/** `workers` are the running ones, as `{ name, goal }`; a second question picks which one when there are several. */
+export function inWorkerQuestions(workers: { name: string; goal: string }[]): Questions {
+	return {
+		intent: {
+			type: "choice",
+			instructions: "Work is running in the background for the person (see running_work). What is their new message?",
+			criteria: {
+				steer: "It changes, redirects, narrows, widens, corrects, or adds a constraint or preference to the running work",
+				status: "It asks how the running work is going, whether it's done, or what it found so far",
+				side_chat: "It's about something else: chat, a question, or a comment unrelated to the running work",
+				new_work: "It asks for a separate new task, unrelated to the running work",
+			},
+		},
+		...(workers.length > 1
+			? {
+					which: {
+						type: "choice",
+						instructions: "Which piece of running work is the message most about?",
+						criteria: Object.fromEntries(workers.map((worker, index) => [`w${index}`, `${worker.name}: ${worker.goal.slice(0, 160)}`])),
+					},
+				}
+			: {}),
+	};
+}
+
+/** Below this, an intent read isn't trusted enough to shape the hint. */
+export const INTENT_THRESHOLD = 0.5;
+
+/** The intent and the worker it's about, from an in-worker read. Undefined when the read is missing or unsure. */
+export function readWorkerIntent(answers: Answers, workers: string[]): { intent: WorkerIntent; worker?: string; p: number } | undefined {
+	const { choice, p } = pick(answers.intent);
+	if (choice === undefined || !WORKER_INTENTS.includes(choice as WorkerIntent)) return undefined;
+	const which = pick(answers.which).choice;
+	const index = which === undefined ? (workers.length === 1 ? 0 : -1) : Number(which.slice(1));
+	const worker = workers[index];
+	return { intent: choice as WorkerIntent, p, ...(worker === undefined ? {} : { worker }) };
+}
+
+export function inWorkerGuidance(answers: Answers, workers: string[], templates?: Record<string, string>): string | undefined {
+	const read = readWorkerIntent(answers, workers);
+	if (read === undefined || read.p < INTENT_THRESHOLD) return undefined;
+	return renderGuidance(answers, [`worker.${read.intent}`], { worker: read.worker ?? workers.join(" or ") }, templates);
+}
+
 export const projectQuestion = (projects: { title: string; machine: string }[]): Questions => ({
 	project: {
 		type: "choice",
@@ -284,6 +422,29 @@ export const progressQuestions: Questions = {
 
 export const progressGuidance = (answers: Answers, templates?: Record<string, string>): string | undefined =>
 	renderGuidance(answers, [yes(answers.milestone) >= 0.5 ? "progress.milestone" : "progress.routine"], {}, templates);
+
+/** A running worker's progress, judged on timing, its own state, and what the conversation is doing. */
+export function workerProgressQuestions(sideChat: boolean): Questions {
+	return {
+		worth_updating: {
+			type: "noul",
+			instructions:
+				"Would a person waiting on this work want a short update now? Yes for a finding, a stage finished, a change of direction, a failure or retry, or a long silence. No for routine searching or reading that hasn't turned anything up, or right after the last update.",
+		},
+		...(sideChat
+			? {
+					interrupt_worthy: {
+						type: "noul",
+						instructions:
+							"The person is talking about something else right now. Is this worth breaking into that conversation for: the work failed, is stuck or retrying, needs them, changed course in a big way, or has gone quiet for a long time?",
+					},
+				}
+			: {}),
+	};
+}
+
+export const workerProgressGuidance = (answers: Answers, templates?: Record<string, string>): string | undefined =>
+	renderGuidance(answers, [yes(answers.worth_updating) >= 0.5 ? "progress.milestone" : "progress.routine"], {}, templates);
 
 // Decision set: a follow-up came due.
 

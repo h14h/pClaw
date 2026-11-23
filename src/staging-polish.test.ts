@@ -454,6 +454,7 @@ rl.on("line", (line) => {
 				JSON.stringify({
 					answers: {
 						milestone: { probability: d1Milestone },
+						worth_updating: { probability: d1Milestone },
 						job_size: { choice: "quick_worker", confidence: 0.9 },
 						fresh_check: { probability: 0.1 },
 						asks_status: { probability: 0.05 },
@@ -639,7 +640,7 @@ rl.on("line", (line) => {
 	}
 });
 
-test("worker progress monitor preserves control-arm holdout when milestone < 0.5 and gates only guided arm", async () => {
+test("worker progress monitor preserves control-arm holdout when worth_updating < 0.5 and gates only guided arm", async () => {
 	const { faux, models } = setupFaux();
 	const items = parseMuseSession(
 		JSON.stringify({
@@ -665,7 +666,7 @@ test("worker progress monitor preserves control-arm holdout when milestone < 0.5
 			logFile,
 			holdout,
 			fetchFn: (async () =>
-				new Response(JSON.stringify({ answers: { milestone: { probability: 0.1 } } }), {
+				new Response(JSON.stringify({ answers: { milestone: { probability: 0.1 }, worth_updating: { probability: 0.1 } } }), {
 					headers: { "Content-Type": "application/json" },
 				})) as typeof fetch,
 		});

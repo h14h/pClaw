@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { hostname } from "node:os";
-import type { Context } from "@earendil-works/chord/context";
+import { BACKGROUND_CONTEXT, type Context } from "@earendil-works/chord/context";
 import { bool, lit, obj, opt, str, union } from "@earendil-works/pi-schema";
 import type { Models } from "@earendil-works/pi-ai/models";
 import { type Conversation, type ConversationId, defineExtension, defineTool, type Harness } from "@earendil-works/pi-durable";
@@ -13,6 +13,7 @@ import { Routes } from "../routes.ts";
 import { pairedClient, T3Down } from "../t3-client.ts";
 import { stamp } from "../time.ts";
 import { currentAsk, isEmoji, setReaction, WORKING } from "./reactions.ts";
+import { combineGuidance, readForWorkers } from "../worker-intent.ts";
 import { Workers } from "./workers.ts";
 
 /**
@@ -403,6 +404,19 @@ export type JobsOptions = {
 
 export type Jobs = ReturnType<typeof createJobs>;
 
+/** The owner's message, for `guideMessage`. */
+export type GuideInput = {
+	id: string;
+	text: string;
+	channel: string;
+	discordThreadId?: string;
+	voice?: boolean;
+	/** The conversation it goes to, so running work there can be read against it. */
+	conversationId?: ConversationId;
+	/** What it replies to, when it's a reply. */
+	replyTo?: string;
+};
+
 export function createJobs(options: JobsOptions) {
 	const { store, backend, decisions, models, config, harness, workerItems = () => [] } = options;
 	const surface: { current?: JobSurface } = {};
@@ -769,9 +783,31 @@ export function createJobs(options: JobsOptions) {
 		return { stop: () => clearInterval(timer), tick };
 	}
 
-	/** A hint for the owner's message, or nothing. Runs before the message reaches the front model, so it's kept quick. */
-	async function guideMessage(input: { id: string; text: string; channel: string; discordThreadId?: string; voice?: boolean }): Promise<string | undefined> {
+	/**
+	 * A hint for the owner's message, or nothing. Runs before the message reaches the front model, so it's kept quick:
+	 * the message read and, when work is running in `conversationId`, the in-worker read go at once.
+	 */
+	async function guideMessage(input: GuideInput): Promise<string | undefined> {
 		if (input.text.trim() === "") return undefined;
+		const [message, worker] = await Promise.all([
+			guideOwnerMessage(input),
+			readForWorkers({
+				harness: harness.current,
+				decisions,
+				conversationId: input.conversationId,
+				id: input.id,
+				text: input.text,
+				...(input.replyTo === undefined ? {} : { replyTo: input.replyTo }),
+				context: BACKGROUND_CONTEXT,
+			}).catch((error: unknown) => {
+				console.error("[pclaw] in-worker read failed", error);
+				return undefined;
+			}),
+		]);
+		return combineGuidance(message, worker);
+	}
+
+	async function guideOwnerMessage(input: GuideInput): Promise<string | undefined> {
 		decisions.record({ type: "message", id: `message:${input.id}`, modality: input.voice === true ? "voice" : "text", words: input.text.trim().split(/\s+/).length, channel: input.discordThreadId ?? input.channel });
 		if (!decisions.configured) return undefined;
 		const job = input.discordThreadId === undefined ? undefined : store.forThread(input.discordThreadId);

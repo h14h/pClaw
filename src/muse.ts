@@ -40,6 +40,20 @@ export function museModels(fallback: string): { id: string; name: string }[] {
 }
 
 /**
+ * How a worker hands pclaw pictures to send: real, checked image files with exact paths and captions in the report.
+ * `dir` is where it saves them.
+ */
+export function imageContract(dir: string): string {
+	const where = dir.endsWith("/") ? dir : `${dir}/`;
+	return [
+		"## Images",
+		`When the person asks for images or photos, or a product or visual comparison would clearly be better with them, save 1–4 clean images into \`${where}\`: .jpg, .png, or .webp, straight from the source image URL (not a page, not a thumbnail sprite).`,
+		"Check every file before you list it: the download returned HTTP 200, and the file is a real, non-empty image (`file <path>` says JPEG, PNG, or WebP image data, or the first bytes are the image's magic number). Delete and skip anything that's an HTML page, an error, or empty. Never list an image you didn't verify.",
+		`In your report, under "Images", list each one as its exact \`${where}...\` path and a short caption (what it shows, and the source).`,
+	].join("\n\n");
+}
+
+/**
  * Put in front of a Muse session's first message: pclaw's worker prompt, then where its tools and skills are. Muse takes
  * no appended system prompt or extension, so they come as text and a command.
  *
@@ -53,6 +67,8 @@ export function musePreamble(options: {
 	skills: string[];
 	allowPages?: boolean;
 	remote?: boolean;
+	/** The local workspace, where images are saved. */
+	cwd?: string;
 }): string {
 	const workerPrompt = filterWorkerPrompt(readFileSync(options.promptFile, "utf8"), { remote: options.remote });
 	if (options.remote === true) {
@@ -62,6 +78,7 @@ export function musePreamble(options: {
 			"Use your built-in `web_search` and `web_fetch` tools when instructions say `search` or `read_page`.",
 			"Don't schedule anything (no cron jobs or reminders): pclaw handles follow-ups.",
 			"Put files you create in this workspace directory and report their exact paths so pclaw can send them to the user.",
+			imageContract("~/work/"),
 		].join("\n\n");
 	}
 	const allowPages = options.allowPages !== false;
@@ -83,6 +100,7 @@ export function musePreamble(options: {
 		...(allowPages ? [`\`publish_page\` is a command: \`${cli} publish <slug>\`, run from this directory.`] : []),
 		"Don't schedule anything (no cron jobs or reminders): pclaw handles follow-ups.",
 		...(skills === "" ? [] : ["Skills: when a job matches one, read its SKILL.md first and follow it.", skills]),
+		imageContract(options.cwd ?? "."),
 	].join("\n\n");
 }
 

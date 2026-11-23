@@ -132,8 +132,15 @@ export type Config = {
 	discordBoardChannel?: string;
 	/** For test instances: never mention the owner or add them to a thread. */
 	discordQuiet?: boolean;
-	/** A decision model's `/v1/decisions` server. Unset: no hints, and the front model decides alone. */
+	/**
+	 * A decision model's `/v1/decisions` server, asked first with a tight timeout. Unset, or when it doesn't answer, the
+	 * front model answers the same questions in a small structured prompt (see `decisionFallback`).
+	 */
 	decisionUrl?: string;
+	/** Whether the front model stands in for the decision model when it's unset or down. Default true. */
+	decisionFallback?: boolean;
+	/** The model for that stand-in, on the front model's provider. Defaults to the front model. */
+	decisionFallbackModel?: string;
 	/** A speech-to-text server (deploy/speech-server.py). Unset: voice memos can't be heard. */
 	speechUrl?: string;
 	/** Share of decisions asked and logged but not shown, for comparing behavior with and without hints. */

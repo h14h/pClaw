@@ -199,7 +199,7 @@ async function start(): Promise<void> {
 		},
 		context,
 	);
-	console.log(`[pclaw] jobs ${agent.t3Enabled ? "on" : "off"}, users ${agent.users.enabled ? agent.users.all().length : "single-owner"}, decision model ${config.decisionUrl ?? "off"}`);
+	console.log(`[pclaw] jobs ${agent.t3Enabled ? "on" : "off"}, users ${agent.users.enabled ? agent.users.all().length : "single-owner"}, decision model ${config.decisionUrl ?? "off"}${config.decisionFallback === false ? "" : `, fallback ${config.decisionFallbackModel ?? config.model}`}`);
 
 	let stopping = false;
 	const stop = async () => {

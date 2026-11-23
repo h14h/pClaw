@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { Config, UserSandboxConfig } from "./config.ts";
 import { isPagesEnabled } from "./config.ts";
 import { runLocalWorker, type WorkerOptions, type WorkerResult } from "./extensions/workers.ts";
@@ -14,6 +15,31 @@ const DEFAULT_SSH_WORK_DIR = "~/work";
 const DEFAULT_SSH_INBOX_DIR = "~/inbox";
 const DEFAULT_SSH_MUSE_BIN = "~/.local/bin/muse";
 const SSH_FILE_TIMEOUT_MS = 120_000;
+/** ssh exits 255 for its own failures (connection refused, reset, auth): the remote command never ran. */
+const SSH_OWN_FAILURE = 255;
+const SSH_RETRY_DELAY_MS = 1_000;
+
+/** An ssh command that exited non-zero, with its code. */
+export class SshExitError extends Error {
+	readonly code: number | null;
+	constructor(message: string, code: number | null) {
+		super(message);
+		this.name = "SshExitError";
+		this.code = code;
+	}
+}
+
+/** Run `attempt`, and once more after a short wait if ssh itself failed (exit 255). */
+export async function retrySshFailure<T>(attempt: () => Promise<T>, signal?: AbortSignal, delayMs = SSH_RETRY_DELAY_MS): Promise<T> {
+	try {
+		return await attempt();
+	} catch (error) {
+		if (!(error instanceof SshExitError) || error.code !== SSH_OWN_FAILURE || signal?.aborted === true) throw error;
+		console.warn(`[pclaw] ${error.message.split("\n")[0]}; retrying once`);
+		await sleep(delayMs, undefined, signal === undefined ? undefined : { signal });
+		return attempt();
+	}
+}
 
 export const SSH_BASE_ARGS = [
 	"-o", "BatchMode=yes",
@@ -182,6 +208,8 @@ export type SshSandboxOptions = {
 	/** Injectable for tests (defaults to "ssh"). */
 	sshCommand?: string;
 	spawnFn?: typeof spawn;
+	/** Wait before retrying after ssh's own failure (exit 255). */
+	retryDelayMs?: number;
 };
 
 /** Build the remote POSIX shell command that launches `muse serve` (MSP v1 over stdio) in `workDir`. */
@@ -276,6 +304,7 @@ export function createSshSandbox(options: SshSandboxOptions): WorkerSandbox {
 	const museBin = options.museBin?.trim() || DEFAULT_SSH_MUSE_BIN;
 	const sshCommand = options.sshCommand ?? "ssh";
 	const spawnFn = options.spawnFn ?? spawn;
+	const retryDelayMs = options.retryDelayMs ?? SSH_RETRY_DELAY_MS;
 
 	return {
 		type: "ssh",
@@ -323,41 +352,45 @@ export function createSshSandbox(options: SshSandboxOptions): WorkerSandbox {
 				...(req.signal === undefined ? {} : { signal: req.signal }),
 				...(req.onHandle === undefined ? {} : { onHandle: req.onHandle }),
 				label: `${sshCommand} to ${host}`,
+				preInitRetryDelayMs: retryDelayMs,
 			});
 			return { ok: result.ok, output: clip(result.output) };
 		},
 		async putFile(localPath, filename, signal) {
 			const bytes = readFileSync(localPath);
 			const remoteCmd = buildRemotePutCommand(inboxDir, filename);
-			const timeout = AbortSignal.timeout(SSH_FILE_TIMEOUT_MS);
-			const combined = signal === undefined ? timeout : AbortSignal.any([timeout, signal]);
+			const attempt = () => {
+				const timeout = AbortSignal.timeout(SSH_FILE_TIMEOUT_MS);
+				const combined = signal === undefined ? timeout : AbortSignal.any([timeout, signal]);
 
-			return new Promise<string>((resolvePromise, rejectPromise) => {
-				const child = spawnFn(sshCommand, [...SSH_BASE_ARGS, host, remoteCmd], {
-					stdio: ["pipe", "pipe", "pipe"],
-					env: sshEnv(),
-					signal: combined,
+				return new Promise<string>((resolvePromise, rejectPromise) => {
+					const child = spawnFn(sshCommand, [...SSH_BASE_ARGS, host, remoteCmd], {
+						stdio: ["pipe", "pipe", "pipe"],
+						env: sshEnv(),
+						signal: combined,
+					});
+					let stdout = "";
+					let stderr = "";
+					child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));
+					child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
+					child.stdin.on("error", () => {});
+					child.on("error", (error) => rejectPromise(new Error(`SSH putFile to ${host} failed: ${error.message}`)));
+					child.on("close", (code) => {
+						if (code !== 0) {
+							rejectPromise(new SshExitError(`SSH putFile to ${host} exited ${code}: ${stderr.trim() || "unknown error"}`, code));
+							return;
+						}
+						const dest = stdout.trim().split("\n").at(-1)?.trim();
+						if (!dest) {
+							rejectPromise(new Error(`SSH putFile to ${host} returned no destination path.`));
+							return;
+						}
+						resolvePromise(dest);
+					});
+					child.stdin.end(bytes);
 				});
-				let stdout = "";
-				let stderr = "";
-				child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));
-				child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
-				child.stdin.on("error", () => {});
-				child.on("error", (error) => rejectPromise(new Error(`SSH putFile to ${host} failed: ${error.message}`)));
-				child.on("close", (code) => {
-					if (code !== 0) {
-						rejectPromise(new Error(`SSH putFile to ${host} exited ${code}: ${stderr.trim() || "unknown error"}`));
-						return;
-					}
-					const dest = stdout.trim().split("\n").at(-1)?.trim();
-					if (!dest) {
-						rejectPromise(new Error(`SSH putFile to ${host} returned no destination path.`));
-						return;
-					}
-					resolvePromise(dest);
-				});
-				child.stdin.end(bytes);
-			});
+			};
+			return retrySshFailure(attempt, signal, retryDelayMs);
 		},
 		async getFile(remotePath, maxBytes, signal) {
 			const clean = validateFilePathInput(remotePath);
@@ -365,45 +398,48 @@ export function createSshSandbox(options: SshSandboxOptions): WorkerSandbox {
 				throw new Error("Invalid maxBytes limit.");
 			}
 			const remoteCmd = buildRemoteGetCommand(workDir, inboxDir, clean, maxBytes);
-			const timeout = AbortSignal.timeout(SSH_FILE_TIMEOUT_MS);
-			const combined = signal === undefined ? timeout : AbortSignal.any([timeout, signal]);
+			const attempt = () => {
+				const timeout = AbortSignal.timeout(SSH_FILE_TIMEOUT_MS);
+				const combined = signal === undefined ? timeout : AbortSignal.any([timeout, signal]);
 
-			return new Promise<SandboxFile>((resolvePromise, rejectPromise) => {
-				const child = spawnFn(sshCommand, [...SSH_BASE_ARGS, host, remoteCmd], {
-					stdio: ["ignore", "pipe", "pipe"],
-					env: sshEnv(),
-					signal: combined,
+				return new Promise<SandboxFile>((resolvePromise, rejectPromise) => {
+					const child = spawnFn(sshCommand, [...SSH_BASE_ARGS, host, remoteCmd], {
+						stdio: ["ignore", "pipe", "pipe"],
+						env: sshEnv(),
+						signal: combined,
+					});
+					const chunks: Buffer[] = [];
+					let totalBytes = 0;
+					let overflow = false;
+					let stderr = "";
+					child.stdout.on("data", (chunk: Buffer) => {
+						totalBytes += chunk.byteLength;
+						if (totalBytes > maxBytes) {
+							overflow = true;
+							child.kill("SIGKILL");
+							return;
+						}
+						chunks.push(chunk);
+					});
+					child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
+					child.on("error", (error) => {
+						if (!overflow) rejectPromise(new Error(`SSH getFile from ${host} failed: ${error.message}`));
+					});
+					child.on("close", (code) => {
+						if (overflow) {
+							rejectPromise(new Error(`File "${basename(clean)}" exceeds limit (${maxBytes} bytes).`));
+							return;
+						}
+						if (code !== 0) {
+							rejectPromise(new SshExitError(stderr.trim() || `SSH getFile from ${host} exited ${code}.`, code));
+							return;
+						}
+						const data = new Uint8Array(Buffer.concat(chunks, totalBytes));
+						resolvePromise({ data, filename: basename(clean), sizeBytes: data.byteLength });
+					});
 				});
-				const chunks: Buffer[] = [];
-				let totalBytes = 0;
-				let overflow = false;
-				let stderr = "";
-				child.stdout.on("data", (chunk: Buffer) => {
-					totalBytes += chunk.byteLength;
-					if (totalBytes > maxBytes) {
-						overflow = true;
-						child.kill("SIGKILL");
-						return;
-					}
-					chunks.push(chunk);
-				});
-				child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
-				child.on("error", (error) => {
-					if (!overflow) rejectPromise(new Error(`SSH getFile from ${host} failed: ${error.message}`));
-				});
-				child.on("close", (code) => {
-					if (overflow) {
-						rejectPromise(new Error(`File "${basename(clean)}" exceeds limit (${maxBytes} bytes).`));
-						return;
-					}
-					if (code !== 0) {
-						rejectPromise(new Error(stderr.trim() || `SSH getFile from ${host} exited ${code}.`));
-						return;
-					}
-					const data = new Uint8Array(Buffer.concat(chunks, totalBytes));
-					resolvePromise({ data, filename: basename(clean), sizeBytes: data.byteLength });
-				});
-			});
+			};
+			return retrySshFailure(attempt, signal, retryDelayMs);
 		},
 	};
 }

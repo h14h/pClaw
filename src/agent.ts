@@ -21,7 +21,7 @@ import { askOfRequest, reactionsExtension } from "./extensions/reactions.ts";
 import { recallExtension } from "./extensions/recall.ts";
 import { type Notes, notesExtension, type NotesResolver } from "./extensions/notes.ts";
 import { formattingExtension, soulExtension } from "./extensions/soul.ts";
-import { createJobs, JobStore, type Jobs, t3Backend } from "./extensions/jobs.ts";
+import { createJobs, type GuideInput, JobStore, type Jobs, t3Backend } from "./extensions/jobs.ts";
 import { t3Extension } from "./extensions/t3.ts";
 import {
 	type Decisions,
@@ -40,6 +40,7 @@ import type { WorkerItem } from "./dashboard/types.ts";
 import { workerItems } from "./dashboard/views.ts";
 import { prepareWorkspace, type WorkerOptions, workerOptions, Workers, workersExtension } from "./extensions/workers.ts";
 import { UserRegistry } from "./users.ts";
+import { combineGuidance, readForWorkers } from "./worker-intent.ts";
 import { ProgressSurfaces } from "./worker-progress.ts";
 
 export type Agent = {
@@ -105,13 +106,26 @@ function disabledJobs(
 		}
 		return names;
 	}
-	async function guideMessage(input: {
-		id: string;
-		text: string;
-		channel: string;
-		discordThreadId?: string;
-		voice?: boolean;
-	}): Promise<string | undefined> {
+	async function guideMessage(input: GuideInput): Promise<string | undefined> {
+		if (input.text.trim() === "") return undefined;
+		const [message, worker] = await Promise.all([
+			guideOwnerMessage(input),
+			readForWorkers({
+				harness: harness.current,
+				decisions,
+				conversationId: input.conversationId,
+				id: input.id,
+				text: input.text,
+				...(input.replyTo === undefined ? {} : { replyTo: input.replyTo }),
+				context,
+			}).catch((error: unknown) => {
+				console.error("[pclaw] in-worker read failed", error);
+				return undefined;
+			}),
+		]);
+		return combineGuidance(message, worker);
+	}
+	async function guideOwnerMessage(input: GuideInput): Promise<string | undefined> {
 		if (input.text.trim() === "") return undefined;
 		decisions.record({
 			type: "message",
@@ -267,7 +281,14 @@ export async function openAgent(
 		}),
 	);
 	install(notesExtension(notesResolver));
-	const decisions = options.decisions ?? decisionClient({ url: config.decisionUrl, logFile: paths.decisions, holdout: config.decisionHoldout });
+	// faux is the test provider: its scripted replies belong to the conversation, so it never stands in for d1.
+	const fallback =
+		config.decisionFallback === false || config.provider === "faux"
+			? undefined
+			: { models, provider: config.provider, model: config.decisionFallbackModel ?? config.model };
+	const decisions =
+		options.decisions ??
+		decisionClient({ url: config.decisionUrl, logFile: paths.decisions, holdout: config.decisionHoldout, ...(fallback === undefined ? {} : { fallback }) });
 	install(
 		followUpsExtension(timeZoneResolver, options.now, async (id, note, tz) => {
 			const decided = await decisions.ask({

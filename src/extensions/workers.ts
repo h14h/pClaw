@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { lit, obj, opt, str, union } from "@earendil-works/pi-schema";
 import type { Context } from "@earendil-works/chord/context";
 import {
+	AssistantEntry,
 	type Conversation,
 	type ConversationId,
 	defineDoc,
@@ -45,6 +46,11 @@ type WorkerStatus = "working" | "idle" | "stopped" | "failed";
 /** The harness and model a job runs on. Absent on jobs from before Muse workers, which all ran in pi. */
 type Job = { provider: string; model: string };
 
+/** A message of theirs about something other than this work, kept for judging whether an update would cut across it. */
+export type WorkerAside = { at: number; intent: "side_chat" | "new_work"; preview: string };
+
+export type WorkerRecord = Worker;
+
 type Worker = Partial<Job> & {
 	sessionId: string;
 	brief: string;
@@ -55,7 +61,23 @@ type Worker = Partial<Job> & {
 	updatedAt: number;
 	/** The person's message the current run answers ("telegram:<id>"), so its updates can quote it. */
 	ask?: string;
+	/** When they last spoke to or about this work: a steer, a status check, `message_worker`, `list_workers`. */
+	touchedAt?: number;
+	/** Their messages about something else since `touchedAt`, oldest first. */
+	asides?: WorkerAside[];
 };
+
+const ASIDES_KEPT = 5;
+
+/** They spoke about this work: whatever they said about other things before no longer counts as side chat. */
+export function touchWorker(worker: Worker, at: number): void {
+	worker.touchedAt = at;
+	delete worker.asides;
+}
+
+export function noteAside(worker: Worker, aside: WorkerAside): void {
+	worker.asides = [...(worker.asides ?? []), aside].slice(-ASIDES_KEPT);
+}
 
 export const Workers = defineDoc<{ workers: Record<string, Worker> }>({
 	kind: "pclaw.workers",
@@ -355,7 +377,43 @@ function clip(text: string): string {
 export const QUICK_NOTE =
 	"This is a quick job: aim to finish in about a minute with a few good sources. Confirm the facts the answer rests " +
 	"on, and if confirming more would take much longer, stop and report what you've confirmed, marking anything you " +
-	"haven't. Don't guess to fill gaps.";
+	"haven't. Don't guess to fill gaps. Keep the report short: the answer and the facts behind it, not a long write-up, " +
+	"and no report file unless the brief asks for one.";
+
+/** Put in front of a steer or follow-up: a tweak changes the answer, it doesn't restart the work. */
+export const STEER_NOTE =
+	"(An update from the person on the work in progress. Fold it into what you're doing; don't start over. If you " +
+	"already wrote a file, edit the parts this changes instead of rewriting it, and keep your next report to what " +
+	"changed and the answer as it stands now.)";
+
+/** The reaction a steer leaves on their message: the one picked when it's an emoji, else 🫡; Telegram's own set there. */
+export function steerBadge(emoji: string | undefined, ask: string | undefined): string {
+	const picked = emoji !== undefined && isEmoji(emoji.trim()) ? emoji.trim() : STEERED;
+	if (!ask?.startsWith("telegram:")) return picked;
+	return normalizeTelegramReaction(picked, "👌") ?? "👌";
+}
+
+/** Whether the assistant message that made tool call `callId` also has text for them, which then is the reply. */
+export async function wroteAlongside(harness: Harness | undefined, conversationId: ConversationId, callId: string, context: Context): Promise<boolean> {
+	if (harness === undefined) return false;
+	try {
+		const conversation = await harness.conversation(conversationId, context);
+		if (conversation === undefined) return false;
+		const { entries } = await conversation.context(context);
+		for (let index = entries.length - 1; index >= 0 && index >= entries.length - 40; index--) {
+			const entry = entries[index]!;
+			if (!AssistantEntry.is(entry)) continue;
+			const content = (entry.model?.[0] as { content?: unknown } | undefined)?.content;
+			if (!Array.isArray(content)) continue;
+			const parts = content as { type?: string; id?: string; text?: string }[];
+			if (!parts.some((part) => part.type === "toolCall" && part.id === callId)) continue;
+			return parts.some((part) => part.type === "text" && typeof part.text === "string" && !["", "NO_REPLY"].includes(part.text.trim()));
+		}
+	} catch (error) {
+		console.error("[pclaw] couldn't read the turn for message_worker", error);
+	}
+	return false;
+}
 
 const RESUME =
 	"pclaw restarted while you were working on this, so your last turn was cut off. Check what you'd already done, " +
@@ -583,8 +641,10 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 				name: "message_worker",
 				description:
 					"Send a follow-up, correction, redirect, answer, or go-ahead to a worker you started earlier. " +
-					"If the worker is currently running, steers it live mid-turn (mode='steer', default) or queues a follow-up right after its current turn (mode='queue') without restarting it. " +
-					"If the worker is idle/stopped/failed, resumes its session with the follow-up. It remembers the job.",
+					"If the worker is currently running, steers it live mid-turn (mode='steer', the default: use it for any new constraint, clarification, preference, or redirect) " +
+					"or, only when they explicitly ask to wait until the current deliverable is done, queues a separate follow-up after it (mode='queue'). " +
+					"If the worker is idle/stopped/failed, resumes its session with the follow-up. It remembers the job. " +
+					"Write a terse 3–5 word ack in the same message (\"Got it — widening scope.\").",
 				parameters: obj(
 					{
 						name: str(),
@@ -592,16 +652,28 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 						mode: opt(
 							union([lit("steer"), lit("queue")], {
 								description:
-									'While the worker is running: "steer" (default) injects the message mid-turn to redirect immediately; "queue" runs it as a follow-up right after the current turn finishes. Ignored when idle.',
+									'While the worker is running: "steer" (default, strongly preferred) folds the message into the current turn right away, for any updated constraint, clarification, preference, or redirect. "queue" only when they explicitly ask to let the current deliverable finish first and then start a separate follow-up. Ignored when idle.',
+							}),
+						),
+						emoji: opt(
+							str({
+								description:
+									"A reaction for their message that fits what they changed (🔍 for widening a search, ✂️ for trimming), from your app's formatting guide's supported reactions when it lists them. Defaults to 🫡.",
 							}),
 						),
 					},
 					{ open: true },
 				),
-				execute: async ({ name, message, mode = "steer" }, api, context) => {
+				execute: async ({ name, message, mode = "steer", emoji }, api, context) => {
 					const ask = await currentAsk(harness.current, api, api.conversationId, context);
 					const snapshot = (await api.snapshot(Workers, api.conversationId, context))?.workers[name];
 					if (snapshot === undefined) throw new Error(`No worker named ${name}.`);
+					const badge = steerBadge(emoji, ask);
+					// The reply is what was written alongside this call. With nothing written, let the model say a few words.
+					const done = async (summary: string) =>
+						(await wroteAlongside(harness.current, api.conversationId, api.callId, context))
+							? { ...text(summary), control: { terminate: true } }
+							: text(`${summary} Now tell them in a terse 3–5 word ack, as yourself.`);
 
 					if (snapshot.status === "working") {
 						const handle = liveHandles.get(handleKey(api.conversationId, name));
@@ -609,22 +681,21 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 							throw new Error(`${name} is still working and does not support live steering right now. Wait for its report, or stop it first.`);
 						}
 						const thinking = (snapshot.depth ?? "deep") === "quick" ? options.quickThinkingLevel : options.thinkingLevel;
+						const marked = async () =>
+							api.commit(async (tx) => {
+								const worker = (await tx.doc(Workers, api.conversationId)).workers[name];
+								if (worker !== undefined) touchWorker(worker, Date.now());
+								if (ask !== undefined) await setReaction(tx, api.conversationId, ask, badge);
+							}, context);
 						try {
 							if (mode === "queue") {
-								await handle.queue(message, thinking);
-								if (ask !== undefined) {
-									await api.commit((tx) => setReaction(tx, api.conversationId, ask, STEERED), context);
-								}
-								return { ...text(`Queued for ${name}.`), control: { terminate: true } };
+								await handle.queue(`${STEER_NOTE}\n\n${message}`, thinking);
+								await marked();
+								return done(`Queued for ${name}.`);
 							}
-							const steered = await handle.steer(message, thinking);
-							if (ask !== undefined) {
-								await api.commit((tx) => setReaction(tx, api.conversationId, ask, STEERED), context);
-							}
-							return {
-								...text(steered.disposition === "steered" ? `Steered ${name} mid-run.` : `Queued for ${name}.`),
-								control: { terminate: true },
-							};
+							const steered = await handle.steer(`${STEER_NOTE}\n\n${message}`, thinking);
+							await marked();
+							return done(steered.disposition === "steered" ? `Steered ${name} mid-run.` : `Queued for ${name}.`);
 						} catch (error) {
 							if (!(error instanceof WorkerRunEndedError)) throw error;
 							// Worker finished right as we tried to steer/queue; fall through to idle resume.
@@ -643,10 +714,11 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 						else worker.ask = ask;
 						worker.status = "working";
 						worker.startedAt = worker.updatedAt = Date.now();
+						touchWorker(worker, worker.startedAt);
 						return undefined;
 					}, context);
 					if (outcome !== undefined) throw new Error(outcome);
-					return { ...text(`Sent to ${name}.`), control: { terminate: true } };
+					return done(`Sent to ${name}.`);
 				},
 			}),
 			defineTool({
@@ -670,6 +742,14 @@ export function workersExtension(options: WorkerOptions, harness: { current?: Ha
 				execute: async (_args, api, context) => {
 					const workers = Object.entries((await api.snapshot(Workers, api.conversationId, context))?.workers ?? {});
 					if (workers.length === 0) return text("No workers yet.");
+					// Checking on running work is talking about it: progress updates are back on topic.
+					if (workers.some(([, worker]) => worker.status === "working")) {
+						await api.commit(async (tx) => {
+							for (const worker of Object.values((await tx.doc(Workers, api.conversationId)).workers)) {
+								if (worker.status === "working") touchWorker(worker, Date.now());
+							}
+						}, context);
+					}
 					workers.sort(([, a], [, b]) => b.updatedAt - a.updatedAt);
 					const now = Date.now();
 					return text(

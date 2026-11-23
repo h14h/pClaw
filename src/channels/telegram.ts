@@ -1392,10 +1392,13 @@ export async function startTelegram(
 		// Ignore empty messages with no attachments or text (e.g. service messages like pinned/join notices).
 		if (built.plainText === "" && typeof built.content === "string") return;
 
+		const repliedText = jumpTarget === undefined ? undefined : (swiped?.text ?? swiped?.caption)?.trim();
 		const guidance = await jobs.guideMessage({
 			id: `tg-${primary.chat.id}-${primary.message_id}`,
 			text: built.plainText,
 			channel: auth.isGroup ? auth.label : "telegram direct message",
+			conversationId: conversation.id,
+			...(repliedText ? { replyTo: repliedText } : {}),
 			...(built.hasVoice ? { voice: true } : {}),
 		});
 

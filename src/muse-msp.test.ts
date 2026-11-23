@@ -14,10 +14,11 @@ import { type Config, defaults } from "./config.ts";
 import { deliver } from "./delivery.ts";
 import { Notes } from "./extensions/notes.ts";
 import { Reactions, STEERED } from "./extensions/reactions.ts";
-import { type WorkerOptions, Workers } from "./extensions/workers.ts";
+import { steerBadge, type WorkerOptions, Workers } from "./extensions/workers.ts";
+import { isTelegramReactionEmoji } from "./channels/telegram-format.ts";
 import { MUSE, museTranscript, parseMuseSession } from "./muse.ts";
-import { isUuidv7, type LiveWorkerHandle, runMuseMsp, toMuseSessionId, uuidv7 } from "./muse-msp.ts";
-import { createSshSandbox } from "./sandbox.ts";
+import { isUuidv7, type LiveWorkerHandle, MSP_REPORT_BUDGET, reportFromTurns, runMuseMsp, toMuseSessionId, uuidv7 } from "./muse-msp.ts";
+import { createSshSandbox, SshExitError } from "./sandbox.ts";
 import { formatWorkerProgress } from "./worker-progress.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -87,7 +88,7 @@ function inbox() {
  * - session/leave
  * - Optional gate file (`GATE_FILE`) to hold turn 1 open until released so tests can send live steer/queue/interrupt!
  */
-async function createMockMspServer(name: string, opts: { logFile: string; stateFile: string; gateFile?: string; requireApproval?: boolean; rejectSteerOnce?: boolean }): Promise<string> {
+async function createMockMspServer(name: string, opts: { logFile: string; stateFile: string; gateFile?: string; requireApproval?: boolean; rejectSteerOnce?: boolean; padFirstReply?: number }): Promise<string> {
 	const script = join(dir, `${name}.mjs`);
 	await writeFile(
 		script,
@@ -100,6 +101,8 @@ const stateFile = ${JSON.stringify(opts.stateFile)};
 const gateFile = ${JSON.stringify(opts.gateFile ?? "")};
 const requireApproval = ${JSON.stringify(opts.requireApproval === true)};
 let rejectSteerOnce = ${JSON.stringify(opts.rejectSteerOnce === true)};
+const padFirstReply = ${JSON.stringify(opts.padFirstReply ?? 0)};
+let completedCount = 0;
 
 const log = (entry) => appendFileSync(logFile, JSON.stringify(entry) + "\\n");
 const loadSessions = () => (existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, "utf8")) : {});
@@ -118,7 +121,9 @@ function completeTurn(turn, terminal = "completed") {
 	activeTurn = null;
 	if (terminal === "completed") {
 		const steeredPart = turn.steers.length > 0 ? " | STEERED: " + turn.steers.join("; ") : "";
-		const reply = "DONE[" + turn.prompt.trim().slice(-40) + "]" + steeredPart + (approvalApproved ? " [APPROVED]" : "");
+		completedCount++;
+		const pad = completedCount === 1 && padFirstReply > 0 ? " " + "x".repeat(padFirstReply) : "";
+		const reply = "DONE[" + turn.prompt.trim().slice(-40) + "]" + steeredPart + (approvalApproved ? " [APPROVED]" : "") + pad;
 		send({
 			method: "item/completed",
 			params: {
@@ -806,4 +811,230 @@ rl.on("line", (line) => {
 	assert.equal(res.ok, true);
 	assert.equal(res.output, "T1 completed cleanly.");
 	assert.ok(Date.now() - startedAt < 5_000, "must close shortly after steerGraceMs instead of hanging");
+});
+
+// Multi-turn reports, pre-init retries, and message_worker defaults.
+
+test("reportFromTurns leads with the final turn whole and keeps earlier turns brief and within budget", () => {
+	assert.equal(reportFromTurns([]), "");
+	assert.equal(reportFromTurns(["only answer"]), "only answer");
+	const final = `FINAL ${"f".repeat(9_000)} https://example.com/final-link`;
+	const report = reportFromTurns([`EARLY ${"e".repeat(30_000)}`, `MIDDLE ${"m".repeat(5_000)}`, final]);
+	assert.ok(report.startsWith(final), "the newest answer comes first, intact");
+	assert.ok(report.length <= MSP_REPORT_BUDGET, `report is ${report.length} chars`);
+	assert.match(report, /Earlier in this run/);
+	assert.match(report, /MIDDLE m+…/, "an earlier turn is clipped to a brief");
+	// No room at all for earlier context: just the final answer.
+	const huge = "h".repeat(MSP_REPORT_BUDGET);
+	assert.equal(reportFromTurns(["old", huge]), huge);
+});
+
+test("runMuseMsp returns the final turn first, so a long superseded turn can't clip the newest answer", async () => {
+	const logFile = join(dir, "msp-final-log.jsonl");
+	const stateFile = join(dir, "msp-final-state.json");
+	const gateFile = join(dir, "msp-final-gate.txt");
+	const server = await createMockMspServer("mock-msp-final", { logFile, stateFile, gateFile, padFirstReply: 20_000 });
+	let liveHandle: LiveWorkerHandle | undefined;
+	const run = runMuseMsp({
+		spawnProcess: () => spawn(server, ["serve"], { stdio: ["pipe", "pipe", "pipe"] }),
+		sessionId: uuidv7(),
+		workspaceRoot: dir,
+		model: "muse-wonder-full-1.0",
+		effort: "medium",
+		prompt: "first long write-up",
+		transcript: join(dir, "muse_final.jsonl"),
+		resume: false,
+		timeoutMs: 15_000,
+		onHandle: (handle) => (liveHandle = handle),
+	});
+	const deadline = Date.now() + 5_000;
+	while (liveHandle === undefined && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+	assert.ok(liveHandle);
+	await liveHandle.queue("now the short version FINAL_TURN_MARKER");
+	writeFileSync(gateFile, "go\n");
+	const result = await run;
+	assert.equal(result.ok, true);
+	assert.ok(result.output.startsWith("DONE["), result.output.slice(0, 80));
+	assert.match(result.output.slice(0, 80), /FINAL_TURN_MARKER/);
+	assert.match(result.output, /Earlier in this run/);
+	assert.ok(result.output.length <= 12_000, `output is ${result.output.length} chars`);
+});
+
+test("runMuseMsp retries once when the process exits 255 before initialize, and never after the session opened", async () => {
+	const logFile = join(dir, "msp-retry-log.jsonl");
+	const stateFile = join(dir, "msp-retry-state.json");
+	const server = await createMockMspServer("mock-msp-retry", { logFile, stateFile });
+	let spawns = 0;
+	const result = await runMuseMsp({
+		spawnProcess: () => {
+			spawns++;
+			return spawns === 1
+				? spawn("sh", ["-c", "echo 'ssh: connect to host vm port 22: Connection reset' >&2; exit 255"], { stdio: ["pipe", "pipe", "pipe"] })
+				: spawn(server, ["serve"], { stdio: ["pipe", "pipe", "pipe"] });
+		},
+		sessionId: uuidv7(),
+		workspaceRoot: dir,
+		model: "muse-wonder-full-1.0",
+		effort: "medium",
+		prompt: "retry me",
+		transcript: join(dir, "muse_retry.jsonl"),
+		resume: false,
+		timeoutMs: 15_000,
+		preInitRetryDelayMs: 10,
+	});
+	assert.equal(spawns, 2);
+	assert.equal(result.ok, true);
+	assert.match(result.output, /DONE\[retry me\]/);
+
+	// Dies with 255 after initialize answered: the session may have started, so no retry.
+	const dying = join(dir, "msp-dies-after-init.mjs");
+	await writeFile(
+		dying,
+		`#!${process.execPath}
+import { createInterface } from "node:readline";
+createInterface({ input: process.stdin }).on("line", (line) => {
+	const msg = JSON.parse(line);
+	if (msg.method === "initialize") process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: {} }) + "\\n");
+	else if (msg.method === "session/start") process.exit(255);
+});
+`,
+	);
+	await chmod(dying, 0o755);
+	let laterSpawns = 0;
+	const failed = await runMuseMsp({
+		spawnProcess: () => {
+			laterSpawns++;
+			return spawn(dying, [], { stdio: ["pipe", "pipe", "pipe"] });
+		},
+		sessionId: uuidv7(),
+		workspaceRoot: dir,
+		model: "muse-wonder-full-1.0",
+		effort: "medium",
+		prompt: "no retry",
+		transcript: join(dir, "muse_noretry.jsonl"),
+		resume: false,
+		timeoutMs: 15_000,
+		preInitRetryDelayMs: 10,
+	});
+	assert.equal(laterSpawns, 1);
+	assert.equal(failed.ok, false);
+	assert.match(failed.output, /exit 255/);
+});
+
+test("ssh putFile/getFile retry once on ssh's own exit 255, and not on the remote command's own failure", async () => {
+	const root = join(dir, "ssh-retry");
+	const vmHome = join(root, "vm-home");
+	mkdirSync(join(vmHome, "work"), { recursive: true });
+	const counter = join(root, "attempts.log");
+	const fakeSsh = join(root, "flaky-ssh.sh");
+	// Fails with 255 on every odd attempt: each operation's first try drops, its retry goes through.
+	await writeFile(
+		fakeSsh,
+		`#!/usr/bin/env bash
+set -uo pipefail
+echo x >> "${counter}"
+if [ $(( $(wc -l < "${counter}") % 2 )) -eq 1 ]; then echo "ssh: connect to host vm port 22: Connection reset by peer" >&2; exit 255; fi
+cmd="\${@: -1}"
+HOME="${vmHome}" exec bash -c "$cmd"
+`,
+	);
+	await chmod(fakeSsh, 0o755);
+	const sandbox = createSshSandbox({ host: "grug-test.exe.xyz", sshCommand: fakeSsh, retryDelayMs: 10 });
+
+	const local = join(root, "photo.jpg");
+	writeFileSync(local, "jpeg-bytes");
+	const dest = await sandbox.putFile(local, "photo.jpg");
+	assert.equal(dest, join(vmHome, "inbox", "photo.jpg"));
+	assert.equal(readFileSync(counter, "utf8").trim().split("\n").length, 2);
+
+	writeFileSync(join(vmHome, "work", "report.md"), "# report");
+	const file = await sandbox.getFile("report.md", 1_000);
+	assert.equal(Buffer.from(file.data).toString("utf8"), "# report");
+	assert.equal(readFileSync(counter, "utf8").trim().split("\n").length, 4);
+
+	// The remote side says the file isn't there (exit 2): that's an answer, not a dropped connection.
+	writeFileSync(counter, "x\n");
+	await assert.rejects(sandbox.getFile("missing.md", 1_000), (error: unknown) => error instanceof SshExitError && error.code === 2);
+	assert.equal(readFileSync(counter, "utf8").trim().split("\n").length, 2);
+});
+
+test("steerBadge keeps a picked emoji, defaults to 🫡, and stays inside Telegram's reaction set", () => {
+	assert.equal(steerBadge("🔍", "discord:1"), "🔍");
+	assert.equal(steerBadge(undefined, "discord:1"), STEERED);
+	assert.equal(steerBadge("not an emoji", undefined), STEERED);
+	for (const emoji of [undefined, "🔍", "✂️", "🦖"]) {
+		const badge = steerBadge(emoji, "telegram:1");
+		assert.ok(isTelegramReactionEmoji(badge), `${emoji} -> ${badge}`);
+	}
+});
+
+test("message_worker steers by default, takes a contextual emoji, and lets the model ack when it wrote nothing alongside", async () => {
+	const logFile = join(dir, "mw-log.jsonl");
+	const stateFile = join(dir, "mw-state.json");
+	const gateFile = join(dir, "mw-gate.txt");
+	const server = await createMockMspServer("mock-msp-mw", { logFile, stateFile, gateFile });
+	const homeDir = join(dir, "mw-home");
+	const workers: WorkerOptions = {
+		command: "pi",
+		museCommand: server,
+		provider: MUSE,
+		model: "muse-wonder-full-1.0",
+		piFallback: { provider: "faux", model: "faux-1" },
+		thinkingLevel: "high",
+		quickThinkingLevel: "medium",
+		timeoutMs: 20_000,
+		cwd: join(homeDir, "work"),
+		sessionDir: join(homeDir, "worker-sessions"),
+		promptFile: join(process.cwd(), "src/prompts/worker.md"),
+		toolsFile: join(process.cwd(), "src/worker-tools.ts"),
+		cliFile: join(process.cwd(), "src/worker-cli.ts"),
+		skills: [],
+		allowPages: false,
+	};
+	const { faux, models } = setupFaux();
+	const afterSteer: string[] = [];
+	faux.setResponses([
+		fauxAssistantMessage([fauxText("On it."), fauxToolCall("delegate", { name: "frames", brief: "compare bike frames", depth: "quick" })], { stopReason: "toolUse" }),
+		// No text alongside, no mode: a steer, and the turn goes on so the model can ack.
+		fauxAssistantMessage(fauxToolCall("message_worker", { name: "frames", message: "only frames under 52cm", emoji: "🔍" }), { stopReason: "toolUse" }),
+		(req) => {
+			afterSteer.push(JSON.stringify(req.messages.at(-1)));
+			return fauxAssistantMessage("Got it — shorter frames only.");
+		},
+		fauxAssistantMessage("Done: two frames fit."),
+	]);
+	const agent = await openAgent(
+		await openNodeSqliteStorage(join(dir, "mw.sqlite")),
+		{ config: baseConfig(), models, notes: new Notes(join(homeDir, "notes.md")), workers, homeDir, memoryQuietMs: 24 * 60 * 60_000 },
+		context,
+	);
+	const conv = await agent.conversationFor("discord:dm:909", context);
+	const { sent, outbox, until } = inbox();
+	await deliver(agent.harness, conv.id, outbox, context);
+	try {
+		await conv.submit({ type: "input", content: "compare bike frames" }, context);
+		await until(1);
+		const deadline = Date.now() + 5_000;
+		while (!(existsSync(logFile) && readFileSync(logFile, "utf8").includes('"method":"turn/start"')) && Date.now() < deadline) {
+			await new Promise((resolve) => setTimeout(resolve, 30));
+		}
+		await conv.submit({ type: "input", content: "only ones under 52cm", requestId: "discord:501" }, context);
+		await until(2);
+		assert.equal(sent[1], "Got it — shorter frames only.");
+		assert.match(afterSteer[0]!, /Steered frames mid-run/);
+		const methods = readFileSync(logFile, "utf8").trim().split("\n").map((line) => (JSON.parse(line) as { method: string }).method);
+		assert.ok(methods.includes("turn/steer"), "steer is the default mode");
+		assert.equal((await agent.harness.snapshot(Reactions, conv.id, context))?.asks["discord:501"], "🔍");
+		const worker = (await agent.harness.snapshot(Workers, conv.id, context))?.workers.frames;
+		assert.ok(worker?.touchedAt !== undefined, "a steer puts the work back on topic");
+		writeFileSync(gateFile, "go\n");
+		await until(3);
+		const settled = Date.now() + 5_000;
+		while ((await agent.harness.snapshot(Workers, conv.id, context))?.workers.frames?.status === "working" && Date.now() < settled) {
+			await new Promise((resolve) => setTimeout(resolve, 30));
+		}
+		await conv.waitForIdle(context);
+	} finally {
+		await agent.harness.close(context);
+	}
 });

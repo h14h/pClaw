@@ -1,6 +1,7 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { appendFileSync } from "node:fs";
+import { setTimeout as sleep } from "node:timers/promises";
 
 /**
  * Minimal, zero-dependency MSP v1 (Muse Session Protocol) JSON-RPC 2.0 client over stdio.
@@ -95,7 +96,54 @@ export type MuseMspRunOptions = {
 	label?: string;
 	/** Grace window (ms) to wait for a `pure_followup` successor turn after an unconsumed `turn/steer` (default 5000). */
 	steerGraceMs?: number;
+	/** Wait before the one retry when the process exits 255 (ssh's own failure) before `initialize` answers (default 1000). */
+	preInitRetryDelayMs?: number;
 };
+
+/** What a run's report may hold before workers clip it (their REPORT_LIMIT is 12,000): the newest answer comes first. */
+export const MSP_REPORT_BUDGET = 11_500;
+/** Each earlier turn's share of the report, when there's room for it at all. */
+const EARLIER_TURN_LIMIT = 600;
+
+/**
+ * One report from every turn of a run. A steer or queued follow-up supersedes what came before, so the last answer
+ * leads, whole, and earlier answers follow only as brief context while they fit: they can never push it past the clip.
+ */
+export function reportFromTurns(outputs: readonly string[], budget = MSP_REPORT_BUDGET): string {
+	const final = outputs.at(-1) ?? "";
+	const earlier = outputs.slice(0, -1);
+	if (earlier.length === 0) return final;
+	const heading = "\n\n---\n\nEarlier in this run, before later messages changed the ask:";
+	let room = budget - final.length - heading.length;
+	const kept: string[] = [];
+	for (let index = earlier.length - 1; index >= 0 && room > 0; index--) {
+		const text = earlier[index]!;
+		const brief = text.length > EARLIER_TURN_LIMIT ? `${text.slice(0, EARLIER_TURN_LIMIT - 1)}…` : text;
+		const piece = `\n\n${brief}`;
+		if (piece.length > room) break;
+		kept.unshift(piece);
+		room -= piece.length;
+	}
+	return kept.length === 0 ? final : `${final}${heading}${kept.join("")}`;
+}
+
+/**
+ * Run one Muse worker execution over `muse serve` (MSP v1 JSON-RPC over stdio). If the process exits 255 before
+ * `initialize` answers (for ssh, it never reached the VM, or dropped before any turn), nothing ran yet, so it's
+ * retried once after a short wait. Never after a turn started.
+ */
+export async function runMuseMsp(options: MuseMspRunOptions): Promise<{ ok: boolean; output: string }> {
+	const first = await runMuseMspOnce(options);
+	if (first.preInitExit !== 255 || options.signal?.aborted) return { ok: first.ok, output: first.output };
+	console.warn(`[pclaw] ${options.label ?? "muse serve"} exited 255 before the session opened; retrying once`);
+	try {
+		await sleep(options.preInitRetryDelayMs ?? 1_000, undefined, options.signal === undefined ? undefined : { signal: options.signal });
+	} catch {
+		throw options.signal?.reason ?? new Error("Aborted");
+	}
+	const second = await runMuseMspOnce(options);
+	return { ok: second.ok, output: second.output };
+}
 
 type JsonRpcErrorObj = {
 	code: number;
@@ -194,12 +242,13 @@ function formatTurnError(params: Record<string, unknown>): string {
 	return `Muse run ${terminal}${detail ? `: ${detail}` : ""}`;
 }
 
+type OnceResult = { ok: boolean; output: string; preInitExit?: number | null };
+
 /**
- * Run one Muse worker execution over `muse serve` (MSP v1 JSON-RPC over stdio).
- * Keeps the server alive while turns (initial + any live steered or queued turns) run,
+ * One attempt: keeps the server alive while turns (initial + any live steered or queued turns) run,
  * logs MSP notifications to `transcript`, and tears down cleanly when all turns finish.
  */
-export async function runMuseMsp(options: MuseMspRunOptions): Promise<{ ok: boolean; output: string }> {
+async function runMuseMspOnce(options: MuseMspRunOptions): Promise<OnceResult> {
 	if (options.signal?.aborted) throw options.signal.reason;
 
 	const child = options.spawnProcess();
@@ -240,10 +289,12 @@ export async function runMuseMsp(options: MuseMspRunOptions): Promise<{ ok: bool
 	let aborted = false;
 	let interruptedByUser = false;
 	let spawnFailed: Error | undefined;
+	/** `initialize` answered: from here on the session may have started work, so a failure is never retried. */
+	let initialized = false;
 
-	let settleRun!: (value: { ok: boolean; output: string }) => void;
+	let settleRun!: (value: OnceResult) => void;
 	let failRun!: (error: unknown) => void;
-	const donePromise = new Promise<{ ok: boolean; output: string }>((resolve, reject) => {
+	const donePromise = new Promise<OnceResult>((resolve, reject) => {
 		settleRun = resolve;
 		failRun = reject;
 	});
@@ -387,7 +438,7 @@ export async function runMuseMsp(options: MuseMspRunOptions): Promise<{ ok: bool
 			.filter((tid) => turnTerminals.has(tid))
 			.map((tid) => bestOutputForTurn(tid))
 			.filter((text) => text !== "");
-		const combinedText = outputs.join("\n\n---\n\n");
+		const combinedText = reportFromTurns(outputs);
 
 		// If any turn failed (and wasn't superseded by a later completed turn), report failure.
 		if (lastTerminal.terminal === "completed") {
@@ -745,7 +796,11 @@ export async function runMuseMsp(options: MuseMspRunOptions): Promise<{ ok: bool
 			.split("\n")
 			.filter((line) => line.trim() !== "" && !line.startsWith("muse: ") && !line.startsWith("muse serve:"))
 			.join("\n");
-		settleRun({ ok: false, output: `exit ${code}\n${errors || "Muse ended without a result."}` });
+		settleRun({
+			ok: false,
+			output: `exit ${code}\n${errors || "Muse ended without a result."}`,
+			...(initialized ? {} : { preInitExit: code }),
+		});
 	});
 
 	const enqueueTurn = async (
@@ -830,6 +885,7 @@ export async function runMuseMsp(options: MuseMspRunOptions): Promise<{ ok: bool
 		await request("initialize", {
 			clientInfo: { name: "pclaw", title: "pclaw", version: "0.1.0" },
 		});
+		initialized = true;
 		notify("initialized");
 
 		const ensureAllowAll = async (sessionResult: Record<string, unknown>) => {

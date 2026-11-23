@@ -59,6 +59,18 @@ They seem to be asking how a job is going. Check it with `list_jobs` before answ
 ## message.steer
 They seem to be redirecting the job's agent. Pass it on with `message_job`.
 
+## worker.steer
+This reads as a change to what {worker} is already doing. Steer it live with `message_worker` (the default steer mode), not a new `delegate` and not a queued follow-up, and say a terse 3–5 word ack like "Got it — widening scope."
+
+## worker.status
+They seem to be asking how {worker} is going. Check `list_workers` before answering, never guess, and answer as yourself in one or two lines.
+
+## worker.side_chat
+This reads as a side topic while {worker} keeps going. Answer it on its own and leave the running work alone.
+
+## worker.new_work
+This reads as a separate new task, not a change to {worker}. Start it on its own and leave the running work alone.
+
 ## message.too_loud
 This sounds like you've been telling them too much. Save what you learned with `remember`, as a note about what's worth a ping and what isn't.
 
