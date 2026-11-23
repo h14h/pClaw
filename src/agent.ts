@@ -4,15 +4,19 @@ import type { Context } from "@earendil-works/chord/context";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { Models } from "@earendil-works/pi-ai/models";
 import {
+	type AgentChange,
 	type Conversation,
 	type ConversationId,
 	createRegistry,
 	type EntryId,
+	type Extension,
 	Harness,
 	type Storage,
+	type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
 import { type Config, isPagesEnabled, isT3Enabled, paths } from "./config.ts";
+import { episodesExtension } from "./extensions/episodes.ts";
 import { filesExtension, FileSenders } from "./extensions/files.ts";
 import { followUpsExtension, type TimeZoneResolver } from "./extensions/follow-ups.ts";
 import { memoryExtension } from "./extensions/memory.ts";
@@ -20,7 +24,7 @@ import { quickSearchExtension } from "./extensions/quick-search.ts";
 import { askOfRequest, reactionsExtension } from "./extensions/reactions.ts";
 import { recallExtension } from "./extensions/recall.ts";
 import { type Notes, notesExtension, type NotesResolver } from "./extensions/notes.ts";
-import { formattingExtension, soulExtension } from "./extensions/soul.ts";
+import { crossClientHint, formattingExtension, soulExtension } from "./extensions/soul.ts";
 import { createJobs, type GuideInput, JobStore, type Jobs, t3Backend } from "./extensions/jobs.ts";
 import { t3Extension } from "./extensions/t3.ts";
 import {
@@ -35,6 +39,7 @@ import { applyProfile, loadProfile } from "./profiles.ts";
 import { createPromptResolver, type PromptResolver } from "./prompts.ts";
 import { addressOf, ConversationInfo, Routes } from "./routes.ts";
 import { SandboxManager } from "./sandbox.ts";
+import { SearchIndex } from "./search-index.ts";
 import { stamp } from "./time.ts";
 import type { WorkerItem } from "./dashboard/types.ts";
 import { workerItems } from "./dashboard/views.ts";
@@ -61,6 +66,14 @@ export type Agent = {
 	workerItems(sessionId: string): WorkerItem[];
 	/** Per-agent prompt resolver (supports `voiceFile` / `personaDir` without global mutation). */
 	prompts: PromptResolver;
+	/** Unified SQLite episode store + FTS5 recall index (`pclaw-index.sqlite`). */
+	searchIndex: SearchIndex;
+	/** Flush unreviewed conversation entries into `notes.md` immediately (used before `pi.reset`). */
+	flushMemory(conversationId: ConversationId, context: Context): Promise<{ added: string[]; removed: string[] }>;
+	/** Static 1-line `<cross-client>` tail hint for inbound user messages on a channel switch, or undefined. */
+	crossClientHint(conversationId: ConversationId, context: Context): Promise<string | undefined>;
+	/** Static per-channel `AgentChange` (tool/extension scoping) applied at conversation creation / load. */
+	channelAgentChange(address: string): AgentChange;
 	/** The conversation for `address`, created on first use. */
 	conversationFor(address: string, context: Context): Promise<Conversation>;
 	/** Addresses that have a conversation, for reattaching delivery after a restart. */
@@ -86,12 +99,11 @@ export type Agent = {
 
 function disabledJobs(
 	decisions: Decisions,
-	storeFile: string,
+	store: JobStore,
 	harness: { current?: Harness },
 	context: Context,
 	prompts?: PromptResolver,
 ): Jobs {
-	const store = new JobStore(storeFile);
 	const emptyExtension = { name: "pclaw.jobs.disabled" } as Jobs["extension"];
 	const noopBackend = {} as Jobs["backend"];
 	async function activeWorkerNames(): Promise<string[]> {
@@ -207,6 +219,11 @@ export async function openAgent(
 		spawnFn?: typeof spawn;
 		/** How long a conversation stays quiet before the memory pass reads it. */
 		memoryQuietMs?: number;
+		/** Override SQLite index path or pass a pre-opened SearchIndex (for tests). */
+		searchIndex?: SearchIndex;
+		indexDbPath?: string;
+		/** Optional opt-in per-channel extensions loaded statically per route channel (e.g. `{ matrix: [matrixExt] }`). */
+		channelExtensions?: Record<string, Extension[]>;
 		now?: () => number;
 	},
 	context: Context,
@@ -220,6 +237,14 @@ export async function openAgent(
 	});
 	const t3Enabled = isT3Enabled(config);
 	const users = options.users ?? new UserRegistry(config.users, options.homeDir);
+	const indexDbPath =
+		options.indexDbPath ??
+		(options.homeDir !== undefined
+			? join(options.homeDir, "pclaw-index.sqlite")
+			: config.provider === "faux"
+				? ":memory:"
+				: paths.indexDb);
+	const searchIndex = options.searchIndex ?? new SearchIndex(indexDbPath);
 	const allowPages =
 		isPagesEnabled(config, "local") &&
 		(!users.enabled || users.all().some((user) => (user.sandbox?.type ?? "local") !== "ssh"));
@@ -265,18 +290,25 @@ export async function openAgent(
 		: async () => config.timeZone;
 
 	const registry = createRegistry();
+	const defaultExtensions: Extension[] = [];
+	const toolsByName = new Map<string, ToolRegistration>();
 	let hasDeferredTools = false;
+	const registerDefault = (extension: Extension) => {
+		registry.install(extension);
+		defaultExtensions.push(extension);
+		for (const tool of extension.tools ?? []) toolsByName.set(tool.name, tool);
+	};
 	const install = (extension: Parameters<typeof applyProfile>[0]) => {
 		const applied = applyProfile(extension, profile);
 		if (applied.tools?.some((tool) => tool.deferred === true)) hasDeferredTools = true;
-		registry.install(applied);
+		registerDefault(applied);
 	};
 
 	const current: { current?: Harness } = {};
 	const sessions: { current?: Jobs } = {};
 
 	const promptFlags = { allowT3: t3Enabled, allowPages };
-	registry.install(
+	registerDefault(
 		soulExtension({
 			timeZone: config.timeZone,
 			prompts: promptResolver,
@@ -287,6 +319,16 @@ export async function openAgent(
 		}),
 	);
 	install(notesExtension(notesResolver));
+	if (config.sessionReset?.enabled === true) {
+		registerDefault(
+			episodesExtension({
+				index: searchIndex,
+				config,
+				users,
+				...(options.now === undefined ? {} : { now: options.now }),
+			}),
+		);
+	}
 	// faux is the test provider: its scripted replies belong to the conversation, so it never stands in for d1.
 	const fallback =
 		config.decisionFallback === false || config.provider === "faux"
@@ -364,9 +406,16 @@ export async function openAgent(
 		config,
 		quietMs: options.memoryQuietMs ?? config.memoryQuietMinutes * 60_000,
 		prompts: promptResolver,
+		...(options.now === undefined ? {} : { now: options.now }),
 	});
-	registry.install(memory.extension);
-	install(recallExtension(current, config.timeZone, { users }));
+	registerDefault(memory.extension);
+	install(
+		recallExtension(current, config.timeZone, {
+			users,
+			index: searchIndex,
+			...(options.now === undefined ? {} : { now: options.now }),
+		}),
+	);
 	install(reactionsExtension(current));
 	install(quickSearchExtension());
 
@@ -397,16 +446,51 @@ export async function openAgent(
 	} else {
 		jobs = disabledJobs(
 			decisions,
-			options.homeDir === undefined ? paths.jobs : join(options.homeDir, "jobs.json"),
+			options.jobStore ?? new JobStore(options.homeDir === undefined ? paths.jobs : join(options.homeDir, "jobs.json")),
 			current,
 			context,
 			promptResolver,
 		);
 	}
 
-	if (hasDeferredTools) registry.install(createToolSearchExtension());
+	if (hasDeferredTools) registerDefault(createToolSearchExtension());
+
+	// Opt-in per-channel extensions (e.g. future `matrix` client tools) live in the registry but are only attached
+	// to matching channel conversations via `channelAgentChange(address)`.
+	const channelExtMap = new Map<string, Extension[]>();
+	if (options.channelExtensions !== undefined) {
+		for (const [channel, exts] of Object.entries(options.channelExtensions)) {
+			const installed: Extension[] = [];
+			for (const ext of exts) {
+				const applied = applyProfile(ext, profile);
+				registry.install(applied);
+				installed.push(applied);
+			}
+			if (installed.length > 0) channelExtMap.set(channel, installed);
+		}
+	}
+
 	// Last, so the app's rules end the system prompt.
-	registry.install(formattingExtension({ prompts: promptResolver, flags: promptFlags }));
+	registerDefault(formattingExtension({ prompts: promptResolver, flags: promptFlags }));
+
+	/** Discord-only tools excluded statically from non-Discord conversations (e.g. Telegram DMs). */
+	const DISCORD_ONLY_TOOLS = ["ping_owner"];
+
+	function channelAgentChange(address: string): AgentChange {
+		const channel = address.split(":")[0];
+		const removedTools: ToolRegistration[] = [];
+		if (channel !== "discord") {
+			for (const name of DISCORD_ONLY_TOOLS) {
+				const tool = toolsByName.get(name);
+				if (tool !== undefined) removedTools.push(tool);
+			}
+		}
+		const addedExtensions = channel === undefined ? undefined : channelExtMap.get(channel);
+		return {
+			...(removedTools.length > 0 ? { tools: { remove: removedTools } } : {}),
+			...(addedExtensions !== undefined && addedExtensions.length > 0 ? { extensions: { add: addedExtensions } } : {}),
+		};
+	}
 
 	let agent = { model: { provider: config.provider, modelId: config.model }, thinkingLevel: config.thinkingLevel };
 	const harness = await Harness.open(
@@ -414,7 +498,12 @@ export async function openAgent(
 		{
 			models,
 			registry,
-			settings: { retry: { maxRetries: 3 }, toolExecution: "parallel", compaction: { keepRecentTokens: config.keepRecentTokens } },
+			settings: {
+				...(channelExtMap.size > 0 ? { extensions: defaultExtensions } : {}),
+				retry: { maxRetries: 3 },
+				toolExecution: "parallel",
+				compaction: { keepRecentTokens: config.keepRecentTokens },
+			},
 			onReport: (error) => console.error("[pclaw]", error),
 			...(options.now === undefined ? {} : { now: options.now }),
 		},
@@ -428,16 +517,20 @@ export async function openAgent(
 	async function conversationFor(address: string, context: Context): Promise<Conversation> {
 		const known = (await harness.snapshot(Routes, context))?.conversations[address];
 		const existing = known === undefined ? undefined : await harness.conversation(known, context);
+		const channelChange = channelAgentChange(address);
 		if (existing !== undefined) {
-			// Pick up model changes from config.json once per process.
+			// Pick up model and static channel-scoping changes from config once per process.
 			if (!configured.has(existing.id)) {
-				await existing.configure(agent, context);
+				await existing.configure({ ...agent, ...channelChange }, context);
 				await memory.ensureKeeper(harness, existing.id, context);
 				configured.add(existing.id);
 			}
 			return existing;
 		}
-		const created = await harness.createConversation({ ownership: { kind: "ownerless" }, agent }, context);
+		const created = await harness.createConversation(
+			{ ownership: { kind: "ownerless" }, agent: { ...agent, ...channelChange } },
+			context,
+		);
 		await created.commit(async (tx) => {
 			(await tx.doc(Routes)).conversations[address] = created.id;
 		}, context);
@@ -454,7 +547,12 @@ export async function openAgent(
 		const known = (await harness.snapshot(Routes, context))?.conversations[address];
 		const existing = known === undefined ? undefined : await harness.conversation(known, context);
 		if (existing !== undefined) return existing;
-		const fork = await parent.fork(at, { ownership: { kind: "ownerless" }, agent }, context);
+		const channelChange = channelAgentChange(address);
+		const fork = await parent.fork(
+			at,
+			{ ownership: { kind: "ownerless" }, agent: { ...agent, ...channelChange } },
+			context,
+		);
 		await fork.commit(async (tx) => {
 			(await tx.doc(Routes)).conversations[address] = fork.id;
 			(await tx.doc(ConversationInfo)).conversations[String(fork.id)] = { label: info.label, parent: parent.id, forkedAt: at };
@@ -533,6 +631,15 @@ export async function openAgent(
 		progressSurfaces,
 		workerItems: findWorkerItems,
 		prompts: promptResolver,
+		searchIndex,
+		flushMemory: (conversationId, ctx) => memory.flushMemory(harness, conversationId, ctx),
+		crossClientHint: (conversationId, ctx) =>
+			crossClientHint(
+				{ harness, users, ...(options.now === undefined ? {} : { now: options.now }) },
+				conversationId,
+				ctx,
+			),
+		channelAgentChange,
 		conversationFor,
 		addresses,
 		forkFor,

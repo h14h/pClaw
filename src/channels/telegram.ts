@@ -1459,21 +1459,25 @@ export async function startTelegram(
 		if (built.plainText === "" && typeof built.content === "string") return;
 
 		const repliedText = jumpTarget === undefined ? undefined : (swiped?.text ?? swiped?.caption)?.trim();
-		const guidance = await jobs.guideMessage({
-			id: `tg-${primary.chat.id}-${primary.message_id}`,
-			text: built.plainText,
-			channel: auth.isGroup ? auth.label : "telegram direct message",
-			conversationId: conversation.id,
-			...(repliedText ? { replyTo: repliedText } : {}),
-			...(built.hasVoice ? { voice: true } : {}),
-		});
+		const [guidance, crossClient] = await Promise.all([
+			jobs.guideMessage({
+				id: `tg-${primary.chat.id}-${primary.message_id}`,
+				text: built.plainText,
+				channel: auth.isGroup ? auth.label : "telegram direct message",
+				conversationId: conversation.id,
+				...(repliedText ? { replyTo: repliedText } : {}),
+				...(built.hasVoice ? { voice: true } : {}),
+			}),
+			agent.crossClientHint(conversation.id, context),
+		]);
+		const tailHints = [crossClient, guidance].filter((item): item is string => item !== undefined).join("\n");
 
 		const content: UserInput =
-			guidance === undefined
+			tailHints === ""
 				? built.content
 				: typeof built.content === "string"
-					? `${built.content}\n${guidance}`
-					: built.content.map((part, idx) => (idx === 0 && part.type === "text" ? { ...part, text: `${part.text}\n${guidance}` } : part));
+					? `${built.content}\n${tailHints}`
+					: built.content.map((part, idx) => (idx === 0 && part.type === "text" ? { ...part, text: `${part.text}\n${tailHints}` } : part));
 
 		// Right before submitting, so an earlier run ending meanwhile can't take ✍ off a memo it never saw.
 		if (built.heardVoiceRefs.length > 0) {

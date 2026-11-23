@@ -565,16 +565,24 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 			const userSandbox = user === undefined ? undefined : agent.sandboxes.sandboxForUser(user);
 			const memo = await hear(message, userPaths?.voice ?? paths.voice);
 			const replied = await replyContext(message, client.user!.id, userTimeZone);
-			const guidance = await jobs.guideMessage({
-				id: message.id,
-				text: [message.content, memo?.text].filter(Boolean).join("\n"),
-				channel: "name" in message.channel && message.channel.name !== null ? message.channel.name : "direct message",
-				conversationId: route.conversation.id,
-				...(replied[0] === undefined ? {} : { replyTo: replied[0] }),
-				...(message.channel.isThread() ? { discordThreadId: message.channelId } : {}),
-				...(memo === undefined ? {} : { voice: true }),
-			});
-			const extra = [...route.extra, ...replied, ...(guidance === undefined ? [] : [guidance])];
+			const [guidance, crossClient] = await Promise.all([
+				jobs.guideMessage({
+					id: message.id,
+					text: [message.content, memo?.text].filter(Boolean).join("\n"),
+					channel: "name" in message.channel && message.channel.name !== null ? message.channel.name : "direct message",
+					conversationId: route.conversation.id,
+					...(replied[0] === undefined ? {} : { replyTo: replied[0] }),
+					...(message.channel.isThread() ? { discordThreadId: message.channelId } : {}),
+					...(memo === undefined ? {} : { voice: true }),
+				}),
+				agent.crossClientHint(route.conversation.id, context),
+			]);
+			const extra = [
+				...route.extra,
+				...replied,
+				...(crossClient === undefined ? [] : [crossClient]),
+				...(guidance === undefined ? [] : [guidance]),
+			];
 			// Messages sent while pclaw is working join the current run at its next step, like a person cutting in.
 			await route.conversation.submit(
 				{

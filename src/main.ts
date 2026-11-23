@@ -22,6 +22,7 @@ import { MUSE } from "./muse.ts";
 import { listProfiles, loadProfile, registerProfiles } from "./profiles.ts";
 import { useProfile } from "./prompts.ts";
 import { chooseService, serviceReady, services } from "./search.ts";
+import { startSessionKeeper } from "./session-keeper.ts";
 import { startWorkerProgressMonitor } from "./worker-progress.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -170,10 +171,22 @@ async function start(): Promise<void> {
 		throw new Error("No Discord or Telegram token configured. Run `pnpm setup` or set DISCORD_TOKEN / TELEGRAM_BOT_TOKEN.");
 	}
 	const agent = await openAgent(await openNodeSqliteStorage(paths.db), { config, models, notes, workers }, context);
+	const backfill = await agent.searchIndex.backfillAll(agent.harness, context, agent.users);
+	const idxStats = agent.searchIndex.stats();
+	console.log(
+		`[pclaw] search index ready (${backfill.conversations} conversations, +${backfill.indexed} new; total ${idxStats.totalDocs}: ${idxStats.episodes} episodes, ${idxStats.messages} messages, ${idxStats.workerReports} reports)`,
+	);
 	const discord = config.discordToken === undefined ? undefined : await startDiscord(agent, config, context);
 	const telegram = config.telegramToken === undefined ? undefined : await startTelegram(agent, config, context);
 	const dashboard = await startDashboard({ agent, config, models, notes, workers, port: config.dashboardPort }, context);
-	const contextKeeper = startContextKeeper(agent, config.summarizeAtTokens, context);
+	const sessionResetEnabled = config.sessionReset?.enabled === true;
+	const compactThreshold = sessionResetEnabled
+		? (config.sessionReset?.emergencyCompactTokens ?? 110_000)
+		: config.summarizeAtTokens;
+	const contextKeeper = startContextKeeper(agent, compactThreshold, context, undefined, {
+		checkNotesCopies: !sessionResetEnabled,
+	});
+	const sessionKeeper = sessionResetEnabled ? startSessionKeeper(agent, { models, config }, context) : undefined;
 	const notesCleanup = startNotesCleanup(
 		agent,
 		{
@@ -199,7 +212,9 @@ async function start(): Promise<void> {
 		},
 		context,
 	);
-	console.log(`[pclaw] jobs ${agent.t3Enabled ? "on" : "off"}, users ${agent.users.enabled ? agent.users.all().length : "single-owner"}, decision model ${config.decisionUrl ?? "off"}${config.decisionFallback === false ? "" : `, fallback ${config.decisionFallbackModel ?? config.model}`}`);
+	console.log(
+		`[pclaw] jobs ${agent.t3Enabled ? "on" : "off"}, users ${agent.users.enabled ? agent.users.all().length : "single-owner"}, session-reset ${sessionResetEnabled ? "on" : "off"}, decision model ${config.decisionUrl ?? "off"}${config.decisionFallback === false ? "" : `, fallback ${config.decisionFallbackModel ?? config.model}`}`,
+	);
 
 	let stopping = false;
 	const stop = async () => {
@@ -207,6 +222,7 @@ async function start(): Promise<void> {
 		stopping = true;
 		console.log("[pclaw] stopping");
 		contextKeeper.stop();
+		sessionKeeper?.stop();
 		notesCleanup.stop();
 		jobKeeper?.stop();
 		workerProgress.stop();
@@ -214,6 +230,7 @@ async function start(): Promise<void> {
 		await telegram?.stop();
 		await dashboard.stop();
 		await agent.harness.close(context);
+		agent.searchIndex.close();
 		process.exit(0);
 	};
 	process.on("SIGINT", stop);
@@ -228,6 +245,7 @@ async function chat(): Promise<void> {
 	const agent = await openAgent(await openNodeSqliteStorage(paths.chatDb), { config, models, notes: new Notes(paths.notes) }, context);
 	await chatInTerminal(agent, config, context);
 	await agent.harness.close(context);
+	agent.searchIndex.close();
 }
 
 const commands: Record<string, () => Promise<void>> = { start, setup, login, chat };

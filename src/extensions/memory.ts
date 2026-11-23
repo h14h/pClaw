@@ -4,6 +4,7 @@ import type { Models } from "@earendil-works/pi-ai/models";
 import {
 	AssistantEntry,
 	type ConversationId,
+	type Cursor,
 	defineDoc,
 	defineEntry,
 	defineExtension,
@@ -17,13 +18,14 @@ import {
 import type { Config } from "../config.ts";
 import { STRIP_GUIDANCE } from "../decisions.ts";
 import { type PromptResolver, readPrompt } from "../prompts.ts";
+import { STRIP_CROSS_CLIENT } from "../search-index.ts";
 import type { Notes, NotesResolver } from "./notes.ts";
 
 /**
  * The memory pass. The front model is tuned to answer fast and rarely stops to call `remember`, so notes are also kept
- * from outside the conversation: once it has been quiet for a while, a separate request reads what was said since the
- * last pass and adds or removes notes. One long-lived background task per conversation does this; it sleeps between
- * checks and survives restarts.
+ * from outside the conversation: once it has been quiet for a while (or right before `pi.reset` via `flushMemory`), a
+ * separate request reads what was said since the last pass and adds or removes notes. One long-lived background task
+ * per conversation does this; it sleeps between checks and survives restarts.
  */
 
 export const Memory = defineDoc<{ keeper?: TaskId; reviewed?: EntryId }>({
@@ -60,7 +62,7 @@ export function conversationText(entries: readonly EntryRecord[]): { lines: stri
 		if ("timestamp" in message && typeof message.timestamp === "number") lastAt = Math.max(lastAt ?? 0, message.timestamp);
 		let line: string | undefined;
 		if (UserEntry.is(entry) && message.role === "user") {
-			const text = textOf(message).replace(STRIP_GUIDANCE, "").trim();
+			const text = textOf(message).replace(STRIP_GUIDANCE, "").replace(STRIP_CROSS_CLIENT, "").trim();
 			if (!INTERNAL.test(text)) line = `them: ${text}`;
 		} else if (AssistantEntry.is(entry) && message.role === "assistant") {
 			const text = textOf(message).trim();
@@ -104,15 +106,136 @@ export async function reviewNotes(
 	return parseChanges(textOf(reply));
 }
 
+type EntriesReader = (
+	query: { minEntryId?: EntryId; order: "ascending" },
+	limit: number,
+	cursor: Cursor | undefined,
+	context: Context,
+) => Promise<{ items: readonly EntryRecord[]; next?: Cursor }>;
+
+/** Read every unreviewed entry past `reviewed` (fork-safe and `pi.reset`-safe). */
+async function readUnreviewedEntries(
+	readEntries: EntriesReader,
+	conversationId: ConversationId,
+	reviewed: EntryId | undefined,
+	context: Context,
+): Promise<{ entries: EntryRecord[]; last?: EntryId }> {
+	const entries: EntryRecord[] = [];
+	let last: EntryId | undefined;
+	let cursor: Cursor | undefined;
+	do {
+		const page = await readEntries(
+			{
+				...(reviewed === undefined ? {} : { minEntryId: (reviewed + 1) as EntryId }),
+				order: "ascending",
+			},
+			200,
+			cursor,
+			context,
+		);
+		for (const entry of page.items) {
+			if (last === undefined || entry.id > last) last = entry.id;
+			if (entry.conversationId === conversationId) entries.push(entry);
+		}
+		cursor = page.next;
+	} while (cursor !== undefined);
+	return { entries, ...(last === undefined ? {} : { last }) };
+}
+
+function applyNoteChanges(userNotes: Notes, changes: { add: string[]; remove: string[] }): { added: string[]; removed: string[] } {
+	const existing = new Set(userNotes.read().split("\n").map((line) => line.replace(/^-\s*/, "").trim()));
+	const added = changes.add.filter((note) => !existing.has(note));
+	const removed = changes.remove.filter((note) => userNotes.removeExact(note));
+	for (const note of added) userNotes.add(note);
+	return { added, removed };
+}
+
+/**
+ * Flush any unreviewed entries for `conversationId` into `notes.md` right away (ignoring `quietMs`).
+ * Called by `session-keeper` before `conversation.reset()` so no unreviewed facts are lost on session rollover.
+ */
+export async function flushMemory(
+	harness: Harness,
+	conversationId: ConversationId,
+	options: {
+		notes: Notes | NotesResolver;
+		models: Models;
+		config: Pick<Config, "provider" | "model">;
+		prompts?: PromptResolver;
+		now?: () => number;
+	},
+	context: Context,
+): Promise<{ added: string[]; removed: string[] }> {
+	const conversation = await harness.conversation(conversationId, context);
+	if (conversation === undefined) return { added: [], removed: [] };
+	const resolveNotes: NotesResolver = typeof options.notes === "function" ? options.notes : async () => options.notes as Notes;
+	const reviewed = (await harness.snapshot(Memory, conversationId, context))?.reviewed;
+	const { entries: fresh, last } = await readUnreviewedEntries(
+		(query, limit, cursor, ctx) => conversation.entries(query, limit, cursor, ctx),
+		conversationId,
+		reviewed,
+		context,
+	);
+	if (last === undefined) return { added: [], removed: [] };
+
+	const { lines } = conversationText(fresh);
+	const userNotes = await resolveNotes(harness, conversationId, context);
+	if (userNotes === undefined) {
+		await conversation.commit(async (tx) => {
+			(await tx.doc(Memory, conversationId)).reviewed = last;
+		}, context);
+		return { added: [], removed: [] };
+	}
+
+	let changes = { add: [] as string[], remove: [] as string[] };
+	if (lines.length > 0) {
+		changes = await reviewNotes(
+			options.models,
+			options.config,
+			userNotes.read(),
+			lines,
+			context.abortSignal,
+			options.prompts?.read("memory"),
+		);
+	}
+	const { added, removed } = applyNoteChanges(userNotes, changes);
+	const at = options.now?.() ?? Date.now();
+	await conversation.commit(async (tx) => {
+		(await tx.doc(Memory, conversationId)).reviewed = last;
+		if (added.length > 0 || removed.length > 0) {
+			await tx.appendEntry(NotesUpdate, conversationId, { data: { added, removed, at } });
+		}
+	}, context);
+	return { added, removed };
+}
+
 export function memoryExtension(options: {
 	notes: Notes | NotesResolver;
 	models: Models;
 	config: Config;
 	quietMs: number;
 	prompts?: PromptResolver;
+	now?: () => number;
 }) {
 	const { models, config } = options;
 	const resolveNotes: NotesResolver = typeof options.notes === "function" ? options.notes : async () => options.notes as Notes;
+	// Serialize per-conversation memory flushes between background Keeper and explicit pre-reset flushMemory().
+	const locks = new Map<string, Promise<unknown>>();
+	const serialize = <T>(id: ConversationId, fn: () => Promise<T>): Promise<T> => {
+		const key = String(id);
+		const prev = locks.get(key) ?? Promise.resolve();
+		const run = prev.then(fn);
+		const tracked = run
+			.then(
+				() => undefined,
+				() => undefined,
+			)
+			.finally(() => {
+				if (locks.get(key) === tracked) locks.delete(key);
+			});
+		locks.set(key, tracked);
+		return run;
+	};
 
 	const Keeper = defineTask<null, { phase: "watch"; tick: number }, null>({
 		name: "pclaw.memory-keeper",
@@ -124,61 +247,65 @@ export function memoryExtension(options: {
 				const next = { phase: "watch", tick: task.state.checkpoint.tick + 1 } as const;
 				const checkAgainAt = (until: number) => runtime.sleepUntil(until, next, context);
 				const id = runtime.conversationId;
-				const now = runtime.now();
-				const { entries } = await runtime.context(id, context);
-				const reviewed = (await runtime.snapshot(Memory, id, context))?.reviewed;
-				// A reviewed entry that compaction has hidden: start from what's visible.
-				const index = reviewed === undefined ? -1 : entries.findIndex((entry) => entry.id === reviewed);
-				const fresh = entries.slice(index + 1);
-				const last = fresh.at(-1)?.id;
-				const { lines, lastAt } = conversationText(fresh);
 
-				if (last === undefined) {
-					return checkAgainAt(now + Math.min(CHECK_MS, options.quietMs));
-				}
-				if (lines.length > 0 && now < (lastAt ?? now) + options.quietMs) {
-					return checkAgainAt((lastAt ?? now) + options.quietMs);
-				}
+				await serialize(id, async () => {
+					const now = runtime.now();
+					const reviewed = (await runtime.snapshot(Memory, id, context))?.reviewed;
+					const { entries: fresh, last } = await readUnreviewedEntries(
+						(query, limit, cursor, ctx) => runtime.entries(query, limit, cursor, ctx),
+						id,
+						reviewed,
+						context,
+					);
+					const { lines, lastAt } = conversationText(fresh);
 
-				// Skip private-note updates on multi-user shared group chats.
-				const userNotes = await resolveNotes(runtime, id, context);
-				if (userNotes === undefined) {
+					if (last === undefined) {
+						await checkAgainAt(now + Math.min(CHECK_MS, options.quietMs));
+						return;
+					}
+					if (lines.length > 0 && now < (lastAt ?? now) + options.quietMs) {
+						await checkAgainAt((lastAt ?? now) + options.quietMs);
+						return;
+					}
+
+					// Skip private-note updates on multi-user shared group chats.
+					const userNotes = await resolveNotes(runtime, id, context);
+					if (userNotes === undefined) {
+						await runtime.commit(async (tx) => {
+							(await tx.doc(Memory, id)).reviewed = last;
+							return { status: "running", checkpoint: next };
+						}, context);
+						return;
+					}
+
+					let changes = { add: [] as string[], remove: [] as string[] };
+					if (lines.length > 0) {
+						try {
+							changes = await reviewNotes(
+								models,
+								config,
+								userNotes.read(),
+								lines,
+								context.abortSignal,
+								options.prompts?.read("memory"),
+							);
+						} catch (error) {
+							if (context.abortSignal?.aborted) throw error;
+							runtime.report(error);
+							await checkAgainAt(now + RETRY_MS);
+							return;
+						}
+					}
+					const { added, removed } = applyNoteChanges(userNotes, changes);
+
 					await runtime.commit(async (tx) => {
 						(await tx.doc(Memory, id)).reviewed = last;
+						if (added.length > 0 || removed.length > 0) {
+							await tx.appendEntry(NotesUpdate, id, { data: { added, removed, at: runtime.now() } });
+						}
 						return { status: "running", checkpoint: next };
 					}, context);
-					return;
-				}
-
-				let changes = { add: [] as string[], remove: [] as string[] };
-				if (lines.length > 0) {
-					try {
-						changes = await reviewNotes(
-							models,
-							config,
-							userNotes.read(),
-							lines,
-							context.abortSignal,
-							options.prompts?.read("memory"),
-						);
-					} catch (error) {
-						if (context.abortSignal?.aborted) throw error;
-						runtime.report(error);
-						return checkAgainAt(now + RETRY_MS);
-					}
-				}
-				const existing = new Set(userNotes.read().split("\n").map((line) => line.replace(/^-\s*/, "").trim()));
-				const added = changes.add.filter((note) => !existing.has(note));
-				const removed = changes.remove.filter((note) => userNotes.removeExact(note));
-				for (const note of added) userNotes.add(note);
-
-				await runtime.commit(async (tx) => {
-					(await tx.doc(Memory, id)).reviewed = last;
-					if (added.length > 0 || removed.length > 0) {
-						await tx.appendEntry(NotesUpdate, id, { data: { added, removed, at: runtime.now() } });
-					}
-					return { status: "running", checkpoint: next };
-				}, context);
+				});
 			},
 		},
 		abort: (_task, runtime, context) => runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), context),
@@ -198,5 +325,22 @@ export function memoryExtension(options: {
 		}, context);
 	}
 
-	return { extension: defineExtension({ name: "pclaw.memory", tasks: [Keeper] }), ensureKeeper };
+	async function flush(harness: Harness, conversationId: ConversationId, context: Context): Promise<{ added: string[]; removed: string[] }> {
+		return serialize(conversationId, () =>
+			flushMemory(
+				harness,
+				conversationId,
+				{
+					notes: resolveNotes,
+					models,
+					config,
+					...(options.prompts === undefined ? {} : { prompts: options.prompts }),
+					...(options.now === undefined ? {} : { now: options.now }),
+				},
+				context,
+			),
+		);
+	}
+
+	return { extension: defineExtension({ name: "pclaw.memory", tasks: [Keeper] }), ensureKeeper, flushMemory: flush };
 }

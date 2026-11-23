@@ -228,17 +228,15 @@ test("prose lab: Discord checks allow emphasis but catch bold sections, tables, 
 	assert.deepEqual(rules("just one https://a.example"), []);
 });
 
-test("the notes view keeps the copy in view and lists changes since", () => {
+test("the notes view freezes the copy already shown in a session and loads fresh when unset", () => {
 	assert.deepEqual(notesView("- a\n- b\n", undefined), { notes: "- a\n- b" });
+	assert.deepEqual(notesView("", undefined), { notes: "(nothing yet)" });
 	assert.deepEqual(notesView("- a\n- b\n", "<notes>\n- a\n- b\n</notes>"), { notes: "- a\n- b" });
-	const changed = notesView("- a\n- c\n", "<notes>\n- a\n- b\n</notes>");
-	assert.equal(changed.notes, "- a\n- b");
-	assert.match(changed.changes ?? "", /Added:\n- c/);
-	assert.match(changed.changes ?? "", /Removed[^\n]*\n- b/);
-	// Starting from nothing, or after many changes, the full notes are sent again.
-	assert.deepEqual(notesView("- a\n", "<notes>\n(nothing yet)\n</notes>"), { notes: "- a" });
+	// Mid-session changes on disk stay frozen in the shown section until reset/compaction clears `shown`.
+	assert.deepEqual(notesView("- a\n- c\n", "<notes>\n- a\n- b\n</notes>"), { notes: "- a\n- b" });
+	assert.deepEqual(notesView("- a\n", "<notes>\n(nothing yet)\n</notes>"), { notes: "(nothing yet)" });
 	const many = Array.from({ length: 25 }, (_, index) => `- n${index}`).join("\n");
-	assert.deepEqual(notesView(many, "<notes>\n- a\n</notes>"), { notes: many });
+	assert.deepEqual(notesView(many, "<notes>\n- a\n</notes>"), { notes: "- a" });
 });
 
 test("the nightly cleanup changes notes in place, archives what it takes out, and skips a suspect night", async () => {

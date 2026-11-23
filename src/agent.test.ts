@@ -479,7 +479,7 @@ test("the memory pass updates the notes once the conversation goes quiet", async
 	await agent.harness.close(context);
 });
 
-test("a note saved mid-conversation reaches the model as a change, not another copy of the notes", async () => {
+test("notes stay frozen mid-session with zero pi.system mutation after remember(), then reload fresh after pi.reset", async () => {
 	const { faux, models } = setup();
 	const notes = new Notes(join(dir, "notes-delta.md"));
 	notes.add("Likes oat milk");
@@ -491,22 +491,48 @@ test("a note saved mid-conversation reaches the model as a change, not another c
 		},
 		(request) => {
 			requests.push(request);
-			return fauxAssistantMessage("got it");
+			return fauxAssistantMessage(fauxToolCall("remember", { note: "Sister Maya has surgery Tuesday" }), { stopReason: "toolUse" });
+		},
+		(request) => {
+			requests.push(request);
+			return fauxAssistantMessage("saved it");
+		},
+		(request) => {
+			requests.push(request);
+			return fauxAssistantMessage("still same session");
+		},
+		(request) => {
+			requests.push(request);
+			return fauxAssistantMessage("fresh session");
 		},
 	]);
 	const agent = await openAgent(await openNodeSqliteStorage(join(dir, "notes-delta.sqlite")), { config, models, notes, workers: await fakeWorkers() }, context);
 	const conversation = await agent.conversationFor("test:notes-delta", context);
 	await (await conversation.submit({ type: "input", content: "hi" }, context)).wait(context);
-	notes.add("Sister Maya has surgery Tuesday");
+	await (await conversation.submit({ type: "input", content: "remember my sister maya has surgery tuesday" }, context)).wait(context);
 	await (await conversation.submit({ type: "input", content: "anything else?" }, context)).wait(context);
 
-	const shown = (await conversation.context(context)).entries.flatMap((entry) => {
+	assert.match(notes.read(), /Sister Maya has surgery Tuesday/);
+	const shownBeforeReset = (await conversation.context(context)).entries.flatMap((entry) => {
 		const sections = (entry.model?.[0] as { sections?: Record<string, string | null> } | undefined)?.sections;
 		return sections === undefined ? [] : [sections];
 	});
-	assert.equal(shown.filter((sections) => typeof sections.notes === "string").length, 1);
-	assert.match(shown.at(-1)?.["notes-changes"] ?? "", /Added:\n- Sister Maya has surgery Tuesday/);
-	assert.match(JSON.stringify(requests[1]), /Sister Maya/);
+	// Exactly one baseline pi.system entry: zero mid-session patches or planSections re-emits.
+	assert.equal(shownBeforeReset.length, 1);
+	assert.equal(shownBeforeReset[0]?.["notes-changes"], undefined);
+	assert.match(shownBeforeReset[0]?.notes ?? "", /Likes oat milk/);
+	assert.doesNotMatch(shownBeforeReset[0]?.notes ?? "", /Sister Maya/);
+
+	// After pi.reset, the new baseline pi.system loads the fresh notes.md snapshot.
+	await conversation.reset(undefined, context);
+	await (await conversation.submit({ type: "input", content: "new morning" }, context)).wait(context);
+	const shownAfterReset = (await conversation.context(context)).entries.flatMap((entry) => {
+		const sections = (entry.model?.[0] as { sections?: Record<string, string | null> } | undefined)?.sections;
+		return sections === undefined ? [] : [sections];
+	});
+	assert.equal(shownAfterReset.length, 1);
+	assert.match(shownAfterReset[0]?.notes ?? "", /Likes oat milk/);
+	assert.match(shownAfterReset[0]?.notes ?? "", /Sister Maya has surgery Tuesday/);
 	await agent.harness.close(context);
 });
 

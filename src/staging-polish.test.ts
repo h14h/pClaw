@@ -745,7 +745,7 @@ test("worker progress monitor preserves control-arm holdout when worth_updating 
 	assert.equal(guidedRes.progressLog?.posted, false);
 });
 
-test("single-owner mode (no config.users) emits cross-client continuity hint across Discord and Telegram, but not in Telegram groups", async () => {
+test("single-owner mode (no config.users) computes static cross-client tail hint across Discord and Telegram without mutating pi.system, and never in Telegram groups", async () => {
 	const { faux, models } = setupFaux();
 	let nowMs = Date.now();
 	const agent = await openAgent(
@@ -775,6 +775,10 @@ test("single-owner mode (no config.users) emits cross-client continuity hint acr
 			},
 			(req) => {
 				requests.push(req);
+				return fauxAssistantMessage("still telegram");
+			},
+			(req) => {
+				requests.push(req);
 				return fauxAssistantMessage("hey group");
 			},
 		]);
@@ -785,17 +789,28 @@ test("single-owner mode (no config.users) emits cross-client continuity hint acr
 		nowMs += 15 * 60_000;
 
 		const tg = await agent.conversationFor("telegram:dm:200", context);
-		await (await tg.submit({ type: "input", content: "what did we decide earlier?" }, context)).wait(context);
-
 		const tgGroup = await agent.conversationFor("telegram:group:-555", context);
-		await (await tgGroup.submit({ type: "input", content: "hello everyone" }, context)).wait(context);
 
-		assert.match(
-			JSON.stringify(requests[1]),
-			/Recent activity on discord \(15m ago\); use recall if they reference it\./,
+		// Channel switch produces a static tail hint (no relative minutes), and never in groups.
+		assert.equal(
+			await agent.crossClientHint(tg.id, context),
+			"<cross-client>Recent activity on discord; use recall if they reference it.</cross-client>",
 		);
-		assert.doesNotMatch(JSON.stringify(requests[2]), /Recent activity on/);
+		assert.equal(await agent.crossClientHint(tgGroup.id, context), undefined);
+
+		await (await tg.submit({ type: "input", content: "what did we decide earlier?" }, context)).wait(context);
+		nowMs += 5 * 60_000;
+		await (await tg.submit({ type: "input", content: "another turn 5m later" }, context)).wait(context);
+
+		// Zero cross-client section in pi.system and zero pi.system mutations over time!
+		assert.doesNotMatch(JSON.stringify(requests[1]), /<cross-client>/);
+		const tgSystemEntries = (await tg.context(context)).entries.filter((e) => e.kind === "pi.system");
+		assert.equal(tgSystemEntries.length, 1);
+
+		await (await tgGroup.submit({ type: "input", content: "hello everyone" }, context)).wait(context);
+		assert.doesNotMatch(JSON.stringify(requests[3]), /Recent activity on/);
 	} finally {
 		await agent.harness.close(context);
+		agent.searchIndex.close();
 	}
 });

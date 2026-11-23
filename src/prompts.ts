@@ -63,6 +63,11 @@ const PROMPT_METADATA = {
 		name: "Summarizing",
 		description: "How older messages are summarized when a conversation gets long.",
 	},
+	episode: {
+		filename: "episode.md",
+		name: "Episode summary",
+		description: "How ended sessions are distilled into short episodes for recent-episodes continuity and recall.",
+	},
 	guidance: {
 		filename: "guidance.md",
 		name: "Guidance templates",
@@ -274,6 +279,13 @@ export const prompts: Record<PromptName, PromptSpec> = {
 		},
 		name: PROMPT_METADATA.compaction.name,
 		description: PROMPT_METADATA.compaction.description,
+	},
+	episode: {
+		get file() {
+			return defaultResolver().file("episode");
+		},
+		name: PROMPT_METADATA.episode.name,
+		description: PROMPT_METADATA.episode.description,
 	},
 	guidance: {
 		get file() {

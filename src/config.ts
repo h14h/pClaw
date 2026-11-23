@@ -12,6 +12,8 @@ export const paths = {
 	config: join(home, "config.json"),
 	db: join(home, "pclaw.sqlite"),
 	chatDb: join(home, "chat.sqlite"),
+	/** SQLite database holding distilled session episodes and FTS5 recall index. 0600. */
+	indexDb: join(home, "pclaw-index.sqlite"),
 	notes: join(home, "notes.md"),
 	/** Notes the nightly cleanup retired or replaced, with when and why. Never shown to models. */
 	notesArchive: join(home, "notes-archive.md"),
@@ -42,6 +44,81 @@ export interface UserConfig {
 	telegram?: string;
 	discord?: string;
 	sandbox?: UserSandboxConfig;
+}
+
+export type SessionResetClientConfig = {
+	idleMinutes?: number | null;
+	dailyHour?: number | null;
+};
+
+export type SessionResetConfig = {
+	enabled?: boolean;
+	/** Reset idle conversation after this many minutes without a turn. Default 180 (3h). */
+	idleMinutes?: number;
+	/** Local hour (0–23) for daily session rollover, or null to disable. Default 4 (4am). */
+	dailyHour?: number | null;
+	/** Minimum quiet minutes required before dailyHour rollover fires (prevents cutting off active 3:59am chat). Default 30. */
+	dailyMinQuietMinutes?: number;
+	/** Emergency token compaction threshold while sessionReset is enabled. Default 110_000. */
+	emergencyCompactTokens?: number;
+	/** Maximum recent episodes injected into <recent-episodes> at session start. Default 6. */
+	maxRecentEpisodes?: number;
+	/** Lookback window in hours for <recent-episodes>. Default 72. */
+	recentEpisodesHours?: number;
+	/** Per-client overrides keyed by client ("telegram", "discord:dm", "discord:thread", "matrix", etc.). */
+	clients?: Record<string, SessionResetClientConfig>;
+};
+
+export type ResolvedSessionResetPolicy = {
+	clientKey: string;
+	idleMinutes: number | null;
+	dailyHour: number | null;
+	dailyMinQuietMinutes: number;
+};
+
+/** Map a conversation route address onto its session-reset client key. */
+export function sessionResetClientKey(address: string): string {
+	const [channel, kind] = address.split(":");
+	if (channel === "telegram") return "telegram";
+	if (channel === "discord") {
+		if (kind === "dm") return "discord:dm";
+		if (kind === "thread" || kind === "channel") return "discord:thread";
+		return "discord";
+	}
+	if (channel === "matrix") return "matrix";
+	return channel ?? address;
+}
+
+/** Resolve effective idle/daily session-reset policy for a conversation address. */
+export function resolveSessionResetPolicy(
+	config: SessionResetConfig | undefined,
+	address: string,
+): ResolvedSessionResetPolicy {
+	const clientKey = sessionResetClientKey(address);
+	const defaultIdle = config?.idleMinutes ?? 180;
+	const defaultDaily = config?.dailyHour !== undefined ? config.dailyHour : 4;
+	const dailyMinQuietMinutes = config?.dailyMinQuietMinutes ?? 30;
+	const override = config?.clients?.[clientKey];
+
+	let idleMinutes: number | null;
+	if (override?.idleMinutes !== undefined) {
+		idleMinutes = override.idleMinutes;
+	} else if (clientKey === "discord:thread") {
+		idleMinutes = 1440;
+	} else {
+		idleMinutes = defaultIdle;
+	}
+
+	let dailyHour: number | null;
+	if (override?.dailyHour !== undefined) {
+		dailyHour = override.dailyHour;
+	} else if (clientKey === "discord:thread") {
+		dailyHour = null;
+	} else {
+		dailyHour = defaultDaily;
+	}
+
+	return { clientKey, idleMinutes, dailyHour, dailyMinQuietMinutes };
 }
 
 export type Config = {
@@ -145,6 +222,8 @@ export type Config = {
 	speechUrl?: string;
 	/** Share of decisions asked and logged but not shown, for comparing behavior with and without hints. */
 	decisionHoldout: number;
+	/** Per-client idle/daily session reset & episode distillation. Opt-in (`enabled: true`). */
+	sessionReset?: SessionResetConfig;
 };
 
 type StoredConfig = Partial<Config>;

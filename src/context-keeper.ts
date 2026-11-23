@@ -4,7 +4,7 @@ import { AssistantEntry, type ConversationId, type EntryId, LiveDoc } from "@ear
 import type { Agent } from "./agent.ts";
 
 const CHECK_MS = 60_000;
-/** An idle conversation holding this many copies of the notes gets summarized, which drops them (see `notesView`). */
+/** An idle conversation holding this many copies of the notes gets summarized, which drops them. */
 const NOTES_COPIES = 3;
 /** How often to count notes copies in a conversation, and to retry a summary for them that failed. */
 const COPIES_EVERY_MS = 30 * 60_000;
@@ -16,11 +16,19 @@ async function notesCopies(agent: Agent, id: ConversationId, context: Context): 
 	return entries.filter((entry) => typeof (entry.model?.[0] as { sections?: { notes?: unknown } } | undefined)?.sections?.notes === "string").length;
 }
 
-/** The conversation's latest model request: its entry, and its prompt tokens, cached or not. */
-async function latestRequest(agent: Agent, id: ConversationId, context: Context): Promise<{ entry: EntryId; tokens: number } | undefined> {
+/**
+ * The conversation's latest model request in the ACTIVE context: its entry, and its prompt tokens, cached or not.
+ * Scanning `conversation.context()` (rather than raw `conversation.entries()`) guarantees a freshly reset
+ * conversation never triggers compaction from a pre-reset high-token entry.
+ */
+export async function latestRequest(
+	agent: Agent,
+	id: ConversationId,
+	context: Context,
+): Promise<{ entry: EntryId; tokens: number } | undefined> {
 	const conversation = await agent.harness.conversation(id, context);
-	const page = await conversation?.entries({}, 30, undefined, context);
-	const entry = page?.items.find((each) => AssistantEntry.is(each));
+	const entries = (await conversation?.context(context))?.entries ?? [];
+	const entry = entries.findLast((each) => AssistantEntry.is(each));
 	const latest = entry?.model?.[0] as AssistantMessage | undefined;
 	if (entry === undefined || latest === undefined) return undefined;
 	return { entry: entry.id, tokens: latest.usage.input + latest.usage.cacheRead + latest.usage.cacheWrite };
@@ -28,13 +36,18 @@ async function latestRequest(agent: Agent, id: ConversationId, context: Context)
 
 /**
  * Keeps each conversation's context small: once a request's prompt passes `thresholdTokens` and the conversation is
- * idle, ask Pi Durable to summarize everything but the most recent messages. Pi Durable's own trigger sits near the
- * model's full context window, far past where replies get slow and the middle of the thread gets lost; long-term
- * facts live in the notes, so the word-for-word part can stay short. It also summarizes a conversation that holds several
- * copies of the notes (from before they were sent as changes, or after large refreshes), so old and removed notes leave
- * the model's view.
+ * idle, ask Pi Durable to summarize everything but the most recent messages. When `sessionReset.enabled` is true,
+ * token-based compaction is demoted to an emergency backstop (`emergencyCompactTokens`, default 110k) and the legacy
+ * 3-notes-copies trigger is skipped.
  */
-export function startContextKeeper(agent: Agent, thresholdTokens: number, context: Context, everyMs = CHECK_MS): { stop(): void } {
+export function startContextKeeper(
+	agent: Agent,
+	thresholdTokens: number,
+	context: Context,
+	everyMs = CHECK_MS,
+	options: { checkNotesCopies?: boolean } = {},
+): { stop(): void; tick(): Promise<void> } {
+	const checkNotesCopies = options.checkNotesCopies ?? true;
 	const pending = new Set<string>();
 	// The token count only changes with a new request, so one request is only worth one attempt.
 	const attempted = new Map<string, EntryId>();
@@ -50,12 +63,14 @@ export function startContextKeeper(agent: Agent, thresholdTokens: number, contex
 			if (latest.tokens >= thresholdTokens && attempted.get(String(id)) !== latest.entry) {
 				attempted.set(String(id), latest.entry);
 				reason = `${latest.tokens} prompt tokens`;
-			} else {
+			} else if (checkNotesCopies) {
 				if (Date.now() - (counted.get(String(id)) ?? 0) < COPIES_EVERY_MS) continue;
 				counted.set(String(id), Date.now());
 				const copies = await notesCopies(agent, id, context);
 				if (copies < NOTES_COPIES) continue;
 				reason = `${copies} copies of the notes`;
+			} else {
+				continue;
 			}
 			const conversation = await agent.harness.conversation(id, context);
 			if (conversation === undefined) continue;
@@ -68,6 +83,6 @@ export function startContextKeeper(agent: Agent, thresholdTokens: number, contex
 				.finally(() => pending.delete(String(id)));
 		}
 	};
-	const timer = setInterval(() => void check().catch((error: unknown) => console.error("[pclaw] context check", error)), CHECK_MS);
-	return { stop: () => clearInterval(timer) };
+	const timer = setInterval(() => void check().catch((error: unknown) => console.error("[pclaw] context check", error)), everyMs);
+	return { stop: () => clearInterval(timer), tick: check };
 }

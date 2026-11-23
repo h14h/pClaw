@@ -1,6 +1,7 @@
 import type { Context } from "@earendil-works/chord/context";
 import {
 	AssistantEntry,
+	type ConversationId,
 	defineExtension,
 	type EntryRecord,
 	type Harness,
@@ -36,24 +37,90 @@ function latestMessageTimestamp(entries: readonly EntryRecord[]): number | undef
 	return undefined;
 }
 
-export function formatRelativeAge(ageMs: number): string {
-	const mins = Math.max(0, Math.round(ageMs / 60_000));
-	if (mins < 1) return "just now";
-	if (mins < 60) return `${mins}m ago`;
-	const hours = Math.round(mins / 60);
-	return `${hours}h ago`;
+/**
+ * Compute a static 1-line `<cross-client>` tail hint for an inbound user message when the person
+ * recently switched channels (another channel for the same user had newer activity within 24h than
+ * the current conversation's last message). Never mutates `pi.system` / KV cache, never leaks across
+ * users, and never emits inside group chats.
+ */
+export async function crossClientHint(
+	options: {
+		harness?: Harness;
+		users?: UserRegistry;
+		now?: () => number;
+	},
+	conversationId: ConversationId,
+	context: Context,
+): Promise<string | undefined> {
+	const harness = options.harness;
+	if (harness === undefined) return undefined;
+	const nowFn = options.now ?? Date.now;
+	const users = options.users;
+	const routes = (await harness.snapshot(Routes, context))?.conversations ?? {};
+	const currentAddress = Object.keys(routes).find((addr) => routes[addr] === conversationId);
+	if (currentAddress === undefined) return undefined;
+	const currentChannel = currentAddress.split(":")[0];
+
+	const currentConv = await harness.conversation(conversationId, context);
+	const currentLastAt =
+		currentConv === undefined
+			? undefined
+			: latestMessageTimestamp((await currentConv.entries({}, 10, undefined, context)).items);
+
+	if (users?.enabled) {
+		const user = users.resolveAddress(currentAddress);
+		if (user === undefined) return undefined;
+		let best: { channel: string; at: number } | undefined;
+		for (const [otherAddr, otherId] of Object.entries(routes)) {
+			if (otherId === conversationId) continue;
+			const otherChannel = otherAddr.split(":")[0];
+			if (otherChannel === undefined || otherChannel === currentChannel) continue;
+			if (users.resolveAddress(otherAddr)?.id !== user.id) continue;
+			const otherConv = await harness.conversation(otherId, context);
+			if (otherConv === undefined) continue;
+			const page = await otherConv.entries({}, 10, undefined, context);
+			const at = latestMessageTimestamp(page.items);
+			if (at !== undefined && (best === undefined || at > best.at)) {
+				best = { channel: otherChannel, at };
+			}
+		}
+		if (best === undefined) return undefined;
+		const ageMs = nowFn() - best.at;
+		if (ageMs < 0 || ageMs > CROSS_CLIENT_WINDOW_MS) return undefined;
+		if (currentLastAt !== undefined && best.at <= currentLastAt) return undefined;
+		return `<cross-client>Recent activity with ${user.name} on ${best.channel}; use recall if they reference it.</cross-client>`;
+	}
+
+	// Single-owner multi-client mode (e.g. Discord + Telegram sharing one owner): never leak into Telegram groups.
+	if (currentAddress.startsWith("telegram:group:")) return undefined;
+	let best: { channel: string; at: number } | undefined;
+	for (const [otherAddr, otherId] of Object.entries(routes)) {
+		if (otherId === conversationId) continue;
+		if (otherAddr.startsWith("telegram:group:")) continue;
+		const otherChannel = otherAddr.split(":")[0];
+		if (otherChannel === undefined || otherChannel === currentChannel) continue;
+		const otherConv = await harness.conversation(otherId, context);
+		if (otherConv === undefined) continue;
+		const page = await otherConv.entries({}, 10, undefined, context);
+		const at = latestMessageTimestamp(page.items);
+		if (at !== undefined && (best === undefined || at > best.at)) {
+			best = { channel: otherChannel, at };
+		}
+	}
+	if (best === undefined) return undefined;
+	const ageMs = nowFn() - best.at;
+	if (ageMs < 0 || ageMs > CROSS_CLIENT_WINDOW_MS) return undefined;
+	if (currentLastAt !== undefined && best.at <= currentLastAt) return undefined;
+	return `<cross-client>Recent activity on ${best.channel}; use recall if they reference it.</cross-client>`;
 }
 
 /**
- * The front model's system prompt: the active voice, how pclaw works (src/prompts/front.md), the user's time
- * zone, and a 1-line cross-client awareness hint when the user recently spoke on another client (both in
- * multi-user mode and single-owner multi-client setups like Discord + Telegram). Rendered before every request,
- * so edits apply right away; Pi Durable only resends a section when it changes, which keeps the prompt cache warm otherwise.
+ * The front model's system prompt: the active voice, how pclaw works (src/prompts/front.md), and the user's time
+ * zone. Rendered deterministically with zero time-varying fields so the KV prompt cache stays 100% warm across turns.
  */
 export function soulExtension(timeZoneOrOptions: string | SoulOptions) {
 	const opts: SoulOptions =
 		typeof timeZoneOrOptions === "string" ? { timeZone: timeZoneOrOptions } : timeZoneOrOptions;
-	const nowFn = opts.now ?? Date.now;
 
 	return defineExtension({
 		name: "pclaw.soul",
@@ -75,59 +142,6 @@ export function soulExtension(timeZoneOrOptions: string | SoulOptions) {
 					if (user?.timeZone !== undefined) tz = user.timeZone;
 				}
 				return `They live in the ${tz} time zone unless they say otherwise.`;
-			}),
-			section("cross-client", async (input, context) => {
-				const users = opts.users;
-				const harness = opts.harness?.current;
-				if (harness === undefined) return undefined;
-				const routes = (await input.read.snapshot(Routes, context))?.conversations ?? {};
-				const currentAddress = Object.keys(routes).find((addr) => routes[addr] === input.conversationId);
-				if (currentAddress === undefined) return undefined;
-				const currentChannel = currentAddress.split(":")[0];
-
-				if (users?.enabled) {
-					const user = users.resolveAddress(currentAddress);
-					if (user === undefined) return undefined;
-					let best: { channel: string; at: number } | undefined;
-					for (const [otherAddr, otherId] of Object.entries(routes)) {
-						if (otherId === input.conversationId) continue;
-						const otherChannel = otherAddr.split(":")[0];
-						if (otherChannel === undefined || otherChannel === currentChannel) continue;
-						if (users.resolveAddress(otherAddr)?.id !== user.id) continue;
-						const otherConv = await harness.conversation(otherId, context);
-						if (otherConv === undefined) continue;
-						const page = await otherConv.entries({}, 10, undefined, context);
-						const at = latestMessageTimestamp(page.items);
-						if (at !== undefined && (best === undefined || at > best.at)) {
-							best = { channel: otherChannel, at };
-						}
-					}
-					if (best === undefined) return undefined;
-					const ageMs = nowFn() - best.at;
-					if (ageMs < 0 || ageMs > CROSS_CLIENT_WINDOW_MS) return undefined;
-					return `Recent activity with ${user.name} on ${best.channel} (${formatRelativeAge(ageMs)}); use recall if they reference it.`;
-				}
-
-				// Single-owner multi-client mode (e.g. Discord + Telegram sharing one owner): never leak into Telegram groups.
-				if (currentAddress.startsWith("telegram:group:")) return undefined;
-				let best: { channel: string; at: number } | undefined;
-				for (const [otherAddr, otherId] of Object.entries(routes)) {
-					if (otherId === input.conversationId) continue;
-					if (otherAddr.startsWith("telegram:group:")) continue;
-					const otherChannel = otherAddr.split(":")[0];
-					if (otherChannel === undefined || otherChannel === currentChannel) continue;
-					const otherConv = await harness.conversation(otherId, context);
-					if (otherConv === undefined) continue;
-					const page = await otherConv.entries({}, 10, undefined, context);
-					const at = latestMessageTimestamp(page.items);
-					if (at !== undefined && (best === undefined || at > best.at)) {
-						best = { channel: otherChannel, at };
-					}
-				}
-				if (best === undefined) return undefined;
-				const ageMs = nowFn() - best.at;
-				if (ageMs < 0 || ageMs > CROSS_CLIENT_WINDOW_MS) return undefined;
-				return `Recent activity on ${best.channel} (${formatRelativeAge(ageMs)}); use recall if they reference it.`;
 			}),
 		],
 	});

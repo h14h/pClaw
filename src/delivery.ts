@@ -142,6 +142,16 @@ export async function deliver(
 			console.error("[pclaw] delivery failed", error);
 		}
 	};
+	const saveDelivered = async (entryId: EntryId) => {
+		try {
+			await conversation.commit(async (tx) => {
+				(await tx.doc(Delivered, conversationId)).last = entryId;
+			}, context);
+		} catch (error) {
+			if (error instanceof Error && /Session is closed/i.test(error.message)) return;
+			throw error;
+		}
+	};
 	const sendInOrder = (entry: EntryRecord) => {
 		lastQueued = entry.id;
 		const user = lastUser;
@@ -153,9 +163,7 @@ export async function deliver(
 			}
 			const fromHeld = reply?.kind === "final" && reply.text === undefined;
 			await send(reply === undefined ? undefined : collector.take(reply), fromHeld ? heldEntry : entry.id, fromHeld ? heldUser : user);
-			await conversation.commit(async (tx) => {
-				(await tx.doc(Delivered, conversationId)).last = entry.id;
-			}, context);
+			await saveDelivered(entry.id);
 		});
 	};
 	/** A run ended (or a new one began) with text still held: send it. */
@@ -168,31 +176,41 @@ export async function deliver(
 	};
 
 	// Attach first, then read the transcript, so nothing committed in between is missed. Entry IDs only grow, so
-	// anything past `seen` is new.
+	// anything past `seen` is new. Reading raw `conversation.entries()` past `Delivered.last` (rather than scanning
+	// `conversation.context().entries`) ensures a `pi.reset` or compaction between restarts never drops replies.
 	const watch = await conversation.watch(context);
-	const catchUp = (entries: readonly EntryRecord[], last: EntryId | undefined) => {
-		// A cursor that compaction has hidden counts as caught up; resending the visible transcript would be worse.
-		const index = last === undefined ? -1 : entries.findIndex((entry) => entry.id === last);
-		const start = index === -1 ? entries.length : index + 1;
-		lastUser = entries.slice(0, start).findLast((entry) => UserEntry.is(entry))?.id;
-		for (const entry of entries.slice(start)) {
-			if (AssistantEntry.is(entry)) sendInOrder(entry);
-			else if (UserEntry.is(entry)) userInOrder(entry);
-		}
-		if (last === undefined && entries.length > 0) {
-			const end = entries[entries.length - 1]!.id;
+	const catchUp = async (last: EntryId | undefined): Promise<number> => {
+		if (last === undefined) {
+			const latest = (await conversation.entries({ order: "descending" }, 1, undefined, context)).items[0];
+			if (latest === undefined) return 0;
+			const recent = (await conversation.entries({ maxEntryId: latest.id, order: "descending" }, 20, undefined, context)).items;
+			lastUser = recent.find((entry) => UserEntry.is(entry))?.id;
+			const end = latest.id;
 			lastQueued = end;
-			queue = queue.then(() =>
-				conversation.commit(async (tx) => {
-					(await tx.doc(Delivered, conversationId)).last = end;
-				}, context),
-			);
+			queue = queue.then(() => saveDelivered(end));
+			return end;
 		}
+
+		// Seed `lastUser` from the latest user entry at or before `last` in case an assistant reply follows right after.
+		const before = (await conversation.entries({ maxEntryId: last, order: "descending" }, 20, undefined, context)).items;
+		lastUser = before.find((entry) => UserEntry.is(entry))?.id;
+
+		let high: number = last;
+		let cursor: Parameters<typeof conversation.entries>[2];
+		do {
+			const page = await conversation.entries({ minEntryId: (last + 1) as EntryId, order: "ascending" }, 200, cursor, context);
+			for (const entry of page.items) {
+				if (entry.id > high) high = entry.id;
+				if (AssistantEntry.is(entry)) sendInOrder(entry);
+				else if (UserEntry.is(entry)) userInOrder(entry);
+			}
+			cursor = page.next;
+		} while (cursor !== undefined);
+		return high;
 	};
 	lastQueued = (await harness.snapshot(Delivered, conversationId, context))?.last;
-	const active = (await conversation.context(context)).entries;
-	catchUp(active, lastQueued);
-	let seen = Math.max(active.at(-1)?.id ?? 0, watch.value.entries.at(-1)?.id ?? 0);
+	const caughtUpTo = await catchUp(lastQueued);
+	let seen = Math.max(caughtUpTo, watch.value.entries.at(-1)?.id ?? 0);
 	const busy = (view: typeof watch.value) => (view.docs["pi.live"] as LiveState | undefined)?.run !== undefined;
 	let working = busy(watch.value);
 	if (working) outbox.working(true);

@@ -413,10 +413,17 @@ test("strict cross-user isolation for notes, timezone, cross-client awareness, r
 		assert.doesNotMatch(readFileSync(willyNotesFile, "utf8"), /Postgres 17/);
 		assert.equal(existsSync(join(homeDir, "notes.md")), false);
 
-		// Advance clock 25 minutes so Max's Telegram activity triggers cross-client awareness on Discord!
+		// Advance clock 25 minutes so Max's Telegram activity triggers cross-client hint on Discord (without mutating pi.system).
 		nowMs += 25 * 60_000;
+		const maxCrossClientHint = await agent.crossClientHint(maxDc.id, context);
+		assert.equal(
+			maxCrossClientHint,
+			"<cross-client>Recent activity with Max on telegram; use recall if they reference it.</cross-client>",
+		);
+		assert.equal(await agent.crossClientHint(willyTg.id, context), undefined);
+		assert.equal(await agent.crossClientHint(sharedGroup.id, context), undefined);
 
-		// 3. Max switches to Discord: sees his own notes, America/New_York tz, cross-client Telegram hint,
+		// 3. Max switches to Discord: sees his own notes, America/New_York tz, zero <cross-client> in pi.system,
 		//    can recall his own Telegram quicksilver router message, and CANNOT recall Willy's tungsten spreadsheet!
 		faux.setResponses([
 			(req) => {
@@ -439,7 +446,10 @@ test("strict cross-user isolation for notes, timezone, cross-client awareness, r
 		assert.match(maxDcJson, /Max runs Postgres 17/);
 		assert.doesNotMatch(maxDcJson, /Willy tracks invoices/);
 		assert.match(maxDcJson, /America\/New_York/);
-		assert.match(maxDcJson, /Recent activity with Max on telegram \(25m ago\); use recall if they reference it\./);
+		// Never injected into pi.system (would bust KV cache); delivered via inbound user message tail instead.
+		assert.doesNotMatch(maxDcJson, /<cross-client>/);
+		// Once Max has spoken on Discord, crossClientHint clears until another channel has newer activity.
+		assert.equal(await agent.crossClientHint(maxDc.id, context), undefined);
 
 		// Inspect recall tool results returned to Max on Discord
 		const maxDcFinal = JSON.stringify(requests.maxDc!.at(-1));

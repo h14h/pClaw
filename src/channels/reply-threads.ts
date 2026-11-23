@@ -119,7 +119,7 @@ function asNumber(id: string): bigint | undefined {
 
 /** Whether `entry` is the reply written alongside a `delegate` or `message_worker` call: an ack for work just handed off. */
 export async function isDelegateAck(conversation: Conversation, entry: EntryId, context: Context): Promise<boolean> {
-	const record = (await conversation.context(context)).entries.find((each) => each.id === entry);
+	const record = (await conversation.entries({ minEntryId: entry, maxEntryId: entry }, 1, undefined, context)).items[0];
 	if (record === undefined || !AssistantEntry.is(record)) return false;
 	const message = record.model?.[0] as { content?: { type?: string; name?: string }[] } | undefined;
 	return message?.content?.some((part) => part.type === "toolCall" && (part.name === "delegate" || part.name === "message_worker")) ?? false;
