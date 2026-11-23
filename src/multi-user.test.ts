@@ -1077,12 +1077,22 @@ test("createPromptResolver with personaDir bots/grug resolves voice, front, form
 	assert.ok(grug.file("worker").endsWith("src/prompts/worker.md"));
 
 	const frontPrompt = grug.frontPrompt({ allowT3: false, allowPages: false, channel: "telegram" });
-	assert.match(frontPrompt, /# caveman/);
+	assert.match(frontPrompt, /# ultracave/);
 	assert.match(frontPrompt, /# How Grug works/);
 	assert.doesNotMatch(frontPrompt, /start_job|list_projects|list_jobs|message_job|ping_owner/);
 
 	const tgFormatting = grug.readFormatting("telegram", { allowT3: false, allowPages: false })!;
 	assert.match(tgFormatting, /You are in Telegram chat\. User reads on phone, like texts\./);
+	assert.match(tgFormatting, /Reply in ultracave fragments: drop articles, copulas, filler; payload only\./);
+
+	// Default Pinchy resolver (profiles/muse-ember) does NOT pick up any bots/grug/* files.
+	const pinchy = createPromptResolver({ profileDir: "profiles/muse-ember" });
+	assert.ok(pinchy.file("voice").endsWith("profiles/muse-ember/voice.md"));
+	assert.ok(pinchy.file("front").endsWith("src/prompts/front.md"));
+	assert.ok(pinchy.file("guidance").endsWith("src/prompts/guidance.md"));
+	assert.ok(pinchy.formattingFile("telegram.md").endsWith("src/prompts/formatting/telegram.md"));
+	assert.doesNotMatch(pinchy.frontPrompt({ channel: "telegram" }), /# ultracave|You are Grug/);
+	assert.doesNotMatch(pinchy.readFormatting("telegram")!, /ultracave/);
 
 	// renderGuidance & messageGuidance use bots/grug/guidance.md when passed the Grug resolver,
 	// while the default (no resolver) keeps src/prompts/guidance.md untouched.
