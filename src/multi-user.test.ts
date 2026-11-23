@@ -18,6 +18,7 @@ import {
 	type TelegramUpdate,
 } from "./channels/telegram.ts";
 import { type Config, defaults, isPagesEnabled, isT3Enabled } from "./config.ts";
+import { decisionClient, messageGuidance, renderGuidance } from "./decisions.ts";
 import { deliver } from "./delivery.ts";
 import { Notes } from "./extensions/notes.ts";
 import { type WorkerOptions, workerOptions } from "./extensions/workers.ts";
@@ -1064,4 +1065,51 @@ test("createPromptResolver resolves personaDir and voiceFile independently witho
 	assert.equal(r2.read("voice"), "Explicit override voice");
 	// r1 is unaffected by r2
 	assert.equal(r1.read("voice"), "Persona voice");
+});
+
+test("createPromptResolver with personaDir bots/grug resolves voice, front, formatting/telegram, and guidance", async () => {
+	const grug = createPromptResolver({ personaDir: "bots/grug" });
+	assert.ok(grug.file("voice").endsWith("bots/grug/voice.md"));
+	assert.ok(grug.file("front").endsWith("bots/grug/front.md"));
+	assert.ok(grug.file("guidance").endsWith("bots/grug/guidance.md"));
+	assert.ok(grug.formattingFile("telegram.md").endsWith("bots/grug/formatting/telegram.md"));
+	// Shared prompts without persona overrides still fall back to src/prompts/.
+	assert.ok(grug.file("worker").endsWith("src/prompts/worker.md"));
+
+	const frontPrompt = grug.frontPrompt({ allowT3: false, allowPages: false, channel: "telegram" });
+	assert.match(frontPrompt, /# caveman/);
+	assert.match(frontPrompt, /# How Grug works/);
+	assert.doesNotMatch(frontPrompt, /start_job|list_projects|list_jobs|message_job|ping_owner/);
+
+	const tgFormatting = grug.readFormatting("telegram", { allowT3: false, allowPages: false })!;
+	assert.match(tgFormatting, /You are in Telegram chat\. User reads on phone, like texts\./);
+
+	// renderGuidance & messageGuidance use bots/grug/guidance.md when passed the Grug resolver,
+	// while the default (no resolver) keeps src/prompts/guidance.md untouched.
+	const grugRendered = renderGuidance({ fresh_check: { probability: 0.9 } }, ["message.fresh"], {}, grug)!;
+	assert.match(grugRendered, /Depends on state right now\. Do not answer from memory or notes\./);
+	const defaultRendered = renderGuidance({ fresh_check: { probability: 0.9 } }, ["message.fresh"])!;
+	assert.match(defaultRendered, /This depends on how things are right now/);
+
+	const grugStatus = messageGuidance(
+		{ asks_status: { probability: 0.9 } },
+		{ allowT3: false, liveJobs: true },
+		grug,
+	)!;
+	assert.match(grugStatus, /User seems to ask job status\. Check with `list_workers` before answering\. Never guess\./);
+
+	// decisionClient records templates hash for the persona's guidance.md.
+	const logFile = join(dir, "grug-decisions.jsonl");
+	const defaultLogFile = join(dir, "default-decisions.jsonl");
+	const fakeFetch = (async () =>
+		new Response(JSON.stringify({ answers: { fresh_check: { probability: 0.9 } } }), {
+			headers: { "Content-Type": "application/json" },
+		})) as typeof fetch;
+	const grugDecisions = decisionClient({ url: "http://d1.test", logFile, holdout: 0, fetchFn: fakeFetch, prompts: grug });
+	const defaultDecisions = decisionClient({ url: "http://d1.test", logFile: defaultLogFile, holdout: 0, fetchFn: fakeFetch });
+	await grugDecisions.ask({ id: "g1", site: "message", state: "hi", questions: { fresh_check: { type: "noul", instructions: "fresh?" } } });
+	await defaultDecisions.ask({ id: "d1", site: "message", state: "hi", questions: { fresh_check: { type: "noul", instructions: "fresh?" } } });
+	const grugTemplatesHash = (JSON.parse(readFileSync(logFile, "utf8").trim()) as { templates: string }).templates;
+	const defaultTemplatesHash = (JSON.parse(readFileSync(defaultLogFile, "utf8").trim()) as { templates: string }).templates;
+	assert.notEqual(grugTemplatesHash, defaultTemplatesHash);
 });

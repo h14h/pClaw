@@ -486,7 +486,7 @@ export function createJobs(options: JobsOptions) {
 		job.position = position;
 		job.itemCount = view.itemCount;
 		job.cardRefreshedAt = Date.now();
-		const guidance = decided === undefined ? undefined : turnGuidance(decided.answers, facts);
+		const guidance = decided === undefined ? undefined : turnGuidance(decided.answers, facts, options.prompts);
 		const shown = decided?.arm === "guided" ? guidance : undefined;
 		if (decided !== undefined) {
 			job.decision = decided.id;
@@ -550,7 +550,7 @@ export function createJobs(options: JobsOptions) {
 	async function noteProgress(job: Job, activity: string): Promise<void> {
 		const id = `progress:${job.id}:${job.position}`;
 		const decided = await decisions.ask({ id, site: "progress", job: job.id, timeoutMs: 3_000, state: { recent_activity: activity.slice(-1_500) }, questions: progressQuestions });
-		const hint = decided?.arm === "guided" ? progressGuidance(decided.answers) : undefined;
+		const hint = decided?.arm === "guided" ? progressGuidance(decided.answers, options.prompts) : undefined;
 		const { status, message } = await progressUpdate(job, activity, hint);
 		job.cardRefreshedAt = Date.now();
 		if (status !== undefined) job.status = status;
@@ -798,6 +798,7 @@ export function createJobs(options: JobsOptions) {
 				id: input.id,
 				text: input.text,
 				...(input.replyTo === undefined ? {} : { replyTo: input.replyTo }),
+				...(options.prompts === undefined ? {} : { prompts: options.prompts }),
 				context: BACKGROUND_CONTEXT,
 			}).catch((error: unknown) => {
 				console.error("[pclaw] in-worker read failed", error);
@@ -836,12 +837,16 @@ export function createJobs(options: JobsOptions) {
 		}
 		const names = (await backend.machines().catch(() => [])).map((each) => each.machine.toLowerCase());
 		const words = input.text.toLowerCase().split(/\W+/);
-		const guidance = messageGuidance(decided.answers, {
-			liveJobs: live.length > 0,
-			...(input.voice === true ? { voice: true } : {}),
-			namesMachine: words.some((word) => names.includes(word)),
-			...(project === undefined ? {} : { project }),
-		});
+		const guidance = messageGuidance(
+			decided.answers,
+			{
+				liveJobs: live.length > 0,
+				...(input.voice === true ? { voice: true } : {}),
+				namesMachine: words.some((word) => names.includes(word)),
+				...(project === undefined ? {} : { project }),
+			},
+			options.prompts,
+		);
 		const shown = decided.arm === "guided" ? guidance : undefined;
 		if (guidance !== undefined) decisions.record({ type: "guidance", id: decided.id, site: "message", arm: decided.arm, guidance, shown: shown !== undefined });
 		return shown;

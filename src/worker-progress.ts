@@ -476,7 +476,7 @@ export function startWorkerProgressMonitor(
 						continue;
 					}
 
-					const hint = guided && decided !== undefined && side === undefined ? workerProgressGuidance(decided.answers) : undefined;
+					const hint = guided && decided !== undefined && side === undefined ? workerProgressGuidance(decided.answers, agent.prompts) : undefined;
 					const activity =
 						side !== undefined ? freshActivity : freshActivity || describeActivity(items.slice(-4)) || formatWorkerProgress(items, state.startedAt, now);
 					const { status, message } = await generateWorkerProgressUpdate({

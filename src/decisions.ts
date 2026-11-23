@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { appendFileSync } from "node:fs";
 import type { Models } from "@earendil-works/pi-ai/models";
-import { readPrompt } from "./prompts.ts";
+import { type PromptResolver, readPrompt } from "./prompts.ts";
 
 /**
  * A decision model (Liquid's d1 family) as a source of hints. Given a state and named questions it returns
@@ -62,8 +62,9 @@ export function decisionClient(options: {
 	timeoutMs?: number;
 	fetchFn?: typeof fetch;
 	fallback?: DecisionFallback;
+	prompts?: PromptResolver;
 }): Decisions {
-	const { url, logFile, holdout = 0.2, timeoutMs = D1_TIMEOUT_MS, fetchFn = fetch, fallback } = options;
+	const { url, logFile, holdout = 0.2, timeoutMs = D1_TIMEOUT_MS, fetchFn = fetch, fallback, prompts } = options;
 	const record: Decisions["record"] = (event) => {
 		try {
 			appendFileSync(logFile, `${JSON.stringify({ at: new Date().toISOString(), ...event })}\n`, { mode: 0o600 });
@@ -89,7 +90,7 @@ export function decisionClient(options: {
 			if (url === undefined && fallback === undefined) return undefined;
 			const arm = armOf(id, holdout);
 			const stateText = typeof state === "string" ? state : JSON.stringify(state);
-			const base = { type: "decision", id, site, arm, templates: templatesVersion(), ...(job === undefined ? {} : { job }), state: stateText.slice(0, STATE_LOG_LIMIT) };
+			const base = { type: "decision", id, site, arm, templates: templatesVersion(prompts), ...(job === undefined ? {} : { job }), state: stateText.slice(0, STATE_LOG_LIMIT) };
 			const suffix = job === undefined ? "" : ` job=${job}`;
 			const attempts: [Backend, () => Promise<Answers>][] = [
 				...(url === undefined ? [] : [["d1", () => askD1(stateText, questions, limit)] as [Backend, () => Promise<Answers>]]),
@@ -197,18 +198,30 @@ export function parseTemplates(markdown: string): Record<string, string> {
 	return sections;
 }
 
-function templatesVersion(): string {
+export type GuidanceTemplates = Record<string, string> | PromptResolver;
+
+function isPromptResolver(value: GuidanceTemplates): value is PromptResolver {
+	return typeof (value as PromptResolver).read === "function";
+}
+
+function resolveTemplates(templates?: GuidanceTemplates): Record<string, string> {
+	if (templates === undefined) return parseTemplates(readPrompt("guidance"));
+	return isPromptResolver(templates) ? parseTemplates(templates.read("guidance")) : templates;
+}
+
+function templatesVersion(prompts?: PromptResolver): string {
 	try {
-		return createHash("sha256").update(readPrompt("guidance")).digest("hex").slice(0, 8);
+		return createHash("sha256").update(prompts?.read("guidance") ?? readPrompt("guidance")).digest("hex").slice(0, 8);
 	} catch {
 		return "unknown";
 	}
 }
 
 /** A `<guidance>` block from template names, with the raw read on top so the front model can weigh it. */
-export function renderGuidance(answers: Answers, picks: string[], values: Record<string, string> = {}, templates = parseTemplates(readPrompt("guidance"))): string | undefined {
+export function renderGuidance(answers: Answers, picks: string[], values: Record<string, string> = {}, templates?: GuidanceTemplates): string | undefined {
+	const resolved = resolveTemplates(templates);
 	const lines = picks.flatMap((name) => {
-		const text = templates[name];
+		const text = resolved[name];
 		return text === undefined ? [] : [Object.entries(values).reduce((line, [key, value]) => line.replaceAll(`{${key}}`, value), text)];
 	});
 	if (lines.length === 0) return undefined;
@@ -260,7 +273,7 @@ export function readTurn(answers: Answers, facts: TurnFacts): TurnRead {
 	return { outcome, surface };
 }
 
-export function turnGuidance(answers: Answers, facts: TurnFacts, templates?: Record<string, string>): string | undefined {
+export function turnGuidance(answers: Answers, facts: TurnFacts, templates?: GuidanceTemplates): string | undefined {
 	const { outcome, surface } = readTurn(answers, facts);
 	const picks = [`turn.${outcome}`];
 	if (facts.ownerDriving) picks.push("owner_driving");
@@ -325,7 +338,7 @@ export type MessageFacts = {
 /** Simple questions can read as research, so that hint needs a firmer read unless the answer has to be looked up. */
 const WORKER_THRESHOLD = 0.7;
 
-export function messageGuidance(answers: Answers, facts: MessageFacts = {}, templates?: Record<string, string>): string | undefined {
+export function messageGuidance(answers: Answers, facts: MessageFacts = {}, templates?: GuidanceTemplates): string | undefined {
 	const allowT3 = facts.allowT3 !== false;
 	const picks: string[] = [];
 	const size = pick(answers.job_size);
@@ -394,7 +407,7 @@ export function readWorkerIntent(answers: Answers, workers: string[]): { intent:
 	return { intent: choice as WorkerIntent, p, ...(worker === undefined ? {} : { worker }) };
 }
 
-export function inWorkerGuidance(answers: Answers, workers: string[], templates?: Record<string, string>): string | undefined {
+export function inWorkerGuidance(answers: Answers, workers: string[], templates?: GuidanceTemplates): string | undefined {
 	const read = readWorkerIntent(answers, workers);
 	if (read === undefined || read.p < INTENT_THRESHOLD) return undefined;
 	return renderGuidance(answers, [`worker.${read.intent}`], { worker: read.worker ?? workers.join(" or ") }, templates);
@@ -420,7 +433,7 @@ export const progressQuestions: Questions = {
 	},
 };
 
-export const progressGuidance = (answers: Answers, templates?: Record<string, string>): string | undefined =>
+export const progressGuidance = (answers: Answers, templates?: GuidanceTemplates): string | undefined =>
 	renderGuidance(answers, [yes(answers.milestone) >= 0.5 ? "progress.milestone" : "progress.routine"], {}, templates);
 
 /** A running worker's progress, judged on timing, its own state, and what the conversation is doing. */
@@ -443,7 +456,7 @@ export function workerProgressQuestions(sideChat: boolean): Questions {
 	};
 }
 
-export const workerProgressGuidance = (answers: Answers, templates?: Record<string, string>): string | undefined =>
+export const workerProgressGuidance = (answers: Answers, templates?: GuidanceTemplates): string | undefined =>
 	renderGuidance(answers, [yes(answers.worth_updating) >= 0.5 ? "progress.milestone" : "progress.routine"], {}, templates);
 
 // Decision set: a follow-up came due.
@@ -453,6 +466,6 @@ export const followUpQuestions: Questions = {
 	still_relevant: { type: "noul", instructions: "Is this follow-up still relevant, or has recent conversation already handled it?" },
 };
 
-export function followUpGuidance(answers: Answers, templates?: Record<string, string>): string | undefined {
+export function followUpGuidance(answers: Answers, templates?: GuidanceTemplates): string | undefined {
 	return yes(answers.good_moment) < 0.5 || yes(answers.still_relevant) < 0.5 ? renderGuidance(answers, ["follow_up.wait"], {}, templates) : undefined;
 }

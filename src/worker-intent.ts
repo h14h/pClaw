@@ -2,6 +2,7 @@ import type { Context } from "@earendil-works/chord/context";
 import type { ConversationId, Harness } from "@earendil-works/pi-durable";
 import { type Decisions, INTENT_THRESHOLD, inWorkerGuidance, inWorkerQuestions, readWorkerIntent, type WorkerIntent } from "./decisions.ts";
 import { noteAside, touchWorker, Workers } from "./extensions/workers.ts";
+import type { PromptResolver } from "./prompts.ts";
 
 /**
  * A message that arrives while work runs in the same conversation (a DM as much as a job thread) is read for what it
@@ -24,6 +25,7 @@ export async function readForWorkers(options: {
 	text: string;
 	/** What their message replies to, when it's a reply. */
 	replyTo?: string;
+	prompts?: PromptResolver;
 	context: Context;
 	now?: () => number;
 }): Promise<WorkerIntentRead | undefined> {
@@ -71,7 +73,7 @@ export async function readForWorkers(options: {
 	}
 	decisions.record({ type: "in-worker", id: decided.id, arm: decided.arm, intent: read.intent, p: read.p, ...(read.worker === undefined ? {} : { worker: read.worker }) });
 
-	const guidance = inWorkerGuidance(decided.answers, names);
+	const guidance = inWorkerGuidance(decided.answers, names, options.prompts);
 	if (guidance !== undefined) decisions.record({ type: "guidance", id: decided.id, site: "in-worker", arm: decided.arm, guidance, shown: decided.arm === "guided" });
 	return { ...read, ...(guidance !== undefined && decided.arm === "guided" ? { guidance } : {}) };
 }

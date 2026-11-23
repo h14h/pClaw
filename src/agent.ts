@@ -89,6 +89,7 @@ function disabledJobs(
 	storeFile: string,
 	harness: { current?: Harness },
 	context: Context,
+	prompts?: PromptResolver,
 ): Jobs {
 	const store = new JobStore(storeFile);
 	const emptyExtension = { name: "pclaw.jobs.disabled" } as Jobs["extension"];
@@ -117,6 +118,7 @@ function disabledJobs(
 				id: input.id,
 				text: input.text,
 				...(input.replyTo === undefined ? {} : { replyTo: input.replyTo }),
+				...(prompts === undefined ? {} : { prompts }),
 				context,
 			}).catch((error: unknown) => {
 				console.error("[pclaw] in-worker read failed", error);
@@ -148,11 +150,15 @@ function disabledJobs(
 			questions: messageQuestions(false),
 		});
 		if (decided === undefined) return undefined;
-		const guidance = messageGuidance(decided.answers, {
-			allowT3: false,
-			liveJobs: active.length > 0,
-			...(input.voice === true ? { voice: true } : {}),
-		});
+		const guidance = messageGuidance(
+			decided.answers,
+			{
+				allowT3: false,
+				liveJobs: active.length > 0,
+				...(input.voice === true ? { voice: true } : {}),
+			},
+			prompts,
+		);
 		const shown = decided.arm === "guided" ? guidance : undefined;
 		if (guidance !== undefined) {
 			decisions.record({
@@ -288,7 +294,13 @@ export async function openAgent(
 			: { models, provider: config.provider, model: config.decisionFallbackModel ?? config.model };
 	const decisions =
 		options.decisions ??
-		decisionClient({ url: config.decisionUrl, logFile: paths.decisions, holdout: config.decisionHoldout, ...(fallback === undefined ? {} : { fallback }) });
+		decisionClient({
+			url: config.decisionUrl,
+			logFile: paths.decisions,
+			holdout: config.decisionHoldout,
+			prompts: promptResolver,
+			...(fallback === undefined ? {} : { fallback }),
+		});
 	install(
 		followUpsExtension(timeZoneResolver, options.now, async (id, note, tz) => {
 			const decided = await decisions.ask({
@@ -298,7 +310,7 @@ export async function openAgent(
 				questions: followUpQuestions,
 			});
 			if (decided === undefined) return undefined;
-			const guidance = followUpGuidance(decided.answers);
+			const guidance = followUpGuidance(decided.answers, promptResolver);
 			if (guidance !== undefined) decisions.record({ type: "guidance", id, site: "follow-up", arm: decided.arm, guidance, shown: decided.arm === "guided" });
 			return decided.arm === "guided" ? guidance : undefined;
 		}),
@@ -388,6 +400,7 @@ export async function openAgent(
 			options.homeDir === undefined ? paths.jobs : join(options.homeDir, "jobs.json"),
 			current,
 			context,
+			promptResolver,
 		);
 	}
 
