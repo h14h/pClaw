@@ -260,6 +260,30 @@ export const REACTION_FALLBACK_ENTRIES: readonly [string, string][] = [
 	// Music
 	["🎵", "🎉"],
 	["🎶", "🎉"],
+	// Sports
+	["🏈", "🏆"],
+	["🏀", "🏆"],
+	["⚾", "🏆"],
+	["⚽", "🏆"],
+	["🏒", "🏆"],
+	["🎾", "🏆"],
+	["⛳", "🏆"],
+	// Wood / furniture / home
+	["🪵", "🗿"],
+	["🪑", "🗿"],
+	["🛋️", "🗿"],
+	["🛋", "🗿"],
+	["🏠", "🗿"],
+	["🏡", "🗿"],
+	["🔨", "🗿"],
+	["🪚", "🗿"],
+	// Listening / audio / voice
+	["👂", "✍"],
+	["🔊", "✍"],
+	["🎙️", "✍"],
+	["🎙", "✍"],
+	["🎧", "✍"],
+	["🎤", "✍"],
 ];
 
 const SEMANTIC_REACTION_MAP = new Map<string, string>(
@@ -289,6 +313,32 @@ export function normalizeTelegramReaction(emoji: string, fallback = "👍"): str
 
 export function escapeHtml(text: string): string {
 	return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/**
+ * A voice memo's transcript as one Telegram HTML message: a quote, collapsed (expandable) when it runs long, and
+ * clipped at a word with "…" so it never passes Telegram's message limit.
+ */
+export function transcriptQuoteHtml(transcript: string): string {
+	const text = transcript.trim();
+	const expandable = text.length > EXPANDABLE_QUOTE_CHARS || text.split("\n").length > EXPANDABLE_QUOTE_LINES;
+	const open = expandable ? "<blockquote expandable>" : "<blockquote>";
+	const close = "</blockquote>";
+	const room = TELEGRAM_MAX_MESSAGE - open.length - close.length;
+	let body = escapeHtml(text);
+	if (body.length > room) {
+		body = "";
+		for (const ch of text) {
+			const escaped = escapeHtml(ch);
+			if (body.length + escaped.length > room - 1) break;
+			body += escaped;
+		}
+		// Entities hold no whitespace, so cutting back to a space never splits one.
+		const space = body.search(/\s\S*$/);
+		if (space > room / 2) body = body.slice(0, space);
+		body = `${body.trimEnd()}…`;
+	}
+	return `${open}${body}${close}`;
 }
 
 function escapeAttr(text: string): string {

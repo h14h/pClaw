@@ -20,7 +20,9 @@ import {
 	splitPlainText,
 	splitTelegramHtml,
 	stripTelegramHtml,
+	TELEGRAM_MAX_MESSAGE,
 	TELEGRAM_REACTION_EMOJIS,
+	transcriptQuoteHtml,
 } from "./telegram-format.ts";
 import {
 	authorizeTelegramMessage,
@@ -266,6 +268,26 @@ test("every Telegram reaction fallback lands on a native reaction, with topical 
 	assert.equal(normalizeTelegramReaction("🕹️", "👀"), "👾");
 	assert.equal(normalizeTelegramReaction("💰", "👀"), "🏆");
 	assert.equal(normalizeTelegramReaction("🎶", "👀"), "🎉");
+	assert.equal(normalizeTelegramReaction("🏈", "👀"), "🏆");
+	assert.equal(normalizeTelegramReaction("⚽️", "👀"), "🏆");
+	assert.equal(normalizeTelegramReaction("⛳", "👀"), "🏆");
+	assert.equal(normalizeTelegramReaction("🪵", "👀"), "🗿");
+	assert.equal(normalizeTelegramReaction("🛋️", "👀"), "🗿");
+	assert.equal(normalizeTelegramReaction("🔨", "👀"), "🗿");
+	assert.equal(normalizeTelegramReaction("👂", "👀"), "✍");
+	assert.equal(normalizeTelegramReaction("🎙️", "👀"), "✍");
+	assert.equal(normalizeTelegramReaction("🎧", "👀"), "✍");
+});
+
+test("transcriptQuoteHtml quotes, escapes, collapses long memos, and clips under Telegram's limit", () => {
+	assert.equal(transcriptQuoteHtml("  pick up <milk> & eggs  "), "<blockquote>pick up &lt;milk&gt; &amp; eggs</blockquote>");
+	const long = transcriptQuoteHtml("word ".repeat(100));
+	assert.match(long, /^<blockquote expandable>word word/);
+	assert.ok(!long.includes("…"));
+	const huge = transcriptQuoteHtml("a&b ".repeat(2_000));
+	assert.ok(huge.length <= TELEGRAM_MAX_MESSAGE, `${huge.length} chars`);
+	assert.match(huge, /a&amp;b…<\/blockquote>$/);
+	assertBalancedTelegramHtml(huge);
 });
 
 test("authorizeTelegramMessage enforces owner pairing, allowlist, and group rules", () => {
@@ -467,6 +489,93 @@ test("extractReplyContext and buildTelegramUserInput normalize replies, quotes, 
 		const hugeBuilt = await buildTelegramUserInput([hugeDoc], { api: fakeApi, timeZone: "UTC", inboxDir: join(dir, "inbox") });
 		assert.equal(typeof hugeBuilt.content, "string");
 		assert.match(String(hugeBuilt.content), /20 MB limit/);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("buildTelegramUserInput marks a voice memo ✍, quotes its transcript silently, and clears ✍ when it can't hear it", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pclaw-tg-voice-"));
+	try {
+		const calls: { method: string; args: unknown[] }[] = [];
+		const fakeApi = {
+			async getFile(fileId: string) {
+				return { file_id: fileId, file_path: `voice/${fileId}` };
+			},
+			async downloadFile(filePath: string) {
+				calls.push({ method: "downloadFile", args: [filePath] });
+				return new Uint8Array(Buffer.from(`bytes:${filePath}`));
+			},
+			async sendChatAction(...args: unknown[]) {
+				calls.push({ method: "sendChatAction", args });
+				return true;
+			},
+			async setMessageReaction(...args: unknown[]) {
+				calls.push({ method: "setMessageReaction", args });
+				// A reaction failure never blocks the transcript.
+				throw new Error("REACTION_INVALID");
+			},
+			async sendMessage(params: Parameters<ReturnType<typeof createTelegramApi>["sendMessage"]>[0]) {
+				calls.push({ method: "sendMessage", args: [params] });
+				return { message_id: 900, date: 1_700_000_501, chat: { id: 101, type: "private" as const } };
+			},
+		};
+		const memo = (id: number): TelegramMessage => ({
+			message_id: id,
+			date: 1_700_000_500,
+			chat: { id: 101, type: "private" },
+			from: { id: 101, first_name: "Alice" },
+			voice: { file_id: `memo-${id}.ogg`, duration: 4, mime_type: "audio/ogg", file_size: 500 },
+		});
+		const options = { api: fakeApi, timeZone: "UTC", voiceDir: join(dir, "voice"), speechUrl: "http://speech.test" };
+
+		const heard = await buildTelegramUserInput([memo(70)], {
+			...options,
+			transcribeFn: async () => {
+				// ✍ and typing are already showing while it transcribes.
+				assert.deepEqual(calls[0], { method: "setMessageReaction", args: [101, 70, "✍"] });
+				assert.deepEqual(calls[1], { method: "sendChatAction", args: [101, "typing"] });
+				return { text: "fix the <gate> & oil the hinge", seconds: 4, ms: 50 };
+			},
+		});
+		assert.deepEqual(heard.heardVoiceRefs, ["telegram:70"]);
+		assert.match(String(heard.content), /fix the <gate> & oil the hinge/);
+		const bubble = calls.find((call) => call.method === "sendMessage")?.args[0];
+		assert.deepEqual(bubble, {
+			chat_id: 101,
+			text: "<blockquote>fix the &lt;gate&gt; &amp; oil the hinge</blockquote>",
+			parse_mode: "HTML",
+			reply_parameters: { message_id: 70, allow_sending_without_reply: true },
+			disable_notification: true,
+			link_preview_options: { is_disabled: true },
+		});
+		// Heard: ✍ stays on until pclaw reacts or answers.
+		assert.equal(calls.filter((call) => call.method === "setMessageReaction").length, 1);
+
+		calls.length = 0;
+		const failed = await buildTelegramUserInput([memo(71)], {
+			...options,
+			transcribeFn: async () => {
+				throw new Error("parakeet is down");
+			},
+		});
+		assert.deepEqual(failed.heardVoiceRefs, []);
+		assert.match(String(failed.content), /couldn't transcribe it/);
+		assert.deepEqual(
+			calls.filter((call) => call.method === "setMessageReaction").map((call) => call.args),
+			[
+				[101, 71, "✍"],
+				[101, 71, undefined],
+			],
+		);
+		assert.ok(!calls.some((call) => call.method === "sendMessage"));
+
+		// Nothing heard (silence) also takes ✍ back off and posts no empty quote.
+		calls.length = 0;
+		const silent = await buildTelegramUserInput([memo(72)], { ...options, transcribeFn: async () => ({ text: "  ", seconds: 2, ms: 10 }) });
+		assert.deepEqual(silent.heardVoiceRefs, []);
+		assert.deepEqual(calls.filter((call) => call.method === "setMessageReaction").at(-1)?.args, [101, 72, undefined]);
+		assert.ok(!calls.some((call) => call.method === "sendMessage"));
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
@@ -837,4 +946,130 @@ test("telegramTypingTargets picks active workers and jobs on telegram routes onl
 		),
 		["telegram:dm:1", "telegram:group:-100"],
 	);
+});
+
+test("startTelegram voice memos: ✍ while heard, a silent quote, ✍ cleared after a plain answer, and a model reaction kept", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pclaw-tg-voice-e2e-"));
+	try {
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			() => fauxAssistantMessage("Noted, groceries at 5."),
+			() => fauxAssistantMessage(fauxToolCall("react", { emoji: "🏈" }), { stopReason: "toolUse" }),
+			() => fauxAssistantMessage("Go team."),
+		]);
+		const config: Config = {
+			...defaults,
+			provider: "faux",
+			model: "faux-1",
+			thinkingLevel: "off",
+			timeZone: "UTC",
+			telegramToken: "fake-token",
+			telegramOwnerId: "501",
+			telegramAllowedUsers: [],
+			telegramAllowedGroups: [],
+			speechUrl: "http://speech.test",
+		};
+		const agent = await openAgent(
+			await openNodeSqliteStorage(join(dir, "pclaw.sqlite")),
+			{ config, models, notes: new Notes(join(dir, "notes.md")) },
+			BACKGROUND_CONTEXT,
+		);
+		const voiceUpdate = (updateId: number, messageId: number): TelegramUpdate => ({
+			update_id: updateId,
+			message: {
+				message_id: messageId,
+				date: 1_700_000_000 + updateId,
+				chat: { id: 501, type: "private" },
+				from: { id: 501, first_name: "Henry" },
+				voice: { file_id: `memo-${messageId}`, duration: 3, mime_type: "audio/ogg", file_size: 400 },
+			},
+		});
+		const updateQueue: TelegramUpdate[][] = [[voiceUpdate(1, 100)]];
+		let wakePoll: (() => void) | undefined;
+		const sentMessages: Record<string, unknown>[] = [];
+		const reactions: Record<string, unknown>[] = [];
+		const waitFor = (predicate: () => boolean, ms = 5_000) =>
+			new Promise<void>((resolve, reject) => {
+				const deadline = Date.now() + ms;
+				const tick = () => {
+					if (predicate()) resolve();
+					else if (Date.now() > deadline) reject(new Error("timed out waiting for Telegram condition"));
+					else setTimeout(tick, 15);
+				};
+				tick();
+			});
+		const mockFetch: typeof fetch = async (input, init) => {
+			const url = String(input);
+			if (url.includes("/file/bot")) return new Response(new Uint8Array([1, 2, 3]));
+			const method = url.split("/").pop()!;
+			const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+			if (method === "getMe") return new Response(JSON.stringify({ ok: true, result: { id: 999, is_bot: true, username: "pclaw_test_bot" } }));
+			if (method === "getUpdates") {
+				if (updateQueue.length > 0) return new Response(JSON.stringify({ ok: true, result: updateQueue.shift()! }));
+				return new Promise<Response>((resolve, reject) => {
+					const onAbort = () => reject(new DOMException("Aborted", "AbortError"));
+					init?.signal?.addEventListener("abort", onAbort, { once: true });
+					wakePoll = () => {
+						init?.signal?.removeEventListener("abort", onAbort);
+						resolve(new Response(JSON.stringify({ ok: true, result: updateQueue.shift() ?? [] })));
+					};
+				});
+			}
+			if (method === "getFile") return new Response(JSON.stringify({ ok: true, result: { file_id: body.file_id, file_path: `voice/${String(body.file_id)}.oga` } }));
+			if (method === "sendMessage") {
+				sentMessages.push(body);
+				return new Response(
+					JSON.stringify({ ok: true, result: { message_id: 200 + sentMessages.length, date: 1_700_000_010, chat: { id: 501, type: "private" } } }),
+				);
+			}
+			if (method === "setMessageReaction") reactions.push(body);
+			return new Response(JSON.stringify({ ok: true, result: true }));
+		};
+		const transcripts = ["grab groceries at five", "did the niners win"];
+		const tg = await startTelegram(agent, config, BACKGROUND_CONTEXT, {
+			apiBase: "https://tg.test",
+			fetchFn: mockFetch,
+			pollTimeoutSeconds: 1,
+			captionlessDebounceMs: 10,
+			inboxDir: join(dir, "inbox"),
+			voiceDir: join(dir, "voice"),
+			transcribeFn: async () => ({ text: transcripts.shift() ?? "", seconds: 3, ms: 20 }),
+		});
+		const reactionsOn = (messageId: number) =>
+			reactions.filter((r) => r.message_id === messageId).map((r) => (r.reaction as { emoji: string }[])[0]?.emoji ?? "");
+
+		try {
+			// A quick answer with no reaction: ✍ comes off once the answer lands.
+			await waitFor(() => sentMessages.length >= 2 && reactionsOn(100).length >= 2);
+			assert.deepEqual(sentMessages[0], {
+				chat_id: 501,
+				text: "<blockquote>grab groceries at five</blockquote>",
+				parse_mode: "HTML",
+				reply_parameters: { message_id: 100, allow_sending_without_reply: true },
+				disable_notification: true,
+				link_preview_options: { is_disabled: true },
+			});
+			// The transcript quote doesn't move the chat on: the answer right under it stays plain.
+			assert.equal(sentMessages[1]?.text, "Noted, groceries at 5.");
+			assert.equal(sentMessages[1]?.reply_parameters, undefined);
+			assert.deepEqual(reactionsOn(100), ["✍", ""]);
+
+			// The model reacts 🏈 (shown as 🏆): it replaces ✍ and the answer never clears it.
+			updateQueue.push([voiceUpdate(2, 101)]);
+			wakePoll?.();
+			await waitFor(() => sentMessages.length >= 4 && reactionsOn(101).length >= 2);
+			assert.equal(sentMessages[2]?.text, "<blockquote>did the niners win</blockquote>");
+			assert.equal(sentMessages[3]?.text, "Go team.");
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			assert.deepEqual(reactionsOn(101), ["✍", "🏆"]);
+			assert.deepEqual(reactionsOn(100), ["✍", ""]);
+		} finally {
+			await tg.stop();
+			await agent.harness.close(BACKGROUND_CONTEXT);
+		}
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
 });

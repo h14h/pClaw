@@ -26,6 +26,7 @@ import {
 	stripTelegramHtml,
 	TELEGRAM_MAX_CAPTION,
 	TELEGRAM_MAX_MESSAGE,
+	transcriptQuoteHtml,
 } from "./telegram-format.ts";
 
 const DEFAULT_API_BASE = "https://api.telegram.org";
@@ -38,6 +39,8 @@ const MEDIA_GROUP_DEBOUNCE_MS = 600;
 const CAPTIONLESS_FILE_DEBOUNCE_MS = 2_000;
 const QUOTE_LIMIT = 800;
 const RESYNC_ON_ATTACH = 10;
+/** The reaction a voice memo wears while it's being heard, until pclaw reacts or answers. */
+const TRANSCRIBING = "✍";
 const POLL_TIMEOUT_SECONDS = 30;
 const ALLOWED_UPDATES = ["message", "message_reaction"] as const;
 
@@ -856,7 +859,8 @@ async function replyMedia(
 }
 
 export type BuildInputOptions = {
-	api: Pick<TelegramApi, "getFile" | "downloadFile" | "sendChatAction">;
+	/** `setMessageReaction` and `sendMessage` drive voice-memo feedback (✍, the transcript quote); without them it's skipped. */
+	api: Pick<TelegramApi, "getFile" | "downloadFile" | "sendChatAction"> & Partial<Pick<TelegramApi, "setMessageReaction" | "sendMessage">>;
 	timeZone: string;
 	botId?: number;
 	inboxDir?: string;
@@ -878,8 +882,10 @@ export type BuildInputOptions = {
 export async function buildTelegramUserInput(
 	messages: readonly TelegramMessage[],
 	options: BuildInputOptions,
-): Promise<{ content: UserInput; plainText: string; hasVoice: boolean }> {
+): Promise<{ content: UserInput; plainText: string; hasVoice: boolean; heardVoiceRefs: string[] }> {
 	const primary = messages[0]!;
+	/** Voice memos heard and quoted back, still wearing ✍ until pclaw reacts or answers. */
+	const heardVoiceRefs: string[] = [];
 	const parts: (TextContent | ImageContent)[] = [];
 	const textLines: string[] = [];
 	const notes: string[] = [];
@@ -942,15 +948,24 @@ export async function buildTelegramUserInput(
 			} else if (audioMedia.file_size !== undefined && audioMedia.file_size > MAX_FILE_BYTES) {
 				notes.push("[sent an audio message larger than Telegram's 20 MB Bot API download limit]");
 			} else {
+				const chatId = message.chat.id;
+				// Show it's being heard right away; a reaction that fails never holds up the transcript.
+				const marked = options.api.setMessageReaction?.(chatId, message.message_id, TRANSCRIBING).catch(() => false);
+				const unmark = async () => {
+					await marked;
+					await options.api.setMessageReaction?.(chatId, message.message_id, undefined).catch(() => undefined);
+				};
+				const ping = () => void options.api.sendChatAction(chatId, "typing").catch(() => undefined);
+				ping();
+				const typing = setInterval(ping, TYPING_REFRESH_MS);
 				try {
-					await options.api.sendChatAction(message.chat.id, "typing").catch(() => undefined);
 					const file = await options.api.getFile(audioMedia.file_id);
 					if (file.file_path === undefined) throw new Error("Telegram returned no file_path");
 					const audio = await options.api.downloadFile(file.file_path);
 					if (audio.byteLength > MAX_FILE_BYTES) throw new Error("audio exceeds 20 MB limit");
 					const ext = extname(file.file_path) || ".ogg";
 					mkdirSync(voiceDir, { recursive: true, mode: 0o700 });
-					writeFileSync(join(voiceDir, `telegram-${message.chat.id}-${message.message_id}${ext}`), audio, { mode: 0o600 });
+					writeFileSync(join(voiceDir, `telegram-${chatId}-${message.message_id}${ext}`), audio, { mode: 0o600 });
 					const heard: Heard = await transcribeFn(options.speechUrl, audio);
 					hasVoice = true;
 					options.onVoiceResult?.({
@@ -962,11 +977,33 @@ export async function buildTelegramUserInput(
 					});
 					console.log(`[pclaw] heard a ${Math.round(heard.seconds)}s Telegram voice memo in ${heard.ms}ms`);
 					notes.push(memoLabel(heard.seconds), heard.text);
+					if (heard.text.trim() === "") {
+						await unmark();
+					} else {
+						// The transcript stays in the chat as a quiet quote under the memo. It isn't a reply, so it leaves
+						// ReplyThreads alone: the answer right under it still goes out plain.
+						await options.api
+							.sendMessage?.({
+								chat_id: chatId,
+								text: transcriptQuoteHtml(heard.text),
+								parse_mode: "HTML",
+								reply_parameters: replyParameters(message.message_id),
+								disable_notification: true,
+								link_preview_options: { is_disabled: true },
+							})
+							.catch((error: unknown) =>
+								console.warn(`[pclaw] couldn't post a Telegram voice transcript: ${error instanceof Error ? error.message : String(error)}`),
+							);
+						heardVoiceRefs.push(id);
+					}
 				} catch (error) {
 					const reason = error instanceof Error ? error.message : String(error);
 					options.onVoiceResult?.({ id, ok: false, error: reason });
 					console.error(`[pclaw] couldn't hear a Telegram voice memo: ${reason}`);
 					notes.push("[sent a voice memo, but pclaw couldn't transcribe it]");
+					await unmark();
+				} finally {
+					clearInterval(typing);
 				}
 			}
 		}
@@ -1031,7 +1068,7 @@ export async function buildTelegramUserInput(
 
 	const plainText = [...textLines, ...notes].filter(Boolean).join("\n");
 	const content: UserInput = parts.length === 0 ? combinedText : [{ type: "text", text: combinedText }, ...parts];
-	return { content, plainText, hasVoice };
+	return { content, plainText, hasVoice, heardVoiceRefs };
 }
 
 export type StartTelegramOptions = {
@@ -1133,6 +1170,27 @@ export async function startTelegram(
 	/** Which ask each chat is on, so replies leave breadcrumbs back to their topic once topics interleave. */
 	const threads = new ReplyThreads("telegram");
 
+	/**
+	 * Address -> refs ("telegram:<id>") of voice memos still wearing ✍. A reaction from pclaw (the model's `react`, a
+	 * worker starting) replaces it on its own; when the answer goes out without one, or the run ends in silence, ✍ comes off.
+	 */
+	const transcribingVoiceRefs = new Map<string, Set<string>>();
+	async function settleVoiceMemos(addr: string, conversation: Conversation, refs: readonly string[]): Promise<void> {
+		const pending = transcribingVoiceRefs.get(addr);
+		const parsed = parseTelegramAddress(addr);
+		if (pending === undefined || parsed === undefined) return;
+		const settled = refs.filter((ref) => pending.delete(ref));
+		if (pending.size === 0) transcribingVoiceRefs.delete(addr);
+		if (settled.length === 0) return;
+		const asks = (await agent.harness.snapshot(Reactions, conversation.id, context))?.asks ?? {};
+		for (const ref of settled) {
+			if (asks[ref] !== undefined) continue;
+			await api
+				.setMessageReaction(parsed.chatId, Number(ref.slice("telegram:".length)), undefined)
+				.catch((error: unknown) => console.warn(`[pclaw] couldn't clear ✍ on ${ref}: ${error instanceof Error ? error.message : error}`));
+		}
+	}
+
 	const unregisterProgress = agent.progressSurfaces.register("telegram", {
 		async update({ address, message, replyTo, silent }) {
 			const parsed = parseTelegramAddress(address);
@@ -1214,6 +1272,7 @@ export async function startTelegram(
 				if (!isAck) {
 					threads.posted(addr, sent.map((msg) => msg.message_id));
 					threads.sent(addr, meta?.replyTo);
+					if (meta?.replyTo !== undefined) await settleVoiceMemos(addr, conversation, [meta.replyTo]);
 				}
 				if (parsed.kind === "dm") {
 					if (isAck) {
@@ -1259,6 +1318,13 @@ export async function startTelegram(
 			working(busy) {
 				clearInterval(typing);
 				typing = undefined;
+				if (!busy) {
+					// A run that ended without a word (NO_REPLY) or a reaction still shouldn't leave ✍ behind.
+					const pending = [...(transcribingVoiceRefs.get(addr) ?? [])];
+					if (pending.length > 0) {
+						void settleVoiceMemos(addr, conversation, pending).catch((error: unknown) => console.error("[pclaw] telegram ✍", error));
+					}
+				}
 				if (!busy || parsed === undefined) return;
 				const ping = () => void api.sendChatAction(parsed.chatId, "typing").catch(() => undefined);
 				ping();
@@ -1409,6 +1475,12 @@ export async function startTelegram(
 					? `${built.content}\n${guidance}`
 					: built.content.map((part, idx) => (idx === 0 && part.type === "text" ? { ...part, text: `${part.text}\n${guidance}` } : part));
 
+		// Right before submitting, so an earlier run ending meanwhile can't take ✍ off a memo it never saw.
+		if (built.heardVoiceRefs.length > 0) {
+			let pending = transcribingVoiceRefs.get(auth.addr);
+			if (pending === undefined) transcribingVoiceRefs.set(auth.addr, (pending = new Set()));
+			for (const ref of built.heardVoiceRefs) pending.add(ref);
+		}
 		await conversation.submit(
 			{
 				type: "input",
