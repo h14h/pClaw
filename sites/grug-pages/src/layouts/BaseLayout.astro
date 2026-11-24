@@ -154,6 +154,117 @@ const ogImageUrl = absoluteUrl(ogImagePath, Astro.site);
           sync();
         });
       })();
+
+      (() => {
+        const scrollers = Array.from(document.querySelectorAll(".table-scroll"));
+        if (scrollers.length === 0) return;
+
+        const compactNumRe =
+          /^[~$€£¥<>≤≥±+\-]?\d[\d,.\s/–—\-×x%$€£¥kKmMbB]*(?:\s*(?:yr|mo|ft|mi|ac|Mbps|Gbps|sqft|unit))?$/i;
+
+        for (const scroller of scrollers) {
+          for (const cell of scroller.querySelectorAll("td")) {
+            const text = (cell.textContent || "").trim();
+            if (text.length > 0 && text.length <= 18 && compactNumRe.test(text)) {
+              cell.dataset.compactNum = "true";
+            }
+          }
+        }
+
+        const setAttr = (el, name, val) => {
+          if (!el) return;
+          if (val === null) {
+            if (el.hasAttribute(name)) el.removeAttribute(name);
+          } else if (el.getAttribute(name) !== val) {
+            el.setAttribute(name, val);
+          }
+        };
+
+        const syncScrollEdges = (scroller) => {
+          const block = scroller.closest(".table-block");
+          const maxScroll = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+          const scrollable = maxScroll > 2;
+
+          if (!scrollable) {
+            setAttr(scroller, "data-scrollable", null);
+            setAttr(scroller, "data-scrolled-start", null);
+            setAttr(scroller, "data-scrolled-end", null);
+            setAttr(scroller, "tabindex", null);
+            setAttr(scroller, "role", null);
+            setAttr(scroller, "aria-label", null);
+            setAttr(block, "data-scrollable", null);
+            setAttr(block, "data-scrolled-start", null);
+            setAttr(block, "data-scrolled-end", null);
+            return;
+          }
+
+          const atStart = scroller.scrollLeft <= 2;
+          const atEnd = scroller.scrollLeft >= maxScroll - 2;
+          setAttr(scroller, "data-scrollable", "true");
+          setAttr(scroller, "data-scrolled-start", String(atStart));
+          setAttr(scroller, "data-scrolled-end", String(atEnd));
+          setAttr(scroller, "tabindex", "0");
+          setAttr(scroller, "role", "region");
+          setAttr(scroller, "aria-label", "Scrollable data table");
+          setAttr(block, "data-scrollable", "true");
+          setAttr(block, "data-scrolled-start", String(atStart));
+          setAttr(block, "data-scrolled-end", String(atEnd));
+        };
+
+        const syncAll = () => {
+          for (const scroller of scrollers) syncScrollEdges(scroller);
+        };
+
+        for (const scroller of scrollers) {
+          let rafId = 0;
+          scroller.addEventListener(
+            "scroll",
+            () => {
+              if (rafId) return;
+              rafId = requestAnimationFrame(() => {
+                rafId = 0;
+                syncScrollEdges(scroller);
+              });
+            },
+            { passive: true },
+          );
+          scroller.addEventListener("keydown", (event) => {
+            if (scroller.getAttribute("data-scrollable") !== "true") return;
+            if (event.metaKey || event.ctrlKey || event.altKey) return;
+            if (event.key === "ArrowRight") {
+              event.preventDefault();
+              scroller.scrollLeft += 80;
+              syncScrollEdges(scroller);
+            } else if (event.key === "ArrowLeft") {
+              event.preventDefault();
+              scroller.scrollLeft -= 80;
+              syncScrollEdges(scroller);
+            } else if (event.key === "Home") {
+              event.preventDefault();
+              scroller.scrollLeft = 0;
+              syncScrollEdges(scroller);
+            } else if (event.key === "End") {
+              event.preventDefault();
+              scroller.scrollLeft = scroller.scrollWidth;
+              syncScrollEdges(scroller);
+            }
+          });
+        }
+
+        if (typeof ResizeObserver !== "undefined") {
+          const ro = new ResizeObserver(syncAll);
+          for (const scroller of scrollers) {
+            ro.observe(scroller);
+            const table = scroller.querySelector("table");
+            if (table) ro.observe(table);
+          }
+        }
+        window.addEventListener("resize", syncAll, { passive: true });
+        syncAll();
+        if (document.fonts && document.fonts.ready) {
+          document.fonts.ready.then(syncAll);
+        }
+      })();
     </script>
   </body>
 </html>

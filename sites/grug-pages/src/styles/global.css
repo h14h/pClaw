@@ -53,19 +53,6 @@
 }
 
 @layer components {
-  /* Mobile edge-fade cue for horizontally scrollable tag filter strip */
-  @media (width < 40rem) {
-    .tag-strip-scroll {
-      scrollbar-width: none;
-      mask-image: linear-gradient(to right, black 0%, black calc(100% - 2.25rem), transparent 100%);
-      -webkit-mask-image: linear-gradient(to right, black 0%, black calc(100% - 2.25rem), transparent 100%);
-    }
-
-    .tag-strip-scroll::-webkit-scrollbar {
-      display: none;
-    }
-  }
-
   /* Editorial prose styling — layered in @layer components so Tailwind v4 utilities
      (e.g. sm:text-sm/6 inside <Details>) cleanly override prose defaults.
      Never sets max-width inside .prose; page layout controls measure. */
@@ -414,34 +401,76 @@
     }
   }
 
-  /* Tables: two-div scroll wrapper with scroll-shadow edge cue so horizontal overflow
-     is never silent, 16px floor on mobile stepping to 14px on sm+, tabular numerals. */
-  .prose .table-scroll {
-    -webkit-overflow-scrolling: touch;
-    background-color: var(--color-paper);
-    background-image:
-      linear-gradient(to right, var(--color-paper), var(--color-paper)),
-      linear-gradient(to right, var(--color-paper), var(--color-paper)),
-      linear-gradient(to right, color-mix(in oklab, var(--color-stone-950) 11%, transparent), transparent),
-      linear-gradient(to left, color-mix(in oklab, var(--color-stone-950) 11%, transparent), transparent);
-    background-position: left center, right center, left center, right center;
-    background-repeat: no-repeat;
-    background-size: 28px 100%, 28px 100%, 16px 100%, 16px 100%;
-    background-attachment: local, local, scroll, scroll;
+  /* Tables: sticky first column + right-edge fade overlay + keyboard-accessible scroll region */
+  .prose .table-scroll-hint {
+    display: none;
+  }
+
+  .prose .table-block[data-scrollable="true"] > .table-scroll-hint {
+    display: flex;
+  }
+
+  .prose .table-wrap {
+    --table-fade-edge: color-mix(in oklab, var(--color-stone-950) 9%, transparent);
+    --table-fade-surface: var(--color-paper);
 
     @variant dark {
-      background-color: var(--color-obsidian);
-      background-image:
-        linear-gradient(to right, var(--color-obsidian), var(--color-obsidian)),
-        linear-gradient(to right, var(--color-obsidian), var(--color-obsidian)),
-        linear-gradient(to right, color-mix(in oklab, #000000 55%, transparent), transparent),
-        linear-gradient(to left, color-mix(in oklab, #000000 55%, transparent), transparent);
+      --table-fade-edge: rgba(0, 0, 0, 0.55);
+      --table-fade-surface: var(--color-obsidian);
+    }
+  }
+
+  .prose .table-wrap::after {
+    content: "";
+    position: absolute;
+    inset: 0 0 0 auto;
+    width: 2.75rem;
+    pointer-events: none;
+    z-index: 3;
+    opacity: 0;
+    transition: opacity 150ms ease;
+    background:
+      linear-gradient(
+        to left,
+        var(--table-fade-edge) 0%,
+        transparent 58%
+      ),
+      linear-gradient(
+        to left,
+        var(--table-fade-surface) 0%,
+        color-mix(in oklab, var(--table-fade-surface) 84%, transparent) 45%,
+        transparent 100%
+      );
+  }
+
+  .prose .table-block[data-scrollable="true"]:not([data-scrolled-end="true"]) .table-wrap::after {
+    opacity: 1;
+  }
+
+  .prose .table-scroll {
+    --table-sticky-shadow: color-mix(in oklab, var(--color-stone-950) 11%, transparent);
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+
+    @variant dark {
+      --table-sticky-shadow: rgba(0, 0, 0, 0.55);
+    }
+  }
+
+  .prose .table-scroll:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: -2px;
+    border-radius: var(--radius-md);
+
+    @variant dark {
+      outline-color: var(--color-accent-dark);
     }
   }
 
   .prose :where(table):not(.not-prose, .not-prose *) {
     width: 100%;
-    border-collapse: collapse;
+    border-collapse: separate;
+    border-spacing: 0;
     font-size: var(--text-base);
     line-height: --spacing(6);
     font-variant-numeric: tabular-nums;
@@ -465,7 +494,11 @@
     min-width: 44rem;
   }
 
-  .prose :where(thead tr):not(.not-prose, .not-prose *) {
+  .prose :where(table):has(tr > :nth-child(6)):not(.not-prose, .not-prose *) {
+    min-width: 50rem;
+  }
+
+  .prose :where(thead th):not(.not-prose, .not-prose *) {
     border-bottom: 1px solid color-mix(in oklab, var(--color-stone-950) 14%, transparent);
 
     @variant dark {
@@ -473,7 +506,7 @@
     }
   }
 
-  .prose :where(tbody tr):not(.not-prose, .not-prose *) {
+  .prose :where(tbody td):not(.not-prose, .not-prose *) {
     border-bottom: 1px solid color-mix(in oklab, var(--color-stone-950) 8%, transparent);
 
     @variant dark {
@@ -481,7 +514,7 @@
     }
   }
 
-  .prose :where(tbody tr:last-child):not(.not-prose, .not-prose *) {
+  .prose :where(tbody tr:last-child td):not(.not-prose, .not-prose *) {
     border-bottom: 0;
   }
 
@@ -491,6 +524,8 @@
     vertical-align: bottom;
     font-weight: var(--font-weight-medium);
     white-space: normal;
+    text-wrap: balance;
+    hyphens: none;
     color: var(--color-stone-900);
 
     @variant sm {
@@ -534,12 +569,95 @@
     padding-right: 0;
   }
 
-  .prose :where(tr.pick, tr[data-pick]):not(.not-prose, .not-prose *) {
+  /* Sticky first column inside .table-scroll with opaque surface aligned to prose margins */
+  .prose .table-scroll :where(th:first-child, td:first-child):not(.not-prose, .not-prose *) {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    padding-left: --spacing(5);
+    background-color: var(--color-paper);
+
+    @variant sm {
+      padding-left: --spacing(8);
+    }
+
+    @variant dark {
+      background-color: var(--color-obsidian);
+    }
+  }
+
+  .prose .table-scroll :where(thead th:first-child):not(.not-prose, .not-prose *) {
+    z-index: 2;
+  }
+
+  .prose .table-scroll :where(th:last-child, td:last-child):not(.not-prose, .not-prose *) {
+    padding-right: --spacing(5);
+
+    @variant sm {
+      padding-right: --spacing(8);
+    }
+  }
+
+  /* Keep column 1 compact on mobile overflowing/multi-column tables so col 2+ has horizontal room */
+  @media (width < 40rem) {
+    .prose .table-scroll[data-scrollable="true"] :where(th:first-child, td:first-child):not(.not-prose, .not-prose *),
+    .prose .table-scroll :where(table):has(tr > :nth-child(3)) :where(th:first-child, td:first-child):not(.not-prose, .not-prose *) {
+      max-width: 9.5rem;
+      overflow-wrap: break-word;
+    }
+  }
+
+  /* Subtle sticky column right-edge divider when scrollable, strengthening with shadow when panned */
+  .prose .table-scroll[data-scrollable="true"] :where(th:first-child, td:first-child):not(.not-prose, .not-prose *) {
+    border-right: 1px solid color-mix(in oklab, var(--color-stone-950) 8%, transparent);
+
+    @variant dark {
+      border-right-color: color-mix(in oklab, var(--color-white) 8%, transparent);
+    }
+  }
+
+  .prose .table-scroll[data-scrollable="true"][data-scrolled-start="false"] :where(th:first-child, td:first-child):not(.not-prose, .not-prose *) {
+    border-right-color: color-mix(in oklab, var(--color-stone-950) 14%, transparent);
+
+    @variant dark {
+      border-right-color: color-mix(in oklab, var(--color-white) 14%, transparent);
+    }
+  }
+
+  .prose .table-scroll[data-scrollable="true"][data-scrolled-start="false"] :where(th:first-child, td:first-child):not(.not-prose, .not-prose *)::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: -1px;
+    right: -13px;
+    width: 12px;
+    pointer-events: none;
+    background: linear-gradient(
+      to right,
+      var(--table-sticky-shadow),
+      transparent
+    );
+  }
+
+  .prose :where(tr.pick > td, tr[data-pick] > td):not(.not-prose, .not-prose *) {
     background-color: color-mix(in oklab, var(--color-accent) 7%, transparent);
 
     @variant dark {
       background-color: color-mix(in oklab, var(--color-accent-dark) 8%, transparent);
     }
+  }
+
+  .prose .table-scroll :where(tr.pick > td:first-child, tr[data-pick] > td:first-child):not(.not-prose, .not-prose *) {
+    background-color: color-mix(in oklab, var(--color-accent) 7%, var(--color-paper));
+
+    @variant dark {
+      background-color: color-mix(in oklab, var(--color-accent-dark) 8%, var(--color-obsidian));
+    }
+  }
+
+  /* Compact numeric/currency cells stay on a single clean line */
+  .prose :where(td[data-compact-num="true"], th[data-compact-num="true"]):not(.not-prose, .not-prose *) {
+    white-space: nowrap;
   }
 }
 
@@ -577,11 +695,36 @@
     break-inside: avoid;
   }
 
+  .prose .table-scroll-hint,
+  .prose .table-wrap::after {
+    display: none !important;
+  }
+
+  .prose .table-wrap {
+    margin-inline: 0 !important;
+  }
+
   .prose .table-scroll {
     margin-inline: 0;
     overflow: visible;
     background-image: none !important;
     background-color: transparent !important;
+  }
+
+  .prose .table-scroll :where(th:first-child, td:first-child) {
+    position: static !important;
+    max-width: none !important;
+    padding-left: 0 !important;
+    border-right: 0 !important;
+    background-color: transparent !important;
+  }
+
+  .prose .table-scroll :where(th:first-child, td:first-child)::after {
+    display: none !important;
+  }
+
+  .prose .table-scroll :where(th:last-child, td:last-child) {
+    padding-right: 0 !important;
   }
 
   .prose .table-scroll-inner {

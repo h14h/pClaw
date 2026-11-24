@@ -15,6 +15,7 @@
 
   let query = $state("");
   let activeTag = $state<string | null>(null);
+  let mobileTagsOpen = $state(false);
 
   let allTags = $derived.by(() => {
     const counts = new Map<string, number>();
@@ -82,23 +83,101 @@
         aria-label="Filter pages"
         placeholder="Filter pages..."
         bind:value={query}
-        class="w-full rounded-lg bg-white px-3 py-2 text-base/6 text-stone-900 ring-1 ring-stone-950/10 shadow-2xs placeholder:text-stone-400 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-accent sm:py-1.5 sm:text-sm/6 dark:bg-obsidian-raised dark:text-stone-100 dark:ring-white/10 dark:shadow-none dark:placeholder:text-stone-500 dark:focus-visible:outline-accent-dark"
+        class="min-h-12 w-full rounded-lg bg-white px-3 py-2.5 text-base/6 text-stone-900 ring-1 ring-stone-950/10 shadow-2xs placeholder:text-stone-400 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-accent sm:min-h-0 sm:py-1.5 sm:text-sm/6 dark:bg-obsidian-raised dark:text-stone-100 dark:ring-white/10 dark:shadow-none dark:placeholder:text-stone-500 dark:focus-visible:outline-accent-dark"
       />
     </div>
 
     {#if allTags.length > 0}
+      <!-- Mobile: compact disclosure button + cleanly wrapped tag panel (zero clipping) -->
+      <div class="sm:hidden">
+        <div class="flex items-center gap-2">
+          <button
+            type="button"
+            onclick={() => (mobileTagsOpen = !mobileTagsOpen)}
+            aria-expanded={mobileTagsOpen}
+            aria-controls="mobile-tag-panel"
+            class="flex min-h-12 flex-1 items-center justify-between gap-2 rounded-lg bg-white px-3 py-2.5 text-base/6 text-stone-700 ring-1 ring-stone-950/10 shadow-2xs hover:text-stone-900 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-accent dark:bg-obsidian-raised dark:text-stone-200 dark:ring-white/10 dark:shadow-none dark:hover:text-stone-100 dark:focus-visible:outline-accent-dark"
+          >
+            <span class="flex min-w-0 items-center gap-2 truncate">
+              {#if activeTag}
+                <span class="text-stone-500 dark:text-stone-400">Tag:</span>
+                <span class="truncate font-medium text-stone-900 dark:text-stone-100">{activeTag}</span>
+              {:else}
+                <span class="font-medium text-stone-800 dark:text-stone-200">Tags</span>
+                <span class="tabular-nums text-stone-500 dark:text-stone-400">({allTags.length})</span>
+              {/if}
+            </span>
+            <svg
+              viewBox="0 0 16 16"
+              aria-hidden="true"
+              class={`size-4 shrink-0 fill-stone-500 transition-transform duration-150 dark:fill-stone-400 ${mobileTagsOpen ? "rotate-180" : ""}`}
+            >
+              <path
+                fill-rule="evenodd"
+                d="M4.22 6.22a.75.75 0 0 1 1.06 0L8 8.94l2.72-2.72a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0L4.22 7.28a.75.75 0 0 1 0-1.06Z"
+                clip-rule="evenodd"
+              />
+            </svg>
+          </button>
+
+          {#if activeTag}
+            <button
+              type="button"
+              onclick={() => (activeTag = null)}
+              aria-label={`Clear tag filter ${activeTag}`}
+              class="inline-flex min-h-12 shrink-0 items-center justify-center rounded-lg bg-stone-950/6 px-3.5 text-base/6 font-medium text-stone-700 hover:bg-stone-950/10 hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent dark:bg-white/8 dark:text-stone-200 dark:hover:bg-white/12 dark:hover:text-stone-100 dark:focus-visible:outline-accent-dark"
+            >
+              Clear
+            </button>
+          {/if}
+        </div>
+
+        {#if mobileTagsOpen}
+          <div
+            id="mobile-tag-panel"
+            role="group"
+            aria-label="Filter by tag"
+            class="mt-2.5 flex flex-wrap gap-2 rounded-lg bg-paper-subtle/70 p-2.5 ring-1 ring-stone-950/8 dark:bg-obsidian-raised/70 dark:ring-white/8"
+          >
+            <button
+              type="button"
+              onclick={() => (activeTag = null)}
+              aria-pressed={activeTag === null}
+              class={activeTag === null
+                ? "inline-flex min-h-12 items-center rounded-md bg-stone-950/12 px-3.5 py-2 text-base/6 font-medium text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent dark:bg-white/15 dark:text-stone-100 dark:focus-visible:outline-accent-dark"
+                : "inline-flex min-h-12 items-center rounded-md bg-white/85 px-3.5 py-2 text-base/6 text-stone-700 ring-1 ring-stone-950/8 hover:bg-stone-950/5 hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent dark:bg-obsidian dark:text-stone-300 dark:ring-white/10 dark:hover:bg-white/8 dark:hover:text-stone-100 dark:focus-visible:outline-accent-dark"}
+            >
+              All
+            </button>
+            {#each allTags as tag}
+              <button
+                type="button"
+                onclick={() => (activeTag = activeTag === tag ? null : tag)}
+                aria-pressed={activeTag === tag}
+                class={activeTag === tag
+                  ? "inline-flex min-h-12 items-center rounded-md bg-stone-950/12 px-3.5 py-2 text-base/6 font-medium text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent dark:bg-white/15 dark:text-stone-100 dark:focus-visible:outline-accent-dark"
+                  : "inline-flex min-h-12 items-center rounded-md bg-white/85 px-3.5 py-2 text-base/6 text-stone-700 ring-1 ring-stone-950/8 hover:bg-stone-950/5 hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent dark:bg-obsidian dark:text-stone-300 dark:ring-white/10 dark:hover:bg-white/8 dark:hover:text-stone-100 dark:focus-visible:outline-accent-dark"}
+              >
+                {tag}
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+
+      <!-- Desktop: full wrapped tag bar -->
       <div
         role="group"
         aria-label="Filter by tag"
-        class="tag-strip-scroll -mx-5 flex items-center gap-1.5 overflow-x-auto px-5 pr-10 pb-1 text-base/6 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 sm:pr-0 sm:pb-0 sm:text-sm/5"
+        class="hidden items-center gap-1.5 text-sm/5 sm:flex sm:flex-wrap"
       >
         <button
           type="button"
           onclick={() => (activeTag = null)}
           aria-pressed={activeTag === null}
           class={activeTag === null
-            ? "shrink-0 rounded-md bg-stone-950/10 px-2.5 py-1.5 text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:py-1 dark:bg-white/12 dark:text-stone-100 dark:focus-visible:outline-accent-dark"
-            : "shrink-0 rounded-md px-2.5 py-1.5 text-stone-600 hover:bg-stone-950/5 hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:py-1 dark:text-stone-400 dark:hover:bg-white/6 dark:hover:text-stone-200 dark:focus-visible:outline-accent-dark"}
+            ? "shrink-0 rounded-md bg-stone-950/10 px-2.5 py-1 text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent dark:bg-white/12 dark:text-stone-100 dark:focus-visible:outline-accent-dark"
+            : "shrink-0 rounded-md px-2.5 py-1 text-stone-600 hover:bg-stone-950/5 hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent dark:text-stone-400 dark:hover:bg-white/6 dark:hover:text-stone-200 dark:focus-visible:outline-accent-dark"}
         >
           All
         </button>
@@ -108,8 +187,8 @@
             onclick={() => (activeTag = activeTag === tag ? null : tag)}
             aria-pressed={activeTag === tag}
             class={activeTag === tag
-              ? "shrink-0 rounded-md bg-stone-950/10 px-2.5 py-1.5 text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:py-1 dark:bg-white/12 dark:text-stone-100 dark:focus-visible:outline-accent-dark"
-              : "shrink-0 rounded-md px-2.5 py-1.5 text-stone-600 hover:bg-stone-950/5 hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:py-1 dark:text-stone-400 dark:hover:bg-white/6 dark:hover:text-stone-200 dark:focus-visible:outline-accent-dark"}
+              ? "shrink-0 rounded-md bg-stone-950/10 px-2.5 py-1 text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent dark:bg-white/12 dark:text-stone-100 dark:focus-visible:outline-accent-dark"
+              : "shrink-0 rounded-md px-2.5 py-1 text-stone-600 hover:bg-stone-950/5 hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent dark:text-stone-400 dark:hover:bg-white/6 dark:hover:text-stone-200 dark:focus-visible:outline-accent-dark"}
           >
             {tag}
           </button>
