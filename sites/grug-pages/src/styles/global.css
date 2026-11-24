@@ -620,7 +620,6 @@
      cell's outer edge (no translucent shadow), so nothing scrolled ever shows on the pinned side.
      The divider strengthens once the table is panned. Default layout: entity in col 1. */
   .prose .table-scroll[data-scrollable="true"] :where(table:not([data-sticky-entity="2"])) :where(th:first-child, td:first-child):not(.not-prose, .not-prose *) {
-    padding-right: --spacing(3);
     border-right: 1px solid color-mix(in oklab, var(--color-stone-950) 8%, transparent);
 
     @variant dark {
@@ -649,7 +648,6 @@
     left: var(--sticky-col1-w, 3.5rem);
     z-index: 1;
     padding-left: --spacing(2);
-    padding-right: --spacing(3);
     background-color: var(--color-paper);
     border-right: 1px solid color-mix(in oklab, var(--color-stone-950) 8%, transparent);
 
