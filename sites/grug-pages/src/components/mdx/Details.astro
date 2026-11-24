@@ -9,23 +9,25 @@ const { summary, open = false } = Astro.props;
 
 <details
   open={open}
-  class="not-prose group my-5 rounded-lg border border-stone-950/10 bg-paper-subtle/50 dark:border-white/10 dark:bg-obsidian-subtle/70"
+  class="not-prose group my-5 rounded-lg border border-stone-950/10 bg-paper-subtle/50 dark:border-white/10 dark:bg-stone-900/75"
 >
   <summary
-    class="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-base/6 font-medium text-stone-900 select-none hover:text-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent sm:py-2.5 sm:text-sm/5 dark:text-zinc-100 dark:hover:text-accent-dark dark:focus-visible:outline-accent-dark [&::-webkit-details-marker]:hidden"
+    class="flex cursor-pointer list-none items-start gap-2 px-4 py-3 text-base/6 font-medium text-stone-900 select-none hover:text-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent dark:text-stone-100 dark:hover:text-accent-dark dark:focus-visible:outline-accent-dark [&::-webkit-details-marker]:hidden"
   >
-    <!-- Heroicons Micro: Chevron Right -->
-    <svg
-      viewBox="0 0 16 16"
-      aria-hidden="true"
-      class="size-4 shrink-0 fill-stone-500 transition-transform duration-150 group-open:rotate-90 dark:fill-zinc-400"
-    >
-      <path
-        fill-rule="evenodd"
-        d="M6.22 4.22a.75.75 0 0 1 1.06 0l3.25 3.25a.75.75 0 0 1 0 1.06l-3.25 3.25a.75.75 0 0 1-1.06-1.06L8.94 8 6.22 5.28a.75.75 0 0 1 0-1.06Z"
-        clip-rule="evenodd"
-      />
-    </svg>
+    <span class="flex h-lh shrink-0 items-center" aria-hidden="true">
+      <!-- Heroicons Micro: Chevron Right -->
+      <svg
+        viewBox="0 0 16 16"
+        aria-hidden="true"
+        class="size-4 fill-stone-500 transition-transform duration-150 group-open:rotate-90 dark:fill-stone-400"
+      >
+        <path
+          fill-rule="evenodd"
+          d="M6.22 4.22a.75.75 0 0 1 1.06 0l3.25 3.25a.75.75 0 0 1 0 1.06l-3.25 3.25a.75.75 0 0 1-1.06-1.06L8.94 8 6.22 5.28a.75.75 0 0 1 0-1.06Z"
+          clip-rule="evenodd"
+        />
+      </svg>
+    </span>
     <span class="min-w-0">{summary}</span>
   </summary>
   <div class="prose border-t border-stone-950/8 px-4 py-3.5 text-base/7 sm:text-sm/6 dark:border-white/8">

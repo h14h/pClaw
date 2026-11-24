@@ -12,14 +12,14 @@ const defaultTitles = {
   warn: "Caveat",
 } as const;
 
-const barStyles = {
-  note: "border-l-stone-400 dark:border-l-zinc-500",
-  tip: "border-l-accent dark:border-l-accent-dark",
-  warn: "border-l-amber-600 dark:border-l-amber-400",
+const dotStyles = {
+  note: "bg-stone-400 dark:bg-stone-500",
+  tip: "bg-accent dark:bg-accent-dark",
+  warn: "bg-amber-600 dark:bg-amber-400",
 } as const;
 
 const titleStyles = {
-  note: "text-stone-900 dark:text-zinc-100",
+  note: "text-stone-900 dark:text-stone-100",
   tip: "text-accent dark:text-accent-dark",
   warn: "text-amber-800 dark:text-amber-300",
 } as const;
@@ -28,14 +28,15 @@ const heading = title ?? defaultTitles[type];
 ---
 
 <aside
-  class={`not-prose callout my-6 rounded-r-lg border border-stone-950/8 border-l-2 bg-paper-subtle/75 px-4 py-3.5 dark:border-white/8 dark:bg-obsidian-subtle ${barStyles[type]}`}
+  class="not-prose callout my-6 rounded-lg bg-paper-subtle/85 px-4 py-3.5 ring-1 ring-inset ring-stone-950/6 dark:bg-stone-900/90 dark:ring-white/8"
 >
   {heading && (
-    <p class={`text-base/6 font-medium sm:text-sm/5 ${titleStyles[type]}`}>
-      {heading}
+    <p class={`flex items-center gap-2 text-base/6 font-medium ${titleStyles[type]}`}>
+      <span aria-hidden="true" class={`size-1.5 shrink-0 rounded-full ${dotStyles[type]}`} />
+      <span>{heading}</span>
     </p>
   )}
-  <div class="mt-1.5 space-y-2 text-base/7 text-pretty text-stone-700 sm:text-sm/6 dark:text-zinc-300 [&>p]:m-0 [&_a]:underline [&_a]:underline-offset-3 [&_code]:font-mono [&_code]:text-[0.875em]">
+  <div class="mt-1.5 space-y-2 text-base/7 text-pretty text-stone-700 dark:text-stone-300 [&>p]:m-0 [&_a]:text-accent [&_a]:underline [&_a]:decoration-accent/35 [&_a]:underline-offset-3 [&_a:hover]:decoration-current dark:[&_a]:text-accent-dark dark:[&_a]:decoration-accent-dark/35 [&_code]:font-mono [&_code]:text-[0.875em]">
     <slot />
   </div>
 </aside>

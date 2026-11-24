@@ -7,7 +7,6 @@ import { absoluteUrl, withBase } from "@lib/urls";
 interface Props {
   title: string;
   description?: string;
-  breadcrumb?: string;
   isHome?: boolean;
   ogType?: "website" | "article";
   ogImagePath?: string;
@@ -17,7 +16,6 @@ interface Props {
 const {
   title,
   description = "Personal research notes and interactive pages.",
-  breadcrumb,
   isHome = false,
   ogType = isHome ? "website" : "article",
   ogImagePath = "/og/index.png",
@@ -72,31 +70,23 @@ const ogImageUrl = absoluteUrl(ogImagePath, Astro.site);
       })();
     </script>
   </head>
-  <body class="min-h-dvh bg-paper font-sans text-stone-900 selection:bg-accent/15 dark:bg-obsidian dark:text-zinc-200 dark:selection:bg-accent-dark/20">
+  <body id="top" class="min-h-dvh bg-paper font-sans text-stone-900 selection:bg-accent/15 dark:bg-obsidian dark:text-stone-200 dark:selection:bg-accent-dark/20">
     <div class="isolate">
       <header class="print-hide border-b border-stone-950/8 dark:border-white/8">
-        <div class="mx-auto flex max-w-[768px] items-center justify-between gap-4 px-5 py-3.5 sm:px-8">
-          <div class="flex min-w-0 items-center gap-2 text-base/6 sm:text-sm/5">
-            <a
-              href={homeHref}
-              aria-label="Homepage"
-              class="group inline-flex shrink-0 items-center gap-2 font-medium tracking-tight text-stone-900 hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent dark:text-zinc-100 dark:hover:text-accent-dark dark:focus-visible:outline-accent-dark"
-            >
-              <GrugMark class="size-[22px] shrink-0 opacity-85 transition-opacity group-hover:opacity-100" />
-              <span>grug pages</span>
-            </a>
-            {breadcrumb && (
-              <>
-                <span aria-hidden="true" class="shrink-0 text-stone-300 dark:text-zinc-700">/</span>
-                <span class="min-w-0 truncate text-stone-500 dark:text-zinc-400">{breadcrumb}</span>
-              </>
-            )}
-          </div>
-          <nav aria-label="Site navigation" class="flex shrink-0 items-center gap-4 text-base/6 sm:text-sm/5">
+        <div class="mx-auto flex max-w-3xl items-center justify-between gap-4 px-5 py-3.5 sm:px-8">
+          <a
+            href={homeHref}
+            aria-label="Homepage"
+            class="inline-flex shrink-0 items-center gap-2.5 py-1 text-base/6 font-medium tracking-tight text-stone-900 hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:text-sm/5 dark:text-stone-100 dark:hover:text-accent-dark dark:focus-visible:outline-accent-dark"
+          >
+            <GrugMark class="size-6 shrink-0" />
+            <span>grug pages</span>
+          </a>
+          <nav aria-label="Site navigation" class="flex shrink-0 items-center gap-5 text-base/6 sm:text-sm/5">
             {!isHome && (
               <a
                 href={homeHref}
-                class="text-stone-600 hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent dark:text-zinc-400 dark:hover:text-zinc-100 dark:focus-visible:outline-accent-dark"
+                class="px-1 py-2 text-stone-600 hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent dark:text-stone-400 dark:hover:text-stone-100 dark:focus-visible:outline-accent-dark"
               >
                 All pages
               </a>
@@ -105,18 +95,26 @@ const ogImageUrl = absoluteUrl(ogImagePath, Astro.site);
               id="theme-toggle"
               type="button"
               aria-label="Toggle color theme"
-              class="relative inline-flex size-8 items-center justify-center rounded-md text-stone-600 hover:bg-stone-950/5 hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent dark:text-zinc-400 dark:hover:bg-white/8 dark:hover:text-zinc-100 dark:focus-visible:outline-accent-dark"
+              class="group relative inline-flex size-8 items-center justify-center rounded-md hover:bg-stone-950/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent dark:hover:bg-white/8 dark:focus-visible:outline-accent-dark"
             >
               <span
                 class="pointer-fine:hidden absolute top-1/2 left-1/2 size-[max(100%,3rem)] -translate-1/2"
                 aria-hidden="true"
               ></span>
               <!-- Heroicons Micro: Moon (shown in light mode) -->
-              <svg viewBox="0 0 16 16" aria-hidden="true" class="size-4 shrink-0 fill-current dark:hidden">
+              <svg
+                viewBox="0 0 16 16"
+                aria-hidden="true"
+                class="size-4 shrink-0 fill-stone-600 group-hover:fill-stone-900 dark:hidden dark:fill-stone-400 dark:group-hover:fill-stone-100"
+              >
                 <path d="M14.438 10.148c.19-.425-.321-.787-.748-.601A5.5 5.5 0 0 1 6.453 2.31c.186-.427-.176-.938-.6-.748a6.501 6.501 0 1 0 8.585 8.586Z" />
               </svg>
               <!-- Heroicons Micro: Sun (shown in dark mode) -->
-              <svg viewBox="0 0 16 16" aria-hidden="true" class="size-4 shrink-0 fill-current not-dark:hidden">
+              <svg
+                viewBox="0 0 16 16"
+                aria-hidden="true"
+                class="size-4 shrink-0 fill-stone-600 group-hover:fill-stone-900 not-dark:hidden dark:fill-stone-400 dark:group-hover:fill-stone-100"
+              >
                 <path d="M8 1a.75.75 0 0 1 .75.75v1.5a.75.75 0 0 1-1.5 0v-1.5A.75.75 0 0 1 8 1ZM10.5 8a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0ZM12.95 4.11a.75.75 0 1 0-1.06-1.06l-1.062 1.06a.75.75 0 0 0 1.061 1.062l1.06-1.061ZM15 8a.75.75 0 0 1-.75.75h-1.5a.75.75 0 0 1 0-1.5h1.5A.75.75 0 0 1 15 8ZM11.89 12.95a.75.75 0 0 0 1.06-1.06l-1.06-1.062a.75.75 0 0 0-1.062 1.061l1.061 1.06ZM8 12a.75.75 0 0 1 .75.75v1.5a.75.75 0 0 1-1.5 0v-1.5A.75.75 0 0 1 8 12ZM5.172 11.89a.75.75 0 0 0-1.061-1.062L3.05 11.89a.75.75 0 1 0 1.06 1.06l1.062-1.06ZM4 8a.75.75 0 0 1-.75.75h-1.5a.75.75 0 0 1 0-1.5h1.5A.75.75 0 0 1 4 8ZM4.11 5.172A.75.75 0 0 0 5.173 4.11L4.11 3.05a.75.75 0 1 0-1.06 1.06l1.06 1.062Z" />
               </svg>
             </button>
@@ -124,7 +122,7 @@ const ogImageUrl = absoluteUrl(ogImagePath, Astro.site);
         </div>
       </header>
 
-      <main class="mx-auto max-w-[768px] px-5 pt-8 pb-16 sm:px-8 sm:pt-12 sm:pb-24">
+      <main class="mx-auto max-w-3xl px-5 pt-8 pb-16 sm:px-8 sm:pt-12 sm:pb-24">
         <slot />
       </main>
     </div>

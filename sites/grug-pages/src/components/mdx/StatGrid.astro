@@ -12,8 +12,8 @@ const gridCols = {
 }[columns];
 ---
 
-<div class="not-prose stat-grid @container my-6 border-y border-stone-950/10 py-5 dark:border-white/10">
-  <dl class={`grid grid-cols-1 gap-x-6 gap-y-5 ${gridCols}`}>
+<div class="not-prose stat-grid @container my-6 border-y border-stone-950/10 py-5 first:mt-0 first:border-t-0 first:pt-0 dark:border-white/10">
+  <dl data-columns={String(columns)} class={`grid grid-cols-1 gap-x-5 gap-y-4 ${gridCols}`}>
     <slot />
   </dl>
 </div>

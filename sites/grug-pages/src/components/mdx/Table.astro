@@ -2,10 +2,12 @@
 const props = Astro.props;
 ---
 
-<div class="table-scroll">
-  <div class="table-scroll-inner">
-    <table {...props}>
-      <slot />
-    </table>
+<div class="my-6 flow-root">
+  <div class="table-scroll -mx-5 -my-2 overflow-x-auto sm:-mx-8">
+    <div class="table-scroll-inner inline-block min-w-full px-5 py-2 align-middle sm:px-8">
+      <table {...props}>
+        <slot />
+      </table>
+    </div>
   </div>
 </div>

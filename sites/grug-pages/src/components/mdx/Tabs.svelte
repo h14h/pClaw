@@ -84,8 +84,8 @@
         onclick={() => (active = i)}
         onkeydown={(e) => onKeydown(e, i)}
         class={active === i
-          ? "shrink-0 border-b-2 border-stone-900 px-3 py-2 text-stone-900 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent sm:py-1.5 dark:border-zinc-100 dark:text-zinc-100 dark:focus-visible:outline-accent-dark"
-          : "shrink-0 border-b-2 border-transparent px-3 py-2 text-stone-500 hover:text-stone-900 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent sm:py-1.5 dark:text-zinc-400 dark:hover:text-zinc-200 dark:focus-visible:outline-accent-dark"}
+          ? "shrink-0 border-b-2 border-stone-900 px-3 py-2 text-stone-900 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent sm:py-1.5 dark:border-stone-100 dark:text-stone-100 dark:focus-visible:outline-accent-dark"
+          : "shrink-0 border-b-2 border-transparent px-3 py-2 text-stone-500 hover:text-stone-900 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent sm:py-1.5 dark:text-stone-400 dark:hover:text-stone-200 dark:focus-visible:outline-accent-dark"}
       >
         {label}
       </button>
@@ -95,7 +95,7 @@
   {#if tabs.length > 0}
     <div
       role="tabpanel"
-      class="pt-4 text-base/7 text-pretty text-stone-800 dark:text-zinc-300"
+      class="pt-4 text-base/7 text-pretty text-stone-800 dark:text-stone-300"
     >
       {#if tabs[active]?.content}
         <p class="whitespace-pre-line">{tabs[active].content}</p>

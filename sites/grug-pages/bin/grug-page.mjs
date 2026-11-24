@@ -465,6 +465,7 @@ function cmdPolish(cfg, args) {
       instructions: [
         "- True compression + ultracave voice pass: target ~30-50% tighter prose with crisp grugbrain.dev-style punchy rhythm.",
         "- Cut remaining filler, throat-clearing, and repetition ruthlessly. Keep bullet lists and tables compact; do not expand them into paragraphs.",
+        "- Keep unslop's no-em-dash rule: do not reintroduce em-dashes (—) or double hyphens (--); use periods, commas, or colons.",
         "- Keep verdicts, key numbers, units, dates, verified URLs, sources, YAML frontmatter, MDX imports, table numbers, code blocks, and JSX/Svelte component tags/props 100% intact. Use full sentences wherever a fragment could have two readings.",
       ].join("\n"),
     });

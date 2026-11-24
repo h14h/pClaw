@@ -25,32 +25,31 @@ const canonicalPath = slug ? `/${slug}/` : undefined;
 <BaseLayout
   title={title}
   description={summary}
-  breadcrumb={title}
   ogType="article"
   ogImagePath={ogImagePath}
   canonicalPath={canonicalPath}
 >
-  <header class="pb-7 border-b border-stone-950/8 dark:border-white/8">
-    <h1 class="text-2xl font-semibold tracking-tight text-pretty text-stone-900 sm:text-3xl dark:text-zinc-100">
+  <header class="border-b border-stone-950/8 pb-7 dark:border-white/8">
+    <h1 class="text-2xl font-semibold tracking-tight text-pretty text-stone-900 sm:text-3xl dark:text-stone-100">
       {title}
     </h1>
     {subtitle && (
-      <p class="mt-3 text-lg/7 text-pretty text-stone-600 sm:text-base/7 dark:text-zinc-400">
+      <p class="mt-3 text-lg/7 text-pretty text-stone-600 dark:text-stone-400">
         {subtitle}
       </p>
     )}
-    <div class="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 text-base/6 text-stone-500 sm:text-sm/5 dark:text-zinc-400">
+    <div class="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 text-base/6 text-stone-500 sm:text-sm/5 dark:text-stone-400">
       <time datetime={date} class="tabular-nums">{formatDate(date)}</time>
       {updated && updated !== date && (
         <>
-          <span aria-hidden="true" class="text-stone-300 dark:text-zinc-700">&middot;</span>
+          <span aria-hidden="true" class="text-stone-300 dark:text-stone-700">&middot;</span>
           <span class="tabular-nums">Updated <time datetime={updated}>{formatDate(updated)}</time></span>
         </>
       )}
       {tags.length > 0 && (
         <ul role="list" class="flex flex-wrap items-center gap-1.5">
           {tags.map((tag) => (
-            <li class="rounded-md bg-stone-950/5 px-2 py-0.5 text-stone-700 dark:bg-white/8 dark:text-zinc-300">
+            <li class="rounded-md bg-stone-950/5 px-2 py-0.5 text-stone-700 dark:bg-white/8 dark:text-stone-300">
               {tag}
             </li>
           ))}
@@ -60,22 +59,61 @@ const canonicalPath = slug ? `/${slug}/` : undefined;
   </header>
 
   {showToc && (
-    <nav aria-label="Contents" class="mt-6 border-b border-stone-950/8 pb-6 dark:border-white/8">
-      <p class="font-mono text-sm uppercase tracking-wide text-stone-500 dark:text-zinc-400">
-        Contents
-      </p>
-      <ol role="list" class="mt-3 grid grid-cols-1 gap-x-6 gap-y-1.5 text-base/6 sm:grid-cols-2 sm:text-sm/6">
-        {tocHeadings.map((heading) => (
-          <li class="min-w-0">
-            <a
-              href={`#${heading.slug}`}
-              class="text-stone-700 hover:text-accent dark:text-zinc-300 dark:hover:text-accent-dark"
-            >
-              {heading.text}
-            </a>
-          </li>
-        ))}
-      </ol>
+    <nav aria-label="Contents" class="mt-5 border-b border-stone-950/8 pb-4 sm:mt-6 sm:pb-6 dark:border-white/8">
+      <details class="group sm:hidden">
+        <summary class="flex cursor-pointer list-none items-center justify-between gap-2 py-1 text-base/6 font-medium text-stone-700 select-none hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent dark:text-stone-300 dark:hover:text-accent-dark dark:focus-visible:outline-accent-dark [&::-webkit-details-marker]:hidden">
+          <span class="flex items-center gap-2">
+            <span class="font-mono text-sm uppercase tracking-wide text-stone-500 dark:text-stone-400">
+              Contents
+            </span>
+            <span aria-hidden="true" class="text-stone-300 dark:text-stone-700">&middot;</span>
+            <span class="tabular-nums text-stone-500 dark:text-stone-400">
+              {tocHeadings.length} sections
+            </span>
+          </span>
+          <svg
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+            class="size-4 shrink-0 fill-stone-500 transition-transform duration-150 group-open:rotate-90 dark:fill-stone-400"
+          >
+            <path
+              fill-rule="evenodd"
+              d="M6.22 4.22a.75.75 0 0 1 1.06 0l3.25 3.25a.75.75 0 0 1 0 1.06l-3.25 3.25a.75.75 0 0 1-1.06-1.06L8.94 8 6.22 5.28a.75.75 0 0 1 0-1.06Z"
+              clip-rule="evenodd"
+            />
+          </svg>
+        </summary>
+        <ol role="list" class="mt-3 space-y-2 text-base/6">
+          {tocHeadings.map((heading) => (
+            <li>
+              <a
+                href={`#${heading.slug}`}
+                class="text-stone-700 underline decoration-stone-950/20 underline-offset-4 hover:text-accent hover:decoration-accent dark:text-stone-300 dark:decoration-white/20 dark:hover:text-accent-dark dark:hover:decoration-accent-dark"
+              >
+                {heading.text}
+              </a>
+            </li>
+          ))}
+        </ol>
+      </details>
+
+      <div class="hidden sm:block">
+        <p class="font-mono text-sm uppercase tracking-wide text-stone-500 dark:text-stone-400">
+          Contents
+        </p>
+        <ol role="list" class="mt-3 text-sm/6 sm:columns-2 sm:gap-8">
+          {tocHeadings.map((heading) => (
+            <li class="break-inside-avoid pb-1.5">
+              <a
+                href={`#${heading.slug}`}
+                class="text-stone-700 underline decoration-stone-950/20 underline-offset-4 hover:text-accent hover:decoration-accent dark:text-stone-300 dark:decoration-white/20 dark:hover:text-accent-dark dark:hover:decoration-accent-dark"
+              >
+                {heading.text}
+              </a>
+            </li>
+          ))}
+        </ol>
+      </div>
     </nav>
   )}
 
@@ -83,12 +121,18 @@ const canonicalPath = slug ? `/${slug}/` : undefined;
     <slot />
   </article>
 
-  <footer class="print-hide mt-14 border-t border-stone-950/8 pt-6 text-base/6 sm:text-sm/5 dark:border-white/8">
+  <footer class="print-hide mt-14 flex items-center justify-between gap-4 border-t border-stone-950/8 pt-6 text-base/6 sm:text-sm/5 dark:border-white/8">
     <a
       href={homeHref}
-      class="font-normal text-stone-600 hover:text-stone-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+      class="py-1 font-normal text-stone-600 hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent dark:text-stone-400 dark:hover:text-stone-100 dark:focus-visible:outline-accent-dark"
     >
       &larr; All pages
+    </a>
+    <a
+      href="#top"
+      class="py-1 font-normal text-stone-500 hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent dark:text-stone-400 dark:hover:text-stone-100 dark:focus-visible:outline-accent-dark"
+    >
+      Back to top &uarr;
     </a>
   </footer>
 </BaseLayout>
