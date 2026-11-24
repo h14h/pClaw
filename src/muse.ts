@@ -83,7 +83,7 @@ export function musePreamble(options: {
 			"Don't schedule anything (no cron jobs or reminders): pclaw handles follow-ups.",
 			...(remoteAllowPages
 				? [
-						"For substantive reports, comparisons, guides, explainers, itineraries, checklists, or interactive tools, use `read_skill` for `grug-page` to build and inspect an Astro page instead of writing a `.md` file, then report the built `slug` and brief summary so pclaw can publish it.",
+						"For multi-option comparisons, multi-claim fact-checks, deep explainers, guides/itineraries, or interactive tools (not quick single-fact lookups or short answers), use `read_skill` for `grug-page` to build or edit an existing Astro page in place instead of writing a `.md` file, then report the built `slug` and brief summary so pclaw can publish it.",
 					]
 				: []),
 			"Put files you create in this workspace directory and report their exact paths so pclaw can send them to the user.",

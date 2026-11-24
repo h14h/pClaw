@@ -654,4 +654,194 @@ test("two-layer dark-mode Grug icon assets, adaptive favicon.svg, and grug-page 
 	assert.match(grugPageSkill, /report_progress/);
 	assert.match(grugPageSkill, /desktop\/mobile\/light\/dark/);
 	assert.match(grugPageSkill, /Building a comparison page for you/);
+	assert.match(grugPageSkill, /One fact, one home/);
+	assert.match(grugPageSkill, /400–900 words/);
+	assert.match(grugPageSkill, /1,200 words/);
+	assert.match(grugPageSkill, /grug-page list/);
+	assert.match(grugPageSkill, /agent-browser --session "\$S" close/);
+});
+
+test("grug-page polish stages atomically on .polish-stage.mdx, protects index.mdx/.draft.mdx on timeout or error, and enforces anti-bloat prompts", async () => {
+	const grugPageBin = new URL("../sites/grug-pages/bin/grug-page.mjs", import.meta.url).pathname;
+	const skillsDir = new URL("../bots/grug/skills", import.meta.url).pathname;
+	const grugPageSrc = readFileSync(grugPageBin, "utf8");
+	assert.match(grugPageSrc, /DEFAULT_POLISH_TIMEOUT_MS\s*=\s*180_000/);
+
+	const workDir = join(dir, "polish-work");
+	const slugDir = join(workDir, "pages", "test-guide");
+	mkdirSync(slugDir, { recursive: true });
+
+	const originalDraft = [
+		"---",
+		'title: "Test Guide"',
+		'date: "2026-11-24"',
+		'summary: "Compact comparison test."',
+		"---",
+		"",
+		'import { StatGrid, Stat } from "@components/mdx";',
+		"",
+		"<StatGrid columns={2}>",
+		'  <Stat label="Pick" value="Plan A" note="$50/mo" />',
+		"</StatGrid>",
+		"",
+		"## Summary",
+		"",
+		"Plan A costs $50/mo and is fast.",
+		"",
+	].join("\n");
+
+	const indexPath = join(slugDir, "index.mdx");
+	const draftBackup = join(slugDir, ".draft.mdx");
+	const unslopSnapshot = join(slugDir, ".unslop.mdx");
+	const stagePath = join(slugDir, ".polish-stage.mdx");
+	const promptLogDir = join(dir, "polish-prompts");
+	mkdirSync(promptLogDir, { recursive: true });
+
+	// Fake muse binary driven by FAKE_MUSE_MODE env var:
+	// - "ok": records each stage's prompt, rewrites .polish-stage.mdx cleanly (shrinking words)
+	// - "timeout-stage2": passes stage 1, hangs on stage 2 so GRUG_POLISH_TIMEOUT_MS triggers
+	// - "invalid-stage1": drops MDX import in stage 1 to trigger validation failure
+	const fakeMuse = join(dir, "fake-polish-muse.mjs");
+	await writeFile(
+		fakeMuse,
+		`#!${process.execPath}
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+const args = process.argv.slice(2);
+const pfIdx = args.indexOf("--prompt-file");
+const promptText = readFileSync(args[pfIdx + 1], "utf8");
+const stageMatch = /automated editorial pass "([^"]+)"/.exec(promptText);
+const targetMatch = /Target file: ([^\\n]+)/.exec(promptText);
+const stage = stageMatch ? stageMatch[1] : "unknown";
+const target = targetMatch ? targetMatch[1].trim() : "";
+writeFileSync(join(process.env.PROMPT_LOG_DIR, stage + ".txt"), promptText, "utf8");
+
+const mode = process.env.FAKE_MUSE_MODE || "ok";
+if (mode === "timeout-stage2" && stage === "ultracave") {
+  setTimeout(() => {}, 60_000);
+} else if (mode === "invalid-stage1" && stage === "unslop") {
+  writeFileSync(target, "---\\ntitle: \\"Broken\\"\\ndate: \\"2026-11-24\\"\\nsummary: \\"Missing import\\"\\n---\\n\\nNo import here.\\n", "utf8");
+} else if (stage === "unslop") {
+  writeFileSync(target, [
+    "---",
+    'title: "Test Guide"',
+    'date: "2026-11-24"',
+    'summary: "Compact comparison test."',
+    "---",
+    "",
+    'import { StatGrid, Stat } from "@components/mdx";',
+    "",
+    "<StatGrid columns={2}>",
+    '  <Stat label="Pick" value="Plan A" note="$50/mo" />',
+    "</StatGrid>",
+    "",
+    "## Summary",
+    "",
+    "Plan A wins on speed.",
+    "",
+  ].join("\\n"), "utf8");
+} else if (stage === "ultracave") {
+  writeFileSync(target, [
+    "---",
+    'title: "Test Guide"',
+    'date: "2026-11-24"',
+    'summary: "Compact comparison test."',
+    "---",
+    "",
+    'import { StatGrid, Stat } from "@components/mdx";',
+    "",
+    "<StatGrid columns={2}>",
+    '  <Stat label="Pick" value="Plan A" note="$50/mo" />',
+    "</StatGrid>",
+    "",
+    "## Summary",
+    "",
+    "Plan A wins: faster.",
+    "",
+  ].join("\\n"), "utf8");
+}
+`,
+	);
+	await chmod(fakeMuse, 0o755);
+
+	const runPolish = (extraEnv: Record<string, string>) =>
+		spawnSync(process.execPath, [grugPageBin, "polish", "test-guide"], {
+			encoding: "utf8",
+			env: {
+				...process.env,
+				GRUG_PAGES_WORK_DIR: workDir,
+				GRUG_MUSE_BIN: fakeMuse,
+				GRUG_SKILLS_DIR: skillsDir,
+				PROMPT_LOG_DIR: promptLogDir,
+				...extraEnv,
+			},
+		});
+
+	// 1. Timeout in Stage 2 leaves index.mdx AND existing .draft.mdx untouched and removes .polish-stage.mdx
+	writeFileSync(indexPath, originalDraft, "utf8");
+	writeFileSync(draftBackup, "ORIGINAL-PRIOR-BACKUP\n", "utf8");
+	const timeoutRes = runPolish({ FAKE_MUSE_MODE: "timeout-stage2", GRUG_POLISH_TIMEOUT_MS: "250" });
+	assert.notEqual(timeoutRes.status, 0);
+	assert.match(timeoutRes.stderr, /timed out/i);
+	assert.equal(readFileSync(indexPath, "utf8"), originalDraft);
+	assert.equal(readFileSync(draftBackup, "utf8"), "ORIGINAL-PRIOR-BACKUP\n");
+	assert.equal(existsSync(stagePath), false, ".polish-stage.mdx must be cleaned up after timeout");
+
+	// 2. Invalid MDX in Stage 1 leaves index.mdx and .draft.mdx untouched and removes .polish-stage.mdx
+	const invalidRes = runPolish({ FAKE_MUSE_MODE: "invalid-stage1" });
+	assert.notEqual(invalidRes.status, 0);
+	assert.match(invalidRes.stderr, /MDX import dropped/);
+	assert.equal(readFileSync(indexPath, "utf8"), originalDraft);
+	assert.equal(readFileSync(draftBackup, "utf8"), "ORIGINAL-PRIOR-BACKUP\n");
+	assert.equal(existsSync(stagePath), false, ".polish-stage.mdx must be cleaned up after validation failure");
+
+	// 3. Successful polish preserves existing .draft.mdx, writes .unslop.mdx, atomically swaps index.mdx, and removes .polish-stage.mdx
+	const okWithExistingBackup = runPolish({ FAKE_MUSE_MODE: "ok" });
+	assert.equal(okWithExistingBackup.status, 0, okWithExistingBackup.stderr);
+	assert.match(okWithExistingBackup.stdout, /POLISHED test-guide:/);
+	assert.equal(readFileSync(draftBackup, "utf8"), "ORIGINAL-PRIOR-BACKUP\n", "existing .draft.mdx must not be overwritten");
+	assert.match(readFileSync(unslopSnapshot, "utf8"), /Plan A wins on speed\./);
+	assert.match(readFileSync(indexPath, "utf8"), /Plan A wins: faster\./);
+	assert.equal(existsSync(stagePath), false);
+
+	// 4. First-time polish (no .draft.mdx yet) writes .draft.mdx from original input
+	await rm(draftBackup, { force: true });
+	writeFileSync(indexPath, originalDraft, "utf8");
+	const okFresh = runPolish({ FAKE_MUSE_MODE: "ok" });
+	assert.equal(okFresh.status, 0, okFresh.stderr);
+	assert.equal(readFileSync(draftBackup, "utf8"), originalDraft);
+
+	// 5. Verify prompts targeted .polish-stage.mdx and include anti-bloat / compression overrides
+	const stage1Prompt = readFileSync(join(promptLogDir, "unslop.txt"), "utf8");
+	const stage2Prompt = readFileSync(join(promptLogDir, "ultracave.txt"), "utf8");
+	assert.match(stage1Prompt, /Target file: .*\.polish-stage\.mdx/);
+	assert.match(stage1Prompt, /NEVER expand compact bullet lists or tables into narrative paragraphs/);
+	assert.match(stage1Prompt, /DELETE the repetitive prose restatement/);
+	assert.match(stage1Prompt, /shrink or hold total word count, NEVER inflate it/);
+	assert.match(stage2Prompt, /Target file: .*\.polish-stage\.mdx/);
+	assert.match(stage2Prompt, /30-50% tighter prose/);
+	assert.match(stage2Prompt, /grugbrain\.dev/);
+
+	// 6. Verify tightened page-vs-chat, one-page-per-topic, and TL;DR-only prompt rules (and clean allowPages=false stripping)
+	const grugResolver = createPromptResolver({ personaDir: "bots/grug" });
+	const grugFrontOn = grugResolver.frontPrompt({ allowT3: false, allowPages: true, channel: "telegram" });
+	assert.match(grugFrontOn, /Direct chat \(no page\)/);
+	assert.match(grugFrontOn, /3\+ option comparison/);
+	assert.match(grugFrontOn, /One page per topic/);
+	assert.match(grugFrontOn, /ONLY live link \+ 1–3 short lines/);
+	const grugFrontOff = grugResolver.frontPrompt({ allowT3: false, allowPages: false, channel: "telegram" });
+	assert.doesNotMatch(grugFrontOff, /One page per topic|ONLY live link|publish_page|tell worker build page/);
+
+	const grugTgOn = grugResolver.readFormatting("telegram", { allowT3: false, allowPages: true })!;
+	assert.match(grugTgOn, /ONLY live clickable link \+ 1–3 short lines/);
+	assert.match(grugTgOn, /Edit existing `slug` in place/);
+	const grugTgOff = grugResolver.readFormatting("telegram", { allowT3: false, allowPages: false })!;
+	assert.doesNotMatch(grugTgOff, /publish_page|ONLY live clickable link|Edit existing `slug`/);
+
+	const rawWorkerMd = readFileSync(new URL("./prompts/worker.md", import.meta.url), "utf8");
+	const remoteWithPages = filterWorkerPrompt(rawWorkerMd, { remote: true, allowPages: true });
+	assert.match(remoteWithPages, /Do NOT build a page for quick single-fact lookups/);
+	assert.match(remoteWithPages, /One page per topic: run `grug-page list`/);
+	assert.doesNotMatch(remoteWithPages, /ultracave|caveman/i);
 });

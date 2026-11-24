@@ -133,6 +133,7 @@ export function filterFrontPrompt(text: string, flags: PromptFeatureFlags = {}):
 			.replace(/ For a web page, say so in the brief\./g, "")
 			.replace(/, build interactive web pages/g, "")
 			.replace(/, publish built pages with `publish_page`/g, "")
+			.replace(/\n## Pages\n[\s\S]*?(?=\n## |$)/g, "")
 			.replace(/ For reports, comparisons, guides, explainers, itineraries, checklists, or interactive tools, tell worker build page \(not `\.md` file unless user asks raw markdown\)\./g, "")
 			.replace(/ Worker finishes and reports built page `slug`\? Call `publish_page` with `slug`, then share live clickable link\. Never invent or guess URL before `publish_page` succeeds\./g, "");
 	}
@@ -148,6 +149,7 @@ export function filterFormattingPrompt(text: string, flags: PromptFeatureFlags =
 	if (flags.allowPages === false) {
 		out = out
 			.replace(/ and offer the full writeup as a page\./g, " and offer to send the full writeup as a file.")
+			.replace(/ Worker built page and gave `slug`\? Call `publish_page`, never guess URL first; send ONLY live clickable link \+ 1–3 short lines \(headline verdict\/number \+ key reason\), never recap sections, bullet lists, or full breakdown already on page\. Follow-up updates same topic\? Edit existing `slug` in place and re-run `publish_page`\./g, "")
 			.replace(/ Worker built page and gave `slug`\? Call `publish_page`, share live clickable link in Telegram, never guess URL first\./g, "");
 	}
 	return out.trim();
@@ -155,14 +157,15 @@ export function filterFormattingPrompt(text: string, flags: PromptFeatureFlags =
 
 const REMOTE_BROWSER_GUIDANCE = [
 	'- You have the `agent-browser` skill installed for live headless Chromium browsing: run `read_skill` for `agent-browser`, then e.g. `agent-browser open "<url>" && agent-browser snapshot -i` whenever `web_fetch` misses JS-rendered store prices/pages, when a public government/county/assessor lookup portal needs interaction, or when capturing a visual/product screenshot to save and report back.',
-	"- Always run `agent-browser close` before finishing.",
+	"- Always run `agent-browser close` before finishing (or `agent-browser --session \"$S\" close` if a named session was used).",
 	"- Never attempt to solve CAPTCHAs or anti-bot challenges; stop and report if blocked.",
 ].join("\n");
 
 export const REMOTE_PAGES_GUIDANCE = [
 	"## Publishing pages (`grug-page`)",
-	'- Whenever producing a substantive report, comparison, deep-dive explainer, itinerary, checklist, guide, or interactive tool (anything beyond a brief chat answer), **build an Astro page** using `read_skill` for `grug-page` instead of writing/sending a `.md` file. Only write a `.md` file if the user explicitly asks for raw markdown or plain text.',
-	"- Follow the full `grug-page` workflow: write factual `~/work/pages/<slug>/index.mdx` draft -> `grug-page polish <slug>` -> `grug-page build <slug>` -> `grug-page preview <slug> --daemon` + `agent-browser` visual check (desktop & mobile, light & dark, zero console/CSP errors), then run `agent-browser close` and `grug-page preview-stop`.",
+	"- Prefer an Astro page (`read_skill` for `grug-page`) for multi-option comparisons (3+ options with tradeoffs), multi-claim fact-checks, deep explainers, guides/itineraries, or interactive calculators/tools instead of writing/sending a `.md` file. Do NOT build a page for quick single-fact lookups, price/availability checks, yes/no checks, or short answers. Only write a `.md` file if the user explicitly asks for raw markdown or plain text.",
+	'- One page per topic: run `grug-page list` before creating a new slug. On follow-ups or when a page on the same topic already exists, edit the existing `~/work/pages/<slug>/index.mdx` in place (updating `updated: "YYYY-MM-DD"`) instead of creating a duplicate slug.',
+	"- Follow the full `grug-page` workflow: write a concise, zero-repetition `~/work/pages/<slug>/index.mdx` draft -> `grug-page polish <slug>` -> `grug-page build <slug>` -> `grug-page preview <slug> --daemon` + `agent-browser` visual check (desktop & mobile, light & dark, zero console/CSP errors), then close the browser (`agent-browser close`, or `agent-browser --session \"$S\" close` if a named session was used) and run `grug-page preview-stop`.",
 	"- Report the built `slug` and a brief summary in your final response so pclaw can publish it and share the live link.",
 ].join("\n");
 

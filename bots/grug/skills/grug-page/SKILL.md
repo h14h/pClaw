@@ -7,12 +7,25 @@ description: Build, polish, compile, and visually inspect a static Astro + Svelt
 
 ## When to make a page
 
-Make a page for any substantive deliverable the user will read, revisit, compare, or interact with:
-- Research reports, product/vendor comparisons, technical explainers
-- Trip itineraries, packing/prep checklists, reference guides
+Make a page only for substantive deliverables the user will read, revisit, compare, or interact with:
+- 3+ option comparisons with tradeoffs
+- Multi-claim fact-checks
+- Deep explainers, guides, or trip itineraries
 - Interactive calculators, planners, or small Svelte 5 tools
 
-Prefer building a page over writing or sending a `.md` file unless the user specifically asks for raw markdown, plain text, CSV, SQL, or another file format.
+Do **not** build a page for single-fact lookups, quick price/availability checks, yes/no checks, short 1–3 item answers, or quick follow-up math — answer those directly in chat. Prefer building a page over writing or sending a `.md` file unless the user specifically asks for raw markdown, plain text, CSV, SQL, or another file format.
+
+## At most one page per topic (in-place edits)
+
+- Before creating a new slug, always run `grug-page list`.
+- If a page on the same topic or target already exists (or the prompt names an existing `<slug>`), **edit that existing `~/work/pages/<slug>/index.mdx` in place** (set `updated: "YYYY-MM-DD"` in frontmatter), re-run `grug-page polish <slug>`, rebuild, and re-verify.
+- **Never** create a duplicate slug for the same topic.
+
+## Brevity and zero-repetition rules
+
+- **One fact, one home (strict zero-repetition):** If a figure, price, or spec is in `<StatGrid>` or a comparison table, do **not** re-narrate it in prose paragraphs below. Use prose strictly for verdicts, tradeoffs, and non-obvious caveats.
+- **Brevity target:** Aim for **~400–900 words** for comparisons and explainers (max **~1,200 words** for multi-claim fact-checks).
+- **Hide secondary detail:** Push raw plan IDs, methodology notes, edge-case breakdowns, and supporting tables into `<Details summary="...">` accordions so the main flow stays crisp and scannable.
 
 ## Directory layout
 
@@ -74,12 +87,12 @@ import { Callout, StatGrid, Stat, Details, Sources, Tabs } from "@components/mdx
 
 ## Required 4-step workflow
 
-1. **Write factual first draft** in `~/work/pages/<slug>/index.mdx` (you can scaffold with `grug-page init <slug> --title "..."`). Include all researched facts, numbers, units, dates, URLs, tables, `<Sources>`, and any custom Svelte 5 island in `components/`.
+1. **Check existing pages and write/edit factual draft**: Run `grug-page list` first. If a page on the topic already exists (or the prompt specifies an existing slug), edit `~/work/pages/<slug>/index.mdx` in place (updating `updated: "YYYY-MM-DD"`). Otherwise scaffold with `grug-page init <slug> --title "..."`. Keep the draft tight (~400–900w; max ~1,200w for multi-claim fact-checks), zero-repetition across `StatGrid`/tables/prose, with `<Details>` for raw IDs/methodology, `<Sources>`, and any custom Svelte 5 island in `components/`.
 2. **Run two-stage editorial polish**:
    ```bash
    grug-page polish <slug>
    ```
-   This runs fresh subagent passes (`unslop` then `ultracave`) while preserving `.draft.mdx` and `.unslop.mdx` backups and verifying frontmatter/imports/MDX integrity.
+   This runs fresh subagent passes (`unslop` then `ultracave`) on a staged `.polish-stage.mdx` copy while preserving `.draft.mdx` and `.unslop.mdx` backups and verifying frontmatter/imports/MDX integrity (leaving `index.mdx` untouched on any error or timeout).
 3. **Build and validate**:
    ```bash
    grug-page build <slug>
@@ -94,9 +107,11 @@ import { Callout, StatGrid, Stat, Details, Sources, Tabs } from "@components/mdx
    - Toggle dark mode (`#theme-toggle`) and verify contrast and custom islands look right in both light and dark themes.
    - Interact with any `<Tabs>` or custom Svelte island and check `agent-browser console` / `agent-browser errors` for **zero** console or CSP errors.
    - Fix anything broken and re-run `grug-page build <slug>` if needed.
-   - Always clean up before finishing:
+   - Always clean up before finishing (if you opened a named `--session "$S"`, close that exact session):
      ```bash
      agent-browser close
+     # or, when using a named session:
+     # agent-browser --session "$S" close
      grug-page preview-stop
      ```
 5. **Report back**: Tell the front agent the built `<slug>` and a concise summary of what the page covers so it can call `publish_page` and deliver the live link to the user.

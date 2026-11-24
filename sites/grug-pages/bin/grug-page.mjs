@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   unlinkSync,
@@ -27,6 +28,7 @@ const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const MAX_DIST_BYTES = 25 * 1024 * 1024;
 const DEFAULT_SITE_URL = "https://grug.h14h.com";
 const DEFAULT_POLISH_MODEL = "muse-wonder-full-1.0";
+const DEFAULT_POLISH_TIMEOUT_MS = 180_000;
 const DEFAULT_PREVIEW_STATE = "/tmp/grug-page-preview.json";
 
 const EXTERNAL_HTML_PATTERNS = [
@@ -97,11 +99,29 @@ function loadConfig() {
     process.env.GRUG_POLISH_MODEL || fileCfg.polishModel || DEFAULT_POLISH_MODEL,
   ).trim();
 
+  const rawPolishTimeout = Number(
+    process.env.GRUG_POLISH_TIMEOUT_MS || fileCfg.polishTimeoutMs || DEFAULT_POLISH_TIMEOUT_MS,
+  );
+  const polishTimeoutMs =
+    Number.isFinite(rawPolishTimeout) && rawPolishTimeout > 0
+      ? rawPolishTimeout
+      : DEFAULT_POLISH_TIMEOUT_MS;
+
   const skillsDir = expandHome(
     process.env.GRUG_SKILLS_DIR || fileCfg.skillsDir || join(homedir(), ".config", "muse", "skills"),
   );
 
-  return { configPath, userCode, siteUrl, pagesDir, siteDir, museBin, polishModel, skillsDir };
+  return {
+    configPath,
+    userCode,
+    siteUrl,
+    pagesDir,
+    siteDir,
+    museBin,
+    polishModel,
+    polishTimeoutMs,
+    skillsDir,
+  };
 }
 
 function fail(message, code = 1) {
@@ -272,7 +292,7 @@ function runMusePolishStage({ cfg, stageName, skillPath, targetFile, instruction
     `You are running automated editorial pass "${stageName}" on a single MDX page file.`,
     `Target file: ${targetFile}`,
     "",
-    "Follow the skill instructions below faithfully:",
+    "Follow the skill instructions below faithfully (except where the stricter overrides below take precedence):",
     "--- BEGIN SKILL ---",
     skillText,
     "--- END SKILL ---",
@@ -281,7 +301,7 @@ function runMusePolishStage({ cfg, stageName, skillPath, targetFile, instruction
     instructions,
     "- Read the target file, rewrite it directly in place, and do not create extra files.",
     "- Preserve YAML frontmatter keys (`title`, `subtitle`, `date`, `updated`, `summary`, `tags`) and keep `date`/`updated` in ISO `YYYY-MM-DD` format.",
-    "- NEVER invent or drop facts, numbers, units, dates, URLs, or sources.",
+    "- NEVER invent facts, numbers, units, dates, URLs, or sources, and NEVER drop unique verdicts, numbers, units, dates, verified URLs, or sources (deleting duplicate prose restatements of figures already in StatGrid or a table is required).",
     "- NEVER remove, rename, or alter MDX `import` lines, code blocks, table numbers, or JSX/Svelte component tags and props (including `client:load` directives).",
     "- Keep Markdown headings, links, and tables valid MDX.",
     "- Output a one-line confirmation when done.",
@@ -307,15 +327,18 @@ function runMusePolishStage({ cfg, stageName, skillPath, targetFile, instruction
       cwd: dirname(targetFile),
       stdio: ["ignore", "pipe", "pipe"],
       encoding: "utf8",
-      timeout: 5 * 60_000,
+      timeout: cfg.polishTimeoutMs,
     });
     if (result.error) {
-      fail(`Stage "${stageName}" failed to launch ${cfg.museBin}: ${result.error.message}`);
+      if (result.error.code === "ETIMEDOUT") {
+        throw new Error(`Stage "${stageName}" timed out after ${cfg.polishTimeoutMs}ms.`);
+      }
+      throw new Error(`Stage "${stageName}" failed to launch ${cfg.museBin}: ${result.error.message}`);
     }
     if (result.status !== 0) {
       const detail = (result.stderr || result.stdout || "").trim().slice(0, 800);
       const reason = result.signal ? `terminated by signal ${result.signal}` : `exited with code ${result.status}`;
-      fail(`Stage "${stageName}" ${reason}${detail ? `:\n${detail}` : ""}`);
+      throw new Error(`Stage "${stageName}" ${reason}${detail ? `:\n${detail}` : ""}`);
     }
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
@@ -394,55 +417,84 @@ function cmdPolish(cfg, args) {
 
   const draftBackup = join(pageDir, ".draft.mdx");
   const unslopSnapshot = join(pageDir, ".unslop.mdx");
-  copyFileSync(indexPath, draftBackup);
+  const stagePath = join(pageDir, ".polish-stage.mdx");
 
   const unslopSkill = resolveSkillFile(cfg, "unslop");
   const ultracaveSkill = resolveSkillFile(cfg, "ultracave");
 
-  // Stage 1: unslop
-  runMusePolishStage({
-    cfg,
-    stageName: "unslop",
-    skillPath: unslopSkill,
-    targetFile: indexPath,
-    instructions:
-      "- Rewrite prose from the ground up per unslop rules: kill AI tells, filler, em dashes, promotional fluff, and robotic framing while keeping the writing grounded and direct.",
-  });
+  let unslopText = "";
+  let finalText = "";
+  let polishError = null;
 
-  if (!existsSync(indexPath)) {
-    copyFileSync(draftBackup, indexPath);
-    fail("Stage unslop deleted index.mdx; restored .draft.mdx.");
-  }
-  const unslopText = readFileSync(indexPath, "utf8");
-  const unslopCheck = validateMdxDocument(unslopText, draftText);
-  if (!unslopCheck.ok) {
-    copyFileSync(draftBackup, indexPath);
-    fail(
-      `Stage unslop produced invalid MDX (restored .draft.mdx):\n- ${unslopCheck.errors.join("\n- ")}`,
-    );
-  }
-  writeFileSync(unslopSnapshot, unslopText, "utf8");
+  try {
+    // Stage both passes on .polish-stage.mdx (dotfile ignored by `grug-page build`)
+    // so a timeout, crash, or validation failure leaves index.mdx and any existing .draft.mdx untouched.
+    writeFileSync(stagePath, draftText, "utf8");
 
-  // Stage 2: ultracave
-  runMusePolishStage({
-    cfg,
-    stageName: "ultracave",
-    skillPath: ultracaveSkill,
-    targetFile: indexPath,
-    instructions:
-      "- Compress all prose into crisp ultracave voice. Strip fluff and grammar padding while keeping every fact, number, unit, date, URL, source, frontmatter field, MDX import, table number, code block, and JSX/Svelte component tag/prop 100% intact. Use full sentences wherever a fragment could have two readings.",
-  });
+    // Stage 1: unslop (with anti-bloat & deduplication overrides)
+    runMusePolishStage({
+      cfg,
+      stageName: "unslop",
+      skillPath: unslopSkill,
+      targetFile: stagePath,
+      instructions: [
+        '- Keep all unslop anti-slop rules: cut AI vocabulary, filler, vague attributions, em-dashes, promotional fluff, hedging, and meta-narration (e.g. "I ran it twice...", "I have decent confidence...").',
+        '- CRITICAL OVERRIDE — NEVER expand compact bullet lists or tables into narrative paragraphs (this overrides unslop\'s "convert lists to prose" rule). Keep bullet lists tight and scannable.',
+        "- DEDUPLICATE REPEATED FACTS ACROSS SECTIONS: if a number, price, or spec already appears in StatGrid or a table, DELETE the repetitive prose restatement below it — keep prose only for verdicts, caveats, and tradeoffs not already in the table.",
+        "- WORD-COUNT CAP: Stage 1 must shrink or hold total word count, NEVER inflate it.",
+      ].join("\n"),
+    });
 
-  if (!existsSync(indexPath)) {
-    copyFileSync(unslopSnapshot, indexPath);
-    fail("Stage ultracave deleted index.mdx; restored .unslop.mdx.");
+    if (!existsSync(stagePath)) {
+      throw new Error("Stage unslop deleted .polish-stage.mdx; original index.mdx left untouched.");
+    }
+    unslopText = readFileSync(stagePath, "utf8");
+    const unslopCheck = validateMdxDocument(unslopText, draftText);
+    if (!unslopCheck.ok) {
+      throw new Error(
+        `Stage unslop produced invalid MDX (original index.mdx left untouched):\n- ${unslopCheck.errors.join("\n- ")}`,
+      );
+    }
+
+    // Stage 2: ultracave (true compression + punchy voice)
+    runMusePolishStage({
+      cfg,
+      stageName: "ultracave",
+      skillPath: ultracaveSkill,
+      targetFile: stagePath,
+      instructions: [
+        "- True compression + ultracave voice pass: target ~30-50% tighter prose with crisp grugbrain.dev-style punchy rhythm.",
+        "- Cut remaining filler, throat-clearing, and repetition ruthlessly. Keep bullet lists and tables compact; do not expand them into paragraphs.",
+        "- Keep verdicts, key numbers, units, dates, verified URLs, sources, YAML frontmatter, MDX imports, table numbers, code blocks, and JSX/Svelte component tags/props 100% intact. Use full sentences wherever a fragment could have two readings.",
+      ].join("\n"),
+    });
+
+    if (!existsSync(stagePath)) {
+      throw new Error("Stage ultracave deleted .polish-stage.mdx; original index.mdx left untouched.");
+    }
+    finalText = readFileSync(stagePath, "utf8");
+    const finalCheck = validateMdxDocument(finalText, draftText);
+    if (!finalCheck.ok) {
+      throw new Error(
+        `Stage ultracave produced invalid MDX (original index.mdx left untouched):\n- ${finalCheck.errors.join("\n- ")}`,
+      );
+    }
+
+    // Both stages succeeded and validated: preserve original .draft.mdx (never overwrite an existing backup),
+    // record Stage 1 snapshot, and atomically swap staged output into index.mdx.
+    if (!existsSync(draftBackup)) {
+      writeFileSync(draftBackup, draftText, "utf8");
+    }
+    writeFileSync(unslopSnapshot, unslopText, "utf8");
+    renameSync(stagePath, indexPath);
+  } catch (err) {
+    polishError = err;
+  } finally {
+    rmSync(stagePath, { force: true });
   }
-  const finalText = readFileSync(indexPath, "utf8");
-  const finalCheck = validateMdxDocument(finalText, draftText);
-  if (!finalCheck.ok) {
-    fail(
-      `Stage ultracave produced invalid MDX (backups kept at .draft.mdx and .unslop.mdx):\n- ${finalCheck.errors.join("\n- ")}`,
-    );
+
+  if (polishError) {
+    fail(polishError instanceof Error ? polishError.message : String(polishError));
   }
 
   const sDraft = countStats(draftText);
