@@ -584,3 +584,74 @@ HOME="${fakeHome}" bash -c "$cmd"
 		pinchyAgent.searchIndex.close();
 	}
 });
+
+test("two-layer dark-mode Grug icon assets, adaptive favicon.svg, and grug-page progress-leak guard", async () => {
+	const markMod = (await import(new URL("../sites/grug-pages/src/lib/grug-mark.ts", import.meta.url).href)) as {
+		GRUG_MARK_FILL_PATH: string;
+		GRUG_MARK_PATH: string;
+		GRUG_MARK_VIEWBOX: string;
+		renderGrugBadgeSvg: (options?: {
+			background?: string;
+			foreground?: string;
+			interiorFill?: string;
+			stroke?: string;
+			rounded?: boolean;
+		}) => string;
+	};
+
+	assert.equal(markMod.GRUG_MARK_VIEWBOX, "69 51 886 886");
+	assert.ok(markMod.GRUG_MARK_FILL_PATH.startsWith("M 391 139.0 "));
+	assert.ok(markMod.GRUG_MARK_FILL_PATH.endsWith("832 680.8"));
+
+	// Light-mode PNG badges keep warm paper + charcoal ink (rounded gets subtle stroke; apple-touch-icon has none)
+	const lightFaviconSvg = markMod.renderGrugBadgeSvg({ rounded: true });
+	assert.match(lightFaviconSvg, /fill="#faf9f7"/);
+	assert.match(lightFaviconSvg, /stroke="rgba\(28, 25, 23, 0\.12\)"/);
+	assert.match(lightFaviconSvg, /fill="#1c1917"/);
+	assert.ok(!lightFaviconSvg.includes(markMod.GRUG_MARK_FILL_PATH));
+
+	const appleIconSvg = markMod.renderGrugBadgeSvg({ rounded: false });
+	assert.match(appleIconSvg, /rx="0"/);
+	assert.doesNotMatch(appleIconSvg, /stroke=/);
+	assert.match(appleIconSvg, /fill="#faf9f7"/);
+	assert.match(appleIconSvg, /fill="#1c1917"/);
+
+	// Dark-mode two-layer badge renders lit interior fill under obsidian ink
+	const darkBadgeSvg = markMod.renderGrugBadgeSvg({
+		background: "#1b1d20",
+		stroke: "rgba(255, 255, 255, 0.14)",
+		interiorFill: "#d6d3d1",
+		foreground: "#131416",
+	});
+	assert.match(darkBadgeSvg, /fill="#1b1d20"/);
+	assert.match(darkBadgeSvg, /stroke="rgba\(255, 255, 255, 0\.14\)"/);
+	assert.ok(darkBadgeSvg.includes(`fill="#d6d3d1" fill-rule="evenodd" d="${markMod.GRUG_MARK_FILL_PATH}"`));
+	assert.ok(darkBadgeSvg.includes(`fill="#131416" fill-rule="evenodd" d="${markMod.GRUG_MARK_PATH}"`));
+	assert.ok(darkBadgeSvg.indexOf(markMod.GRUG_MARK_FILL_PATH) < darkBadgeSvg.indexOf(markMod.GRUG_MARK_PATH));
+
+	// GrugMark.astro renders two layers in order: interior fill then ink linework
+	const grugMarkAstro = readFileSync(new URL("../sites/grug-pages/src/components/GrugMark.astro", import.meta.url), "utf8");
+	assert.match(grugMarkAstro, /<path d=\{GRUG_MARK_FILL_PATH\} fill-rule="evenodd" class="fill-transparent dark:fill-\[#d6d3d1\]" \/>/);
+	assert.match(grugMarkAstro, /<path d=\{GRUG_MARK_PATH\} fill-rule="evenodd" class="fill-\[#1c1917\] dark:fill-\[#131416\]" \/>/);
+	assert.ok(grugMarkAstro.indexOf("GRUG_MARK_FILL_PATH") < grugMarkAstro.indexOf("d={GRUG_MARK_PATH}"));
+
+	// Adaptive public/favicon.svg supports light & dark two-layer styling with both paths
+	const faviconSvg = readFileSync(new URL("../sites/grug-pages/public/favicon.svg", import.meta.url), "utf8");
+	assert.match(faviconSvg, /#faf9f7/);
+	assert.match(faviconSvg, /rgba\(28, 25, 23, 0\.12\)/);
+	assert.match(faviconSvg, /#1c1917/);
+	assert.match(faviconSvg, /@media \(prefers-color-scheme: dark\)/);
+	assert.match(faviconSvg, /#1b1d20/);
+	assert.match(faviconSvg, /rgba\(255, 255, 255, 0\.14\)/);
+	assert.match(faviconSvg, /#d6d3d1/);
+	assert.match(faviconSvg, /#131416/);
+	assert.ok(faviconSvg.includes(markMod.GRUG_MARK_FILL_PATH));
+	assert.ok(faviconSvg.includes(markMod.GRUG_MARK_PATH));
+	assert.ok(faviconSvg.indexOf(markMod.GRUG_MARK_FILL_PATH) < faviconSvg.indexOf(markMod.GRUG_MARK_PATH));
+
+	// grug-page SKILL.md forbids leaking internal pipeline/QA mechanics into progress updates
+	const grugPageSkill = readFileSync(new URL("../bots/grug/skills/grug-page/SKILL.md", import.meta.url), "utf8");
+	assert.match(grugPageSkill, /report_progress/);
+	assert.match(grugPageSkill, /desktop\/mobile\/light\/dark/);
+	assert.match(grugPageSkill, /Building a comparison page for you/);
+});

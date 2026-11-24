@@ -115,13 +115,6 @@ export function formatWorkerProgress(items: WorkerItem[], startedAt: number | un
 	return `${prefix} — latest: ${latest}`;
 }
 
-const WORKER_PROGRESS_TASK = `Right now you're partway through a task for the user, working on it in the background while you keep talking with them. You'll get the task brief, elapsed time, what you already told them, and your newest activity on it. Reply with JSON only: {"status": "...", "message": "..." or null}.
-
-- "status": a few plain words on where it stands, at most 80 characters.
-- "message": one crisp, concrete line (at most 160 characters) strictly following your voice guide above — match its capitalization, grammar, and brevity (do not switch to lowercase if your voice uses normal capitalization). State what changed, what you found, or what you're on now. Never repeat what you already said.
-- You are one assistant doing several things at once: speak in the first person ("I'm checking…", "Still comparing shorter frames…", "I looked at the photo…"). Never mention a worker, background worker, agent, subagent, delegating, your inbox, context, memory, or compaction, and never name tools, files, paths, shell commands, or secrets.
-- Return null for "message" if nothing meaningful happened yet unless the prompt notes it has been quiet and asks for a brief confirmation that work is still moving.`;
-
 /** Whether fresh worker activity is worth interrupting a side conversation for. */
 export function interruptWorthy(activity: string): boolean {
 	return INTERRUPT_WORTHY.test(activity);
@@ -220,7 +213,9 @@ export const SIDE_CHAT_RULE =
 
 /** Voice-compliant system prompt for live worker progress updates. */
 export function workerProgressPrompt(prompts?: PromptResolver): string {
-	return `${(prompts?.read("voice") ?? readPrompt("voice")).trim()}\n\n${WORKER_PROGRESS_TASK}`;
+	const voice = (prompts?.read("voice") ?? readPrompt("voice")).trim();
+	const task = (prompts?.read("worker-progress") ?? readPrompt("worker-progress")).trim();
+	return `${voice}\n\n${task}`;
 }
 
 export async function generateWorkerProgressUpdate(options: {
@@ -276,7 +271,8 @@ export async function generateWorkerProgressUpdate(options: {
 		const raw = reply.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
 		const parsed = JSON.parse(/\{[\s\S]*\}/.exec(raw)?.[0] ?? "{}") as { status?: string; message?: string | null };
 		const status = typeof parsed.status === "string" ? parsed.status.trim().slice(0, 120) : undefined;
-		const message = typeof parsed.message === "string" ? parsed.message.trim().slice(0, 300) : undefined;
+		const rawMessage = typeof parsed.message === "string" ? parsed.message.trim() : undefined;
+		const message = rawMessage && rawMessage !== "NO_UPDATE" ? rawMessage.slice(0, 300) : undefined;
 		return { ...(status ? { status } : {}), ...(message ? { message } : {}) };
 	} catch (error) {
 		console.error(`[pclaw] worker progress ${options.workerName}: ${error instanceof Error ? error.message : error}`);

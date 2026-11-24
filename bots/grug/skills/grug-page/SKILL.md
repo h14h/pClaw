@@ -100,3 +100,7 @@ import { Callout, StatGrid, Stat, Details, Sources, Tabs } from "@components/mdx
      grug-page preview-stop
      ```
 5. **Report back**: Tell the front agent the built `<slug>` and a concise summary of what the page covers so it can call `publish_page` and deliver the live link to the user.
+
+## Progress updates (keep internal steps invisible)
+
+Never mention internal page-building or verification steps (`grug-page`, `polish`, `unslop`, `ultracave`, Astro, MDX, `preview`, `agent-browser`, or checking desktop/mobile/light/dark/console/CSP) in `report_progress` or any user-facing status updates. At most send one plain user-facing progress note when switching from research to building the page (e.g. `"Building a comparison page for you"`), then stay quiet through polish, build, and visual checks until returning the final slug.

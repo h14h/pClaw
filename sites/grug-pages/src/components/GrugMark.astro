@@ -1,5 +1,5 @@
 ---
-import { GRUG_MARK_PATH, GRUG_MARK_VIEWBOX } from "@lib/grug-mark";
+import { GRUG_MARK_FILL_PATH, GRUG_MARK_PATH, GRUG_MARK_VIEWBOX } from "@lib/grug-mark";
 
 interface Props {
   class?: string;
@@ -12,11 +12,12 @@ const { class: className = "size-6", title } = Astro.props;
 <svg
   xmlns="http://www.w3.org/2000/svg"
   viewBox={GRUG_MARK_VIEWBOX}
-  fill="currentColor"
+  fill="none"
   aria-hidden={title ? undefined : "true"}
   role={title ? "img" : undefined}
   aria-label={title}
   class={className}
 >
-  <path fill-rule="evenodd" d={GRUG_MARK_PATH} />
+  <path d={GRUG_MARK_FILL_PATH} fill-rule="evenodd" class="fill-transparent dark:fill-[#d6d3d1]" />
+  <path d={GRUG_MARK_PATH} fill-rule="evenodd" class="fill-[#1c1917] dark:fill-[#131416]" />
 </svg>

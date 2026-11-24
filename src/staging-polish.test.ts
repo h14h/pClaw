@@ -24,7 +24,7 @@ import { quickSearchExtension } from "./extensions/quick-search.ts";
 import { type WorkerOptions, Workers } from "./extensions/workers.ts";
 import { MUSE, museTranscript, parseMuseSession } from "./muse.ts";
 import { createPromptResolver, filterFrontPrompt } from "./prompts.ts";
-import { formatWorkerProgress, startWorkerProgressMonitor, workerProgressPrompt } from "./worker-progress.ts";
+import { formatWorkerProgress, generateWorkerProgressUpdate, startWorkerProgressMonitor, workerProgressPrompt } from "./worker-progress.ts";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -813,4 +813,51 @@ test("single-owner mode (no config.users) computes static cross-client tail hint
 		await agent.harness.close(context);
 		agent.searchIndex.close();
 	}
+});
+
+test("worker-progress.md suppresses internal page-building/QA leaks for both Pinchy and Grug, and suppresses NO_UPDATE", async () => {
+	const rawPrompt = readFileSync(new URL("./prompts/worker-progress.md", import.meta.url), "utf8");
+	assert.match(rawPrompt, /desktop\/mobile\/light\/dark/);
+	assert.match(rawPrompt, /Building a comparison page for you/);
+	assert.doesNotMatch(rawPrompt, /\bgrug\b|ultracave|unslop/i);
+
+	const pinchyPrompt = workerProgressPrompt(createPromptResolver({ profileDir: "profiles/muse-ember" }));
+	assert.match(pinchyPrompt, /desktop\/mobile\/light\/dark/);
+	assert.doesNotMatch(pinchyPrompt, /You are Grug/);
+
+	const grugResolver = createPromptResolver({ personaDir: "bots/grug" });
+	const grugPrompt = workerProgressPrompt(grugResolver);
+	assert.match(grugPrompt, /You are Grug/);
+	assert.match(grugPrompt, /desktop\/mobile\/light\/dark/);
+
+	const { faux, models } = setupFaux();
+	faux.setResponses([
+		fauxAssistantMessage(JSON.stringify({ status: "Finalizing page", message: "NO_UPDATE" })),
+		fauxAssistantMessage(JSON.stringify({ status: "Finalizing page", message: null })),
+	]);
+	const r1 = await generateWorkerProgressUpdate({
+		models,
+		config: { provider: "faux", model: "faux-1" },
+		prompts: grugResolver,
+		workerName: "compare",
+		brief: "Compare NAS cases",
+		elapsedMs: 90_000,
+		told: ["Building a comparison page for you"],
+		activity: "checked desktop, mobile, light, dark",
+	});
+	assert.equal(r1.status, "Finalizing page");
+	assert.equal(r1.message, undefined);
+
+	const r2 = await generateWorkerProgressUpdate({
+		models,
+		config: { provider: "faux", model: "faux-1" },
+		prompts: grugResolver,
+		workerName: "compare",
+		brief: "Compare NAS cases",
+		elapsedMs: 95_000,
+		told: ["Building a comparison page for you"],
+		activity: "checked desktop, mobile, light, dark",
+	});
+	assert.equal(r2.status, "Finalizing page");
+	assert.equal(r2.message, undefined);
 });

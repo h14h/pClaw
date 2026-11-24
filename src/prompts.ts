@@ -73,6 +73,11 @@ const PROMPT_METADATA = {
 		name: "Guidance templates",
 		description: "The advice the decision model picks between, shown to the front model as a hint it can ignore.",
 	},
+	"worker-progress": {
+		filename: "worker-progress.md",
+		name: "Worker progress updates",
+		description: "How live background progress updates are phrased while a worker is running.",
+	},
 } as const;
 
 export type PromptName = keyof typeof PROMPT_METADATA;
@@ -321,6 +326,13 @@ export const prompts: Record<PromptName, PromptSpec> = {
 		},
 		name: PROMPT_METADATA.guidance.name,
 		description: PROMPT_METADATA.guidance.description,
+	},
+	"worker-progress": {
+		get file() {
+			return defaultResolver().file("worker-progress");
+		},
+		name: PROMPT_METADATA["worker-progress"].name,
+		description: PROMPT_METADATA["worker-progress"].description,
 	},
 };
 
