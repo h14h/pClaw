@@ -125,7 +125,11 @@ export function filterFrontPrompt(text: string, flags: PromptFeatureFlags = {}):
 		out = out
 			.replace(/ and private web pages/g, "")
 			.replace(/, files, or pages\./g, ", or files.")
-			.replace(/ For a web page, say so in the brief\./g, "");
+			.replace(/ For a web page, say so in the brief\./g, "")
+			.replace(/, build interactive web pages/g, "")
+			.replace(/, publish built pages with `publish_page`/g, "")
+			.replace(/ For reports, comparisons, guides, explainers, itineraries, checklists, or interactive tools, tell worker build page \(not `\.md` file unless user asks raw markdown\)\./g, "")
+			.replace(/ Worker finishes and reports built page `slug`\? Call `publish_page` with `slug`, then share live clickable link\. Never invent or guess URL before `publish_page` succeeds\./g, "");
 	}
 	return out.replace(/\n{3,}/g, "\n\n").trim();
 }
@@ -137,7 +141,9 @@ export function filterFormattingPrompt(text: string, flags: PromptFeatureFlags =
 		out = out.replace(/ \/ `start_job`/g, "");
 	}
 	if (flags.allowPages === false) {
-		out = out.replace(/ and offer the full writeup as a page\./g, " and offer to send the full writeup as a file.");
+		out = out
+			.replace(/ and offer the full writeup as a page\./g, " and offer to send the full writeup as a file.")
+			.replace(/ Worker built page and gave `slug`\? Call `publish_page`, share live clickable link in Telegram, never guess URL first\./g, "");
 	}
 	return out.trim();
 }
@@ -148,11 +154,19 @@ const REMOTE_BROWSER_GUIDANCE = [
 	"- Never attempt to solve CAPTCHAs or anti-bot challenges; stop and report if blocked.",
 ].join("\n");
 
+export const REMOTE_PAGES_GUIDANCE = [
+	"## Publishing pages (`grug-page`)",
+	'- Whenever producing a substantive report, comparison, deep-dive explainer, itinerary, checklist, guide, or interactive tool (anything beyond a brief chat answer), **build an Astro page** using `read_skill` for `grug-page` instead of writing/sending a `.md` file. Only write a `.md` file if the user explicitly asks for raw markdown or plain text.',
+	"- Follow the full `grug-page` workflow: write factual `~/work/pages/<slug>/index.mdx` draft -> `grug-page polish <slug>` -> `grug-page build <slug>` -> `grug-page preview <slug> --daemon` + `agent-browser` visual check (desktop & mobile, light & dark, zero console/CSP errors), then run `agent-browser close` and `grug-page preview-stop`.",
+	"- Report the built `slug` and a brief summary in your final response so pclaw can publish it and share the live link.",
+].join("\n");
+
 /**
  * Adapt `worker.md` for an isolated remote SSH VM sandbox (no pclaw systemd service rules,
- * rely on Muse's native `web_search` and `web_fetch` instead of host CLI tools, and add `agent-browser` guidance).
+ * rely on Muse's native `web_search` and `web_fetch` instead of host CLI tools, add `agent-browser`
+ * guidance, and when `allowPages` is true add `grug-page` Astro publishing guidance).
  */
-export function filterWorkerPrompt(text: string, options: { remote?: boolean } = {}): string {
+export function filterWorkerPrompt(text: string, options: { remote?: boolean; allowPages?: boolean } = {}): string {
 	let out = text;
 	if (options.remote === true) {
 		out = out
@@ -163,6 +177,9 @@ export function filterWorkerPrompt(text: string, options: { remote?: boolean } =
 			out = out.replace(/^(- Open a page with `web_fetch`[^\n]*)$/m, `$1\n${REMOTE_BROWSER_GUIDANCE}`);
 		} else {
 			out = `${out.trimEnd()}\n\n${REMOTE_BROWSER_GUIDANCE}`;
+		}
+		if (options.allowPages === true) {
+			out = `${out.trimEnd()}\n\n${REMOTE_PAGES_GUIDANCE}`;
 		}
 	}
 	return out.replace(/\n{3,}/g, "\n\n").trim();

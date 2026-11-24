@@ -16,11 +16,12 @@ import {
 } from "@earendil-works/pi-durable";
 import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
 import { HostCircuitBreaker } from "./circuit-breaker.ts";
-import { type Config, isPagesEnabled, isT3Enabled, paths } from "./config.ts";
+import { type Config, isPagesEnabled, isT3Enabled, paths, resolvePagesDir } from "./config.ts";
 import { episodesExtension } from "./extensions/episodes.ts";
 import { filesExtension, FileSenders } from "./extensions/files.ts";
 import { followUpsExtension, type TimeZoneResolver } from "./extensions/follow-ups.ts";
 import { memoryExtension } from "./extensions/memory.ts";
+import { pagesExtension } from "./extensions/pages.ts";
 import { quickSearchExtension } from "./extensions/quick-search.ts";
 import { askOfRequest, reactionsExtension } from "./extensions/reactions.ts";
 import { recallExtension } from "./extensions/recall.ts";
@@ -251,9 +252,14 @@ export async function openAgent(
 				? ":memory:"
 				: paths.indexDb);
 	const searchIndex = options.searchIndex ?? new SearchIndex(indexDbPath);
+	const hasRemotePagesUsers =
+		users.enabled &&
+		isPagesEnabled(config, "ssh") &&
+		users.all().some((user) => (user.sandbox?.type ?? "local") === "ssh" && Boolean(user.pagesCode?.trim()));
 	const allowPages =
-		isPagesEnabled(config, "local") &&
-		(!users.enabled || users.all().some((user) => (user.sandbox?.type ?? "local") !== "ssh"));
+		(isPagesEnabled(config, "local") &&
+			(!users.enabled || users.all().some((user) => (user.sandbox?.type ?? "local") !== "ssh"))) ||
+		hasRemotePagesUsers;
 
 	const workers = options.workers ?? workerOptions(config, paths, promptResolver);
 	prepareWorkspace(workers);
@@ -314,11 +320,21 @@ export async function openAgent(
 	const sessions: { current?: Jobs } = {};
 
 	const promptFlags = { allowT3: t3Enabled, allowPages };
+	const resolvePromptFlags = async (
+		read: Parameters<typeof addressOf>[0],
+		conversationId: ConversationId,
+		ctx: Context,
+	) => {
+		const addr = await addressOf(read, conversationId, ctx);
+		const resolved = sandboxes.forAddress(addr);
+		return { allowT3: t3Enabled, allowPages: resolved.allowPages };
+	};
 	registerDefault(
 		soulExtension({
 			timeZone: config.timeZone,
 			prompts: promptResolver,
 			flags: promptFlags,
+			resolveFlags: resolvePromptFlags,
 			users,
 			harness: current,
 			...(options.now === undefined ? {} : { now: options.now }),
@@ -407,6 +423,25 @@ export async function openAgent(
 			},
 		}),
 	);
+	if (hasRemotePagesUsers) {
+		const pagesDir = resolvePagesDir(config, options.homeDir);
+		install(
+			pagesExtension({
+				config,
+				pagesDir,
+				resolveSandbox: async (read, conversationId, ctx) => {
+					const addr = await addressOf(read, conversationId, ctx);
+					const resolved = sandboxes.forAddress(addr);
+					return {
+						address: addr,
+						user: resolved.user,
+						sandbox: resolved.sandbox,
+						allowPages: resolved.allowPages,
+					};
+				},
+			}),
+		);
+	}
 	const memory = memoryExtension({
 		notes: notesResolver,
 		models,
@@ -478,7 +513,9 @@ export async function openAgent(
 	}
 
 	// Last, so the app's rules end the system prompt.
-	registerDefault(formattingExtension({ prompts: promptResolver, flags: promptFlags }));
+	registerDefault(
+		formattingExtension({ prompts: promptResolver, flags: promptFlags, resolveFlags: resolvePromptFlags }),
+	);
 
 	/** Discord-only tools excluded statically from non-Discord conversations (e.g. Telegram DMs). */
 	const DISCORD_ONLY_TOOLS = ["ping_owner"];
@@ -491,6 +528,14 @@ export async function openAgent(
 				const tool = toolsByName.get(name);
 				if (tool !== undefined) removedTools.push(tool);
 			}
+		}
+		const publishPageTool = toolsByName.get("publish_page");
+		if (publishPageTool !== undefined) {
+			const resolved = sandboxes.forAddress(address);
+			const canPublishRemotePage = Boolean(
+				resolved.allowPages && resolved.user?.pagesCode?.trim() && resolved.sandbox.syncPages !== undefined,
+			);
+			if (!canPublishRemotePage) removedTools.push(publishPageTool);
 		}
 		const addedExtensions = channel === undefined ? undefined : channelExtMap.get(channel);
 		return {

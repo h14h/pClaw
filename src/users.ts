@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { home as defaultHome, type UserConfig } from "./config.ts";
+import { home as defaultHome, type UserConfig, validatePagesCode } from "./config.ts";
 import { Notes } from "./extensions/notes.ts";
 
 export type ExternalChannel = "telegram" | "discord";
@@ -57,9 +57,17 @@ export class UserRegistry {
 		this.homeDir = homeDir;
 		const entries = Object.entries(users ?? {});
 		this.enabled = entries.length > 0;
+		const seenPagesCodes = new Set<string>();
 		for (const [id, cfg] of entries) {
 			if (!SAFE_USER_ID.test(id)) {
 				throw new Error(`Invalid user id "${id}": use alphanumeric characters, dots, dashes, or underscores.`);
+			}
+			if (cfg.pagesCode !== undefined) {
+				const code = validatePagesCode(cfg.pagesCode, id);
+				if (seenPagesCodes.has(code)) {
+					throw new Error(`Duplicate pagesCode "${code}" in users config.`);
+				}
+				seenPagesCodes.add(code);
 			}
 			const resolved: ResolvedUser = { ...cfg, id };
 			this.#byId.set(id, resolved);

@@ -12,7 +12,7 @@ import { startDiscord } from "./channels/discord.ts";
 import { startTelegram } from "./channels/telegram.ts";
 import { chatInTerminal } from "./channels/terminal.ts";
 import { HostCircuitBreaker } from "./circuit-breaker.ts";
-import { type Config, ensureHome, loadConfig, paths, saveConfig } from "./config.ts";
+import { type Config, ensureHome, loadConfig, paths, resolvePagesDir, saveConfig } from "./config.ts";
 import { startContextKeeper } from "./context-keeper.ts";
 import { startNotesCleanup } from "./notes-cleanup.ts";
 import { FileCredentialStore } from "./credentials.ts";
@@ -20,6 +20,7 @@ import { startDashboard } from "./dashboard/server.ts";
 import { Notes } from "./extensions/notes.ts";
 import { workerOptions } from "./extensions/workers.ts";
 import { MUSE } from "./muse.ts";
+import { startPagesServer } from "./pages-server.ts";
 import { listProfiles, loadProfile, registerProfiles } from "./profiles.ts";
 import { useProfile } from "./prompts.ts";
 import { chooseService, serviceReady, services } from "./search.ts";
@@ -182,6 +183,14 @@ async function start(): Promise<void> {
 	const discord = config.discordToken === undefined ? undefined : await startDiscord(agent, config, context);
 	const telegram = config.telegramToken === undefined ? undefined : await startTelegram(agent, config, context);
 	const dashboard = await startDashboard({ agent, config, models, notes, workers, port: config.dashboardPort }, context);
+	const pagesDir = resolvePagesDir(config);
+	const pagesServer =
+		config.pagesPort === undefined
+			? undefined
+			: await startPagesServer({ pagesDir, port: config.pagesPort, host: "127.0.0.1" });
+	if (pagesServer !== undefined) {
+		console.log(`[pclaw] pages server listening on http://127.0.0.1:${pagesServer.port} (dir ${pagesDir})`);
+	}
 	const sessionResetEnabled = config.sessionReset?.enabled === true;
 	const compactThreshold = sessionResetEnabled
 		? (config.sessionReset?.emergencyCompactTokens ?? 110_000)
@@ -235,6 +244,7 @@ async function start(): Promise<void> {
 		workerProgress.stop();
 		await discord?.stop();
 		await telegram?.stop();
+		await pagesServer?.stop();
 		await dashboard.stop();
 		await agent.harness.close(context);
 		agent.searchIndex.close();

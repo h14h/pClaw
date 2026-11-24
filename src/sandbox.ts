@@ -1,21 +1,49 @@
 import { spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import {
+	copyFileSync,
+	createWriteStream,
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+	renameSync,
+	rmSync,
+	statSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { basename, join, resolve, sep } from "node:path";
+import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Config, UserSandboxConfig } from "./config.ts";
 import { isPagesEnabled } from "./config.ts";
 import { runLocalWorker, type WorkerOptions, type WorkerResult } from "./extensions/workers.ts";
 import { MUSE, musePreamble, museTranscript } from "./muse.ts";
 import { type LiveWorkerHandle, PCLAW_PWD_PREFIX, runMuseMsp } from "./muse-msp.ts";
+import { SLUG } from "./pages.ts";
 import type { ResolvedUser, UserRegistry } from "./users.ts";
 
 const REPORT_LIMIT = 12_000;
 const DEFAULT_SSH_WORK_DIR = "~/work";
 const DEFAULT_SSH_INBOX_DIR = "~/inbox";
+const DEFAULT_SSH_SITE_DIR = "~/site";
 const DEFAULT_SSH_MUSE_BIN = "~/.local/bin/muse";
 const SSH_FILE_TIMEOUT_MS = 120_000;
 const SSH_CLEANUP_TIMEOUT_MS = 5_000;
+export const MAX_PAGES_BYTES = 25 * 1024 * 1024;
+const MAX_PAGES_ARCHIVE_BYTES = 26 * 1024 * 1024;
+
+const EXTERNAL_HTML_PATTERNS = [
+	/<script\b[^>]*\bsrc\s*=\s*["']?\s*(https?:)?\/\//gi,
+	/<link\b[^>]*\brel\s*=\s*["']?stylesheet["']?[^>]*\bhref\s*=\s*["']?\s*(https?:)?\/\//gi,
+	/<link\b[^>]*\bhref\s*=\s*["']?\s*(https?:)?\/\/[^>]*\brel\s*=\s*["']?stylesheet["']?/gi,
+	/<(img|iframe|source|video|audio|embed|object|track)\b[^>]*\b(src|srcset|data)\s*=\s*["']?\s*(https?:)?\/\//gi,
+];
+const EXTERNAL_CSS_PATTERNS = [
+	/url\(\s*["']?\s*(https?:)?\/\//gi,
+	/@import\s+(?:url\(\s*)?["']?\s*(https?:)?\/\//gi,
+];
 /** Best-effort remote teardown for any headless browser processes left on an SSH VM after a worker run. */
 export const REMOTE_BROWSER_CLEANUP_COMMAND =
 	'export PATH="$HOME/.local/bin:$PATH"; agent-browser close >/dev/null 2>&1 || true; pkill -f \'[a]gent-browser-linux|[.]agent-browser/browsers/|[c]hrome-headless-shell|[c]hromium\' >/dev/null 2>&1 || true';
@@ -82,6 +110,7 @@ export interface WorkerSandbox {
 	runWorker(req: SandboxRunRequest): Promise<WorkerResult>;
 	putFile(localPath: string, filename: string, signal?: AbortSignal): Promise<string>;
 	getFile(filePath: string, maxBytes: number, signal?: AbortSignal): Promise<SandboxFile>;
+	syncPages?(targetDir: string, slug: string, signal?: AbortSignal): Promise<{ fileCount: number; totalBytes: number }>;
 }
 
 /** Strict POSIX single-quote escaping: safe for arbitrary strings (newlines, $, backticks, quotes). */
@@ -208,7 +237,9 @@ export type SshSandboxOptions = {
 	host: string;
 	workDir?: string;
 	inboxDir?: string;
+	siteDir?: string;
 	museBin?: string;
+	allowPages?: boolean;
 	/** Injectable for tests (defaults to "ssh"). */
 	sshCommand?: string;
 	spawnFn?: typeof spawn;
@@ -305,11 +336,94 @@ export function buildRemoteGetCommand(workDir: string, inboxDir: string, remoteP
 	].join("; ");
 }
 
+/** Build the remote POSIX shell command that streams `<siteDir>/dist` as a gzipped tar archive to stdout. */
+export function buildRemoteSyncPagesCommand(siteDir: string = DEFAULT_SSH_SITE_DIR): string {
+	const distPath = `${siteDir.replace(/\/+$/, "")}/dist`;
+	const distExpr = remotePathExpr(distPath);
+	return [
+		"set -e",
+		`dist=${distExpr}`,
+		'[ -d "$dist" ] || { echo "Built site dist directory not found: $dist" >&2; exit 2; }',
+		'tar -czf - -C "$dist" .',
+	].join("; ");
+}
+
+/**
+ * Verify an extracted pages staging directory before atomically swapping it into production:
+ * - only regular files and directories (no symlinks, FIFOs, sockets, or devices)
+ * - total size <= 25 MiB
+ * - `<stagingDir>/index.html` and `<stagingDir>/<slug>/index.html` exist
+ * - no HTML or CSS file references external `http(s)://` or `//` script/stylesheet/media assets
+ */
+export function validateStagedPages(stagingDir: string, slug: string): { fileCount: number; totalBytes: number } {
+	if (!SLUG.test(slug)) {
+		throw new Error(`Invalid page slug "${slug}". Use 1-63 lowercase letters, digits, or hyphens.`);
+	}
+	const root = resolve(stagingDir);
+	let fileCount = 0;
+	let totalBytes = 0;
+	const problems: string[] = [];
+
+	const walk = (dir: string) => {
+		for (const name of readdirSync(dir)) {
+			const full = join(dir, name);
+			const rel = full.slice(root.length + 1);
+			const st = lstatSync(full);
+			if (st.isSymbolicLink()) {
+				throw new Error(`Symlink rejected in published pages: ${rel}`);
+			}
+			if (st.isDirectory()) {
+				walk(full);
+				continue;
+			}
+			if (!st.isFile()) {
+				throw new Error(`Unsupported file type rejected in published pages: ${rel}`);
+			}
+			fileCount += 1;
+			totalBytes += st.size;
+			if (totalBytes > MAX_PAGES_BYTES) {
+				throw new Error(
+					`Published pages exceed size limit (${totalBytes} bytes > ${MAX_PAGES_BYTES} bytes).`,
+				);
+			}
+			const ext = extname(full).toLowerCase();
+			if (ext === ".html" || ext === ".htm" || ext === ".css") {
+				const text = readFileSync(full, "utf8");
+				const patterns = ext === ".css" ? EXTERNAL_CSS_PATTERNS : EXTERNAL_HTML_PATTERNS;
+				for (const pattern of patterns) {
+					pattern.lastIndex = 0;
+					const match = pattern.exec(text);
+					if (match) {
+						problems.push(`${rel} loads external asset: ${match[0].slice(0, 100)}`);
+					}
+				}
+			}
+		}
+	};
+
+	walk(root);
+
+	const homeIndex = join(root, "index.html");
+	if (!existsSync(homeIndex) || !lstatSync(homeIndex).isFile()) {
+		throw new Error("Published pages missing required root index.html.");
+	}
+	const slugIndex = join(root, slug, "index.html");
+	if (!existsSync(slugIndex) || !lstatSync(slugIndex).isFile()) {
+		throw new Error(`Published pages missing required "${slug}/index.html". Did the worker run \`grug-page build ${slug}\`?`);
+	}
+	if (problems.length > 0) {
+		throw new Error(`Published pages blocked by external asset check:\n- ${problems.join("\n- ")}`);
+	}
+	return { fileCount, totalBytes };
+}
+
 export function createSshSandbox(options: SshSandboxOptions): WorkerSandbox {
 	const host = validateSshHost(options.host);
 	const workDir = options.workDir?.trim() || DEFAULT_SSH_WORK_DIR;
 	const inboxDir = options.inboxDir?.trim() || DEFAULT_SSH_INBOX_DIR;
+	const siteDir = options.siteDir?.trim() || DEFAULT_SSH_SITE_DIR;
 	const museBin = options.museBin?.trim() || DEFAULT_SSH_MUSE_BIN;
+	const allowPages = options.allowPages === true;
 	const sshCommand = options.sshCommand ?? "ssh";
 	const spawnFn = options.spawnFn ?? spawn;
 	const retryDelayMs = options.retryDelayMs ?? SSH_RETRY_DELAY_MS;
@@ -371,7 +485,7 @@ export function createSshSandbox(options: SshSandboxOptions): WorkerSandbox {
 				promptFile: req.workerOptions.promptFile,
 				cliFile: req.workerOptions.cliFile,
 				skills: [],
-				allowPages: false,
+				allowPages,
 				remote: true,
 			});
 			const prompt = `${first ? `${preamble}\n\n---\n\n` : ""}Message from pclaw:\n\n${req.message}`;
@@ -489,6 +603,137 @@ export function createSshSandbox(options: SshSandboxOptions): WorkerSandbox {
 			};
 			return retrySshFailure(attempt, signal, retryDelayMs);
 		},
+		async syncPages(targetDir, slug, signal) {
+			if (!SLUG.test(slug)) {
+				throw new Error(`Invalid page slug "${slug}". Use 1-63 lowercase letters, digits, or hyphens.`);
+			}
+			const resolvedTarget = resolve(targetDir);
+			const parentDir = dirname(resolvedTarget);
+			mkdirSync(parentDir, { recursive: true });
+
+			const remoteCmd = buildRemoteSyncPagesCommand(siteDir);
+			const archivePath = join(
+				parentDir,
+				`.pages-archive-${slug}-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.tar.gz`,
+			);
+			const stagingDir = mkdtempSync(join(parentDir, `.pages-stage-${slug}-`));
+
+			const downloadArchive = () => {
+				const timeout = AbortSignal.timeout(SSH_FILE_TIMEOUT_MS);
+				const combined = signal === undefined ? timeout : AbortSignal.any([timeout, signal]);
+
+				return new Promise<void>((resolvePromise, rejectPromise) => {
+					const out = createWriteStream(archivePath, { mode: 0o600 });
+					const child = spawnFn(sshCommand, [...SSH_BASE_ARGS, host, remoteCmd], {
+						stdio: ["ignore", "pipe", "pipe"],
+						env: sshEnv(),
+						signal: combined,
+					});
+					let receivedBytes = 0;
+					let overflow = false;
+					let stderr = "";
+					let settled = false;
+					const fail = (err: Error) => {
+						if (settled) return;
+						settled = true;
+						out.destroy();
+						rejectPromise(err);
+					};
+
+					out.on("error", (err) => {
+						child.kill("SIGKILL");
+						fail(new Error(`Failed writing pages archive: ${err.message}`));
+					});
+					child.stdout.on("data", (chunk: Buffer) => {
+						receivedBytes += chunk.byteLength;
+						if (receivedBytes > MAX_PAGES_ARCHIVE_BYTES) {
+							overflow = true;
+							child.kill("SIGKILL");
+							return;
+						}
+						out.write(chunk);
+					});
+					child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
+					child.on("error", (err) => {
+						if (!overflow) fail(new Error(`SSH syncPages from ${host} failed: ${err.message}`));
+					});
+					child.on("close", (code) => {
+						if (settled) return;
+						if (overflow) {
+							fail(new Error(`Pages archive exceeds size limit (${MAX_PAGES_ARCHIVE_BYTES} bytes).`));
+							return;
+						}
+						if (code !== 0) {
+							fail(
+								new SshExitError(
+									stderr.trim() || `SSH syncPages from ${host} exited ${code}.`,
+									code,
+								),
+							);
+							return;
+						}
+						out.end(() => {
+							if (!settled) {
+								settled = true;
+								resolvePromise();
+							}
+						});
+					});
+				});
+			};
+
+			const extractArchive = () =>
+				new Promise<void>((resolveExtract, rejectExtract) => {
+					const timeout = AbortSignal.timeout(SSH_FILE_TIMEOUT_MS);
+					const combined = signal === undefined ? timeout : AbortSignal.any([timeout, signal]);
+					const child = spawn("tar", ["-xzf", archivePath, "--no-same-owner", "--no-same-permissions", "-C", stagingDir], {
+						stdio: ["ignore", "ignore", "pipe"],
+						signal: combined,
+					});
+					let stderr = "";
+					child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
+					child.on("error", (err) => rejectExtract(new Error(`Failed to extract pages archive: ${err.message}`)));
+					child.on("close", (code) => {
+						if (code !== 0) {
+							rejectExtract(new Error(`tar extraction failed (exit ${code}): ${stderr.trim() || "unknown error"}`));
+							return;
+						}
+						resolveExtract();
+					});
+				});
+
+			try {
+				await retrySshFailure(downloadArchive, signal, retryDelayMs);
+				await extractArchive();
+				const stats = validateStagedPages(stagingDir, slug);
+
+				if (existsSync(resolvedTarget)) {
+					const backupDir = join(
+						parentDir,
+						`.pages-old-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+					);
+					renameSync(resolvedTarget, backupDir);
+					try {
+						renameSync(stagingDir, resolvedTarget);
+					} catch (swapErr) {
+						try {
+							renameSync(backupDir, resolvedTarget);
+						} catch {}
+						throw swapErr;
+					}
+					rmSync(backupDir, { recursive: true, force: true });
+				} else {
+					renameSync(stagingDir, resolvedTarget);
+				}
+
+				return stats;
+			} finally {
+				rmSync(archivePath, { force: true });
+				if (existsSync(stagingDir)) {
+					rmSync(stagingDir, { recursive: true, force: true });
+				}
+			}
+		},
 	};
 }
 
@@ -538,6 +783,7 @@ export class SandboxManager {
 						...(spec.workDir === undefined ? {} : { workDir: spec.workDir }),
 						...(spec.inboxDir === undefined ? {} : { inboxDir: spec.inboxDir }),
 						...(spec.museBin === undefined ? {} : { museBin: spec.museBin }),
+						allowPages: isPagesEnabled(this.#config, "ssh", user),
 						...(this.#sshCommand === undefined ? {} : { sshCommand: this.#sshCommand }),
 						...(this.#spawnFn === undefined ? {} : { spawnFn: this.#spawnFn }),
 					})
@@ -559,11 +805,16 @@ export class SandboxManager {
 		const user = this.#users.resolveAddress(address);
 		const sandbox = this.sandboxForUser(user);
 		const sessionDir = user === undefined ? this.#defaultSessionDir : this.#users.pathsFor(user.id).workerSessions;
+		const allowPages =
+			user !== undefined
+				? isPagesEnabled(this.#config, sandbox.type, user)
+				: isPagesEnabled(this.#config, "local") &&
+					(!this.#users.enabled || this.#users.all().some((u) => (u.sandbox?.type ?? "local") !== "ssh"));
 		return {
 			user,
 			sandbox,
 			sessionDir,
-			allowPages: isPagesEnabled(this.#config, sandbox.type),
+			allowPages,
 		};
 	}
 

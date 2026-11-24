@@ -32,7 +32,21 @@ export const paths = {
 	voice: join(home, "voice"),
 	/** Inbound files (PDFs, documents, etc.) saved for workers to inspect. */
 	inbox: join(home, "inbox"),
+	/** Published static web pages served by the dedicated pages server, keyed by user pagesCode. */
+	publishedPages: join(home, "published-pages"),
 };
+
+/** Valid obfuscated per-user URL code for remote published pages. */
+export const PAGES_CODE = /^[a-z0-9]{6,24}$/;
+
+/** Validate a user's `pagesCode` (6–24 lowercase alphanumeric characters). */
+export function validatePagesCode(code: string, userId?: string): string {
+	if (typeof code !== "string" || !PAGES_CODE.test(code)) {
+		const who = userId === undefined ? "" : ` for user "${userId}"`;
+		throw new Error(`Invalid pagesCode${who}: expected 6-24 lowercase alphanumeric characters (/^[a-z0-9]{6,24}$/).`);
+	}
+	return code;
+}
 
 export type UserSandboxConfig =
 	| { type: "local"; workDir?: string }
@@ -43,6 +57,8 @@ export interface UserConfig {
 	timeZone?: string;
 	telegram?: string;
 	discord?: string;
+	/** Obfuscated URL prefix (`/<pagesCode>/`) for this user's remotely published static pages. */
+	pagesCode?: string;
 	sandbox?: UserSandboxConfig;
 }
 
@@ -177,6 +193,10 @@ export type Config = {
 	dashboardPort: number;
 	/** Where published pages are reachable, as the person would open them. Unset disables publish_page unless pagePublisher is set. */
 	pagesUrl?: string;
+	/** Dedicated static-only HTTP server port (bound strictly to 127.0.0.1) for serving published pages. */
+	pagesPort?: number;
+	/** Root directory on disk where published pages live (`<pagesDir>/<pagesCode>/`). Defaults to `join(home, "published-pages")`. */
+	pagesDir?: string;
 	/** A publisher command for pages (`<command> <slug> <dir>`, prints the URL). Unset: pclaw serves them itself. */
 	pagePublisher?: string;
 	/** How long a conversation stays quiet before the memory pass updates the notes from it. */
@@ -273,9 +293,27 @@ export function isT3Enabled(config: Pick<Config, "allowT3" | "t3Url">): boolean 
 	return typeof config.t3Url === "string" && config.t3Url.trim() !== "";
 }
 
-/** Whether publish_page is enabled for this config and sandbox type. */
-export function isPagesEnabled(config: Pick<Config, "pagesUrl" | "pagePublisher">, sandboxType: "local" | "ssh" = "local"): boolean {
-	if (sandboxType === "ssh") return false;
+/** Resolve the root directory for published static pages. */
+export function resolvePagesDir(config: Pick<Config, "pagesDir">, homeDir = home): string {
+	const configured = config.pagesDir?.trim();
+	return configured !== undefined && configured !== "" ? configured : join(homeDir, "published-pages");
+}
+
+/** Whether publish_page is enabled for this config, sandbox type, and optional user. */
+export function isPagesEnabled(
+	config: Pick<Config, "pagesUrl" | "pagePublisher" | "users">,
+	sandboxType: "local" | "ssh" = "local",
+	user?: Pick<UserConfig, "pagesCode">,
+): boolean {
+	if (sandboxType === "ssh") {
+		if (!config.pagesUrl?.trim()) return false;
+		if (user !== undefined) {
+			return typeof user.pagesCode === "string" && PAGES_CODE.test(user.pagesCode.trim());
+		}
+		return Object.values(config.users ?? {}).some(
+			(u) => typeof u.pagesCode === "string" && PAGES_CODE.test(u.pagesCode.trim()),
+		);
+	}
 	return Boolean(config.pagesUrl?.trim() || config.pagePublisher?.trim());
 }
 
@@ -320,6 +358,9 @@ export function loadConfig(): Config {
 		workerModel: env.PCLAW_WORKER_MODEL,
 		workerThinkingLevel: env.PCLAW_WORKER_THINKING as ModelThinkingLevel | undefined,
 		dashboardPort: env.PCLAW_DASHBOARD_PORT === undefined ? undefined : Number(env.PCLAW_DASHBOARD_PORT),
+		pagesUrl: env.PCLAW_PAGES_URL,
+		pagesPort: env.PCLAW_PAGES_PORT === undefined ? undefined : Number(env.PCLAW_PAGES_PORT),
+		pagesDir: env.PCLAW_PAGES_DIR,
 		tavilyApiKey: env.TAVILY_API_KEY,
 		parallelApiKey: env.PARALLEL_API_KEY,
 		allowT3: parseBoolEnv(env.PCLAW_ALLOW_T3),
@@ -331,8 +372,20 @@ export function loadConfig(): Config {
 	};
 	const defined = Object.fromEntries(Object.entries(fromEnv).filter(([, value]) => value !== undefined));
 	const merged = { ...defaults, ...readStored(), ...defined };
+	if (merged.users !== undefined) {
+		for (const [id, user] of Object.entries(merged.users)) {
+			if (user.pagesCode !== undefined) validatePagesCode(user.pagesCode, id);
+		}
+	}
 	const profile = loadProfile(merged.profile);
-	return { ...merged, provider: profile.provider, model: profile.model, thinkingLevel: profile.thinkingLevel, ...defined };
+	return {
+		...merged,
+		pagesDir: resolvePagesDir(merged),
+		provider: profile.provider,
+		model: profile.model,
+		thinkingLevel: profile.thinkingLevel,
+		...defined,
+	};
 }
 
 export function saveConfig(patch: StoredConfig): void {

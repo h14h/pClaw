@@ -3,6 +3,7 @@ import {
 	AssistantEntry,
 	type ConversationId,
 	defineExtension,
+	type DocumentReader,
 	type EntryRecord,
 	type Harness,
 	section,
@@ -19,10 +20,17 @@ import type { UserRegistry } from "../users.ts";
 
 const CROSS_CLIENT_WINDOW_MS = 24 * 60 * 60_000;
 
+export type PromptFlagsResolver = (
+	read: DocumentReader,
+	conversationId: ConversationId,
+	context: Context,
+) => Promise<PromptFeatureFlags>;
+
 export type SoulOptions = {
 	timeZone: string;
 	prompts?: PromptResolver;
 	flags?: PromptFeatureFlags;
+	resolveFlags?: PromptFlagsResolver;
 	users?: UserRegistry;
 	harness?: { current?: Harness };
 	now?: () => number;
@@ -129,7 +137,11 @@ export function soulExtension(timeZoneOrOptions: string | SoulOptions) {
 				"front",
 				async (input, context) => {
 					const channel = await channelOf(input.read, input.conversationId, context);
-					const flags = { ...opts.flags, ...(channel === undefined ? {} : { channel }) };
+					const baseFlags =
+						opts.resolveFlags !== undefined
+							? await opts.resolveFlags(input.read, input.conversationId, context)
+							: opts.flags;
+					const flags = { ...baseFlags, ...(channel === undefined ? {} : { channel }) };
 					return opts.prompts !== undefined ? opts.prompts.frontPrompt(flags) : frontPrompt(flags);
 				},
 				{ tag: false },
@@ -152,16 +164,24 @@ export function soulExtension(timeZoneOrOptions: string | SoulOptions) {
  * be. Install it last so it ends the system prompt: the model follows rules it read last far more reliably, which
  * `pnpm prose-lab` showed when the same rules sat before the notes.
  */
-export function formattingExtension(options?: { prompts?: PromptResolver; flags?: PromptFeatureFlags }) {
+export function formattingExtension(options?: {
+	prompts?: PromptResolver;
+	flags?: PromptFeatureFlags;
+	resolveFlags?: PromptFlagsResolver;
+}) {
 	return defineExtension({
 		name: "pclaw.formatting",
 		sections: [
 			section("formatting", async (input, context) => {
 				const channel = await channelOf(input.read, input.conversationId, context);
 				if (channel === undefined) return undefined;
+				const flags =
+					options?.resolveFlags !== undefined
+						? await options.resolveFlags(input.read, input.conversationId, context)
+						: options?.flags;
 				return options?.prompts !== undefined
-					? options.prompts.readFormatting(channel, options.flags)
-					: readFormatting(channel, options?.flags);
+					? options.prompts.readFormatting(channel, flags)
+					: readFormatting(channel, flags);
 			}),
 		],
 	});

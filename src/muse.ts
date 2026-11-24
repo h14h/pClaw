@@ -70,13 +70,22 @@ export function musePreamble(options: {
 	/** The local workspace, where images are saved. */
 	cwd?: string;
 }): string {
-	const workerPrompt = filterWorkerPrompt(readFileSync(options.promptFile, "utf8"), { remote: options.remote });
+	const workerPrompt = filterWorkerPrompt(readFileSync(options.promptFile, "utf8"), {
+		remote: options.remote,
+		allowPages: options.allowPages,
+	});
 	if (options.remote === true) {
+		const remoteAllowPages = options.allowPages === true;
 		return [
 			workerPrompt,
 			"## Tools here",
 			"Use your built-in `web_search` and `web_fetch` tools when instructions say `search` or `read_page`.",
 			"Don't schedule anything (no cron jobs or reminders): pclaw handles follow-ups.",
+			...(remoteAllowPages
+				? [
+						"For substantive reports, comparisons, guides, explainers, itineraries, checklists, or interactive tools, use `read_skill` for `grug-page` to build and inspect an Astro page instead of writing a `.md` file, then report the built `slug` and brief summary so pclaw can publish it.",
+					]
+				: []),
 			"Put files you create in this workspace directory and report their exact paths so pclaw can send them to the user.",
 			imageContract("~/work/"),
 		].join("\n\n");
