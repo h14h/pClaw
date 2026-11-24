@@ -24,7 +24,7 @@ import { Notes } from "./extensions/notes.ts";
 import { type WorkerOptions, workerOptions } from "./extensions/workers.ts";
 import { MUSE, musePreamble, museTranscript, parseMuseSession } from "./muse.ts";
 import { cleanupNotesForUsers } from "./notes-cleanup.ts";
-import { createPromptResolver } from "./prompts.ts";
+import { createPromptResolver, filterWorkerPrompt } from "./prompts.ts";
 import {
 	buildRemoteMuseServeCommand,
 	createLocalSandbox,
@@ -765,7 +765,9 @@ HOME="${fakeVmHome}" exec bash -c "$cmd"
 	});
 	assert.match(remotePreamble, /web_search/);
 	assert.match(remotePreamble, /web_fetch/);
-	assert.match(remotePreamble, /agent-browser/);
+	assert.match(remotePreamble, /100% standalone/);
+	assert.match(remotePreamble, /read_skill` for `agent-browser`/);
+	assert.match(remotePreamble, /agent-browser open/);
 	assert.match(remotePreamble, /agent-browser close/);
 	assert.match(remotePreamble, /CAPTCHA/);
 	assert.doesNotMatch(remotePreamble, /worker-cli\.ts/);
@@ -778,7 +780,21 @@ HOME="${fakeVmHome}" exec bash -c "$cmd"
 		allowPages: false,
 		remote: false,
 	});
+	assert.match(localPreamble, /100% standalone/);
 	assert.doesNotMatch(localPreamble, /agent-browser/);
+
+	// Verify filterWorkerPrompt directly for remote: true vs remote: false.
+	const rawWorkerMd = readFileSync(fakeWorkerOpts.promptFile, "utf8");
+	const remoteFiltered = filterWorkerPrompt(rawWorkerMd, { remote: true });
+	assert.match(remoteFiltered, /100% standalone/);
+	assert.match(remoteFiltered, /final report to pclaw/);
+	assert.match(remoteFiltered, /read_skill` for `agent-browser`/);
+	assert.match(remoteFiltered, /agent-browser snapshot -i/);
+	assert.match(remoteFiltered, /agent-browser close/);
+	assert.doesNotMatch(remoteFiltered, /systemctl --user restart pclaw/);
+	const localFiltered = filterWorkerPrompt(rawWorkerMd, { remote: false });
+	assert.match(localFiltered, /100% standalone/);
+	assert.doesNotMatch(localFiltered, /agent-browser/);
 
 	// Set host secrets in process.env to prove SSH sandbox NEVER leaks them into ssh subprocess env.
 	const prevTavily = process.env.TAVILY_API_KEY;

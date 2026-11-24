@@ -94,8 +94,17 @@ function stripEmojiModifiers(emoji: string): string {
 	return emoji.replace(/[\uFE0E\uFE0F\u{1F3FB}-\u{1F3FF}]/gu, "");
 }
 
+/** Also strip U+200D ZWJ so ZWJ-dropped sequences (e.g. `👨💻` instead of `👨‍💻`) match Telegram's canonical ZWJ emojis. */
+function stripEmojiModifiersAndZwj(emoji: string): string {
+	return stripEmojiModifiers(emoji).replace(/\u200D/g, "");
+}
+
 const CANONICAL_REACTION_MAP = new Map<string, string>(
 	TELEGRAM_REACTION_EMOJIS.map((emoji) => [stripEmojiModifiers(emoji), emoji]),
+);
+
+const CANONICAL_REACTION_ZWJ_MAP = new Map<string, string>(
+	TELEGRAM_REACTION_EMOJIS.map((emoji) => [stripEmojiModifiersAndZwj(emoji), emoji]),
 );
 
 /**
@@ -138,6 +147,7 @@ export const REACTION_FALLBACK_ENTRIES: readonly [string, string][] = [
 	["⏸", "😐"],
 	["💤", "😴"],
 	// Code / tech / tools
+	["👨💻", "👨‍💻"],
 	["💻", "👨‍💻"],
 	["🖥", "👨‍💻"],
 	["⌨", "👨‍💻"],
@@ -290,9 +300,10 @@ const SEMANTIC_REACTION_MAP = new Map<string, string>(
 	REACTION_FALLBACK_ENTRIES.map(([source, target]) => [stripEmojiModifiers(source), target]),
 );
 
-/** True if `emoji` (modulo variation selectors or skin-tone modifiers) is natively accepted by Telegram. */
+/** True if `emoji` (modulo variation selectors, skin-tone modifiers, or dropped ZWJ) is natively accepted by Telegram. */
 export function isTelegramReactionEmoji(emoji: string): boolean {
-	return CANONICAL_REACTION_MAP.has(stripEmojiModifiers(emoji.trim()));
+	const trimmed = emoji.trim();
+	return CANONICAL_REACTION_MAP.has(stripEmojiModifiers(trimmed)) || CANONICAL_REACTION_ZWJ_MAP.has(stripEmojiModifiersAndZwj(trimmed));
 }
 
 /**
@@ -304,7 +315,7 @@ export function normalizeTelegramReaction(emoji: string, fallback = "👍"): str
 	const trimmed = emoji.trim();
 	if (trimmed === "") return undefined;
 	const key = stripEmojiModifiers(trimmed);
-	const exact = CANONICAL_REACTION_MAP.get(key);
+	const exact = CANONICAL_REACTION_MAP.get(key) ?? CANONICAL_REACTION_ZWJ_MAP.get(stripEmojiModifiersAndZwj(trimmed));
 	if (exact !== undefined) return exact;
 	const mapped = SEMANTIC_REACTION_MAP.get(key);
 	if (mapped !== undefined) return mapped;

@@ -237,6 +237,17 @@ test("normalizeTelegramReaction enforces Telegram's exact ReactionTypeEmoji whit
 	assert.equal(normalizeTelegramReaction("🖥️"), "👨‍💻");
 	assert.equal(normalizeTelegramReaction("🚀"), "🔥");
 
+	// ZWJ-stripped forms normalize back to Telegram's exact native ZWJ emoji instead of falling back to 👀/👌.
+	assert.equal(normalizeTelegramReaction("👨💻", "👀"), "👨‍💻");
+	assert.equal(normalizeTelegramReaction("👨🏽💻", "👌"), "👨‍💻");
+	assert.equal(normalizeTelegramReaction("❤🔥", "👀"), "❤‍🔥");
+	assert.equal(normalizeTelegramReaction("❤️🔥", "👀"), "❤‍🔥");
+	assert.equal(normalizeTelegramReaction("🤷♂️", "👀"), "🤷‍♂️");
+	assert.equal(normalizeTelegramReaction("🤷♀️", "👀"), "🤷‍♀️");
+	assert.ok(isTelegramReactionEmoji("👨💻"));
+	assert.ok(isTelegramReactionEmoji("❤🔥"));
+	assert.ok(isTelegramReactionEmoji("🤷♂️"));
+
 	// Unknown topical emojis fall back to a valid Telegram emoji (never REACTION_INVALID).
 	const fallbackResult = normalizeTelegramReaction("🦖");
 	assert.ok(fallbackResult !== undefined && whitelist.has(fallbackResult));

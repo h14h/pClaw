@@ -437,3 +437,175 @@ test("interrupt-worthy activity: failures, retries, blockers, and pivots; not ro
 	assert.equal(interruptWorthy("ran web_search\nresult: 10 results"), false);
 	assert.equal(interruptWorthy("said: found three good places, writing it up"), false);
 });
+
+test("progress monitor: skips posting when worker completes while update LLM call is in flight", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pclaw-progress-race-"));
+	try {
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		let onProgressStart: (() => void) | undefined;
+		let releaseProgress: (() => void) | undefined;
+		const origComplete = models.completeSimple.bind(models);
+		models.completeSimple = async (...args) => {
+			onProgressStart?.();
+			await new Promise<void>((resolve) => {
+				releaseProgress = resolve;
+			});
+			return origComplete(...args);
+		};
+		faux.setResponses([
+			() => fauxAssistantMessage(JSON.stringify({ status: "Checking", message: "Still checking prices." })),
+		]);
+		const items: WorkerItem[] = [{ kind: "tool", at: Date.now(), name: "web_search", args: { query: "iphone 16" }, result: "5 results" }];
+		const cfg = config({ telegramToken: undefined });
+		const decisions = decisionClient({ logFile: join(dir, "decisions.jsonl") });
+		const agent = await openAgent(
+			await openNodeSqliteStorage(join(dir, "pclaw.sqlite")),
+			{ config: cfg, models, notes: new Notes(join(dir, "notes.md")), decisions, homeDir: join(dir, "home"), workerItems: () => items },
+			context,
+		);
+		const updates: WorkerProgressUpdateEvent[] = [];
+		const unregister = agent.progressSurfaces.register("telegram", {
+			async update(event) {
+				updates.push(event);
+			},
+		});
+		let fakeNow = Date.now();
+		const monitor = startWorkerProgressMonitor(
+			agent,
+			{ models, config: cfg, decisions, everyMs: 60_000, refreshMs: 10_000, firstUpdateMs: 10_000, quietConfirmMs: 100_000, now: () => fakeNow },
+			context,
+		);
+		try {
+			const conversation = await agent.conversationFor("telegram:dm:910", context);
+			const startedAt = fakeNow;
+			await conversation.commit(async (tx) => {
+				(await tx.doc(Workers, conversation.id)).workers.apple = {
+					sessionId: "sess-apple",
+					brief: "check iphone 16 price",
+					status: "working",
+					startedAt,
+					updatedAt: startedAt,
+					ask: "telegram:70",
+				};
+			}, context);
+
+			const started = new Promise<void>((resolve) => {
+				onProgressStart = resolve;
+			});
+			fakeNow += 20_000;
+			const tickPromise = monitor.tick();
+			await started;
+
+			// Worker finishes while generateWorkerProgressUpdate is still in flight.
+			await conversation.commit(async (tx) => {
+				(await tx.doc(Workers, conversation.id)).workers.apple!.status = "idle";
+			}, context);
+			releaseProgress?.();
+			await tickPromise;
+
+			assert.equal(updates.length, 0, "progress update must not post after worker completion");
+		} finally {
+			monitor.stop();
+			unregister();
+			await agent.harness.close(context);
+		}
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("progress monitor: widens cadence to backoffRefreshMs after 2 posted updates on long runs", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pclaw-progress-backoff-"));
+	try {
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		let replyCount = 0;
+		faux.setResponses(
+			Array.from({ length: 10 }, () => () => {
+				replyCount += 1;
+				return fauxAssistantMessage(JSON.stringify({ status: `Step ${replyCount}`, message: `Update #${replyCount}.` }));
+			}),
+		);
+		const items: WorkerItem[] = [{ kind: "tool", at: Date.now(), name: "web_search", args: { query: "step 1" }, result: "ok" }];
+		const cfg = config({ telegramToken: undefined });
+		const decisions = decisionClient({ logFile: join(dir, "decisions.jsonl") });
+		const agent = await openAgent(
+			await openNodeSqliteStorage(join(dir, "pclaw.sqlite")),
+			{ config: cfg, models, notes: new Notes(join(dir, "notes.md")), decisions, homeDir: join(dir, "home"), workerItems: () => items },
+			context,
+		);
+		const updates: WorkerProgressUpdateEvent[] = [];
+		const unregister = agent.progressSurfaces.register("telegram", {
+			async update(event) {
+				updates.push(event);
+			},
+		});
+		let fakeNow = Date.now();
+		const monitor = startWorkerProgressMonitor(
+			agent,
+			{
+				models,
+				config: cfg,
+				decisions,
+				everyMs: 60_000,
+				firstUpdateMs: 30_000,
+				refreshMs: 45_000,
+				backoffRefreshMs: 120_000,
+				quietConfirmMs: 180_000,
+				stallMs: 240_000,
+				now: () => fakeNow,
+			},
+			context,
+		);
+		try {
+			const conversation = await agent.conversationFor("telegram:dm:911", context);
+			const startedAt = fakeNow;
+			await conversation.commit(async (tx) => {
+				(await tx.doc(Workers, conversation.id)).workers.deep = {
+					sessionId: "sess-deep",
+					brief: "long deep research job",
+					status: "working",
+					startedAt,
+					updatedAt: startedAt,
+					ask: "telegram:80",
+				};
+			}, context);
+
+			// Update 1 at +30s
+			fakeNow += 30_000;
+			await monitor.tick();
+			assert.equal(updates.length, 1);
+
+			// Update 2 at +45s
+			items.push({ kind: "tool", at: fakeNow, name: "web_fetch", args: { url: "https://a.test" }, result: "ok" });
+			fakeNow += 45_000;
+			await monitor.tick();
+			assert.equal(updates.length, 2);
+
+			// After 2 posted updates, +45s and +90s are held back by the 120s backoff window.
+			items.push({ kind: "tool", at: fakeNow, name: "web_fetch", args: { url: "https://b.test" }, result: "ok" });
+			fakeNow += 45_000;
+			await monitor.tick();
+			assert.equal(updates.length, 2, "+45s after 2nd update should be suppressed by backoff");
+
+			items.push({ kind: "tool", at: fakeNow, name: "web_fetch", args: { url: "https://c.test" }, result: "ok" });
+			fakeNow += 45_000;
+			await monitor.tick();
+			assert.equal(updates.length, 2, "+90s after 2nd update should still be suppressed by backoff");
+
+			// At +120s since 2nd update, update 3 posts cleanly.
+			fakeNow += 30_000;
+			await monitor.tick();
+			assert.equal(updates.length, 3, "+120s after 2nd update should post update #3");
+		} finally {
+			monitor.stop();
+			unregister();
+			await agent.harness.close(context);
+		}
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});

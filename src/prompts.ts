@@ -143,7 +143,7 @@ export function filterFormattingPrompt(text: string, flags: PromptFeatureFlags =
 }
 
 const REMOTE_BROWSER_GUIDANCE = [
-	"- Use `agent-browser` (`open <url>`, `snapshot -i`, `click @ref`, `screenshot <path>`, `close`) when `web_fetch` misses JS-rendered content or prices, when a public search form needs interaction, or when capturing a visual/product image to save and report back.",
+	'- You have the `agent-browser` skill installed for live headless Chromium browsing: run `read_skill` for `agent-browser`, then e.g. `agent-browser open "<url>" && agent-browser snapshot -i` whenever `web_fetch` misses JS-rendered store prices/pages, when a public government/county/assessor lookup portal needs interaction, or when capturing a visual/product screenshot to save and report back.',
 	"- Always run `agent-browser close` before finishing.",
 	"- Never attempt to solve CAPTCHAs or anti-bot challenges; stop and report if blocked.",
 ].join("\n");

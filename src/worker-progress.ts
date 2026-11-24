@@ -11,6 +11,10 @@ import { type PromptResolver, readPrompt } from "./prompts.ts";
 
 const SECRETS = /(password|passwd|token|secret|api[_-]?key|authorization)/i;
 const DEFAULT_QUIET_CONFIRM_MS = 105_000;
+/** After this many posted progress updates in one worker run, widen spacing to avoid chatter on long runs. */
+export const DEFAULT_BACKOFF_AFTER_UPDATES = 2;
+/** Widened minimum spacing between normal progress updates after `DEFAULT_BACKOFF_AFTER_UPDATES` updates. */
+export const DEFAULT_BACKOFF_REFRESH_MS = 120_000;
 /** No new worker activity for this long is a stall worth interrupting a side conversation for. */
 export const STALL_MS = 180_000;
 /** Activity that's worth breaking into a side conversation for: a failure, a snag, a retry, a blocker, a pivot. */
@@ -286,6 +290,8 @@ type TrackedRun = {
 	lastNoteAt?: number;
 	position: number;
 	told: string[];
+	/** Number of progress updates posted for this worker run (drives cadence backoff on long runs). */
+	postedCount: number;
 	/** Worker items seen so far, and when that count last grew: for telling a stall. */
 	seen: number;
 	lastActivityAt: number;
@@ -300,6 +306,10 @@ export type WorkerProgressMonitorOptions = {
 	everyMs?: number;
 	refreshMs?: number;
 	firstUpdateMs?: number;
+	/** Widened minimum spacing between updates after `backoffAfterUpdates` posted updates (default 120s). */
+	backoffRefreshMs?: number;
+	/** Number of posted updates after which cadence widens to `backoffRefreshMs` (default 2). */
+	backoffAfterUpdates?: number;
 	quietConfirmMs?: number;
 	stallMs?: number;
 	now?: () => number;
@@ -319,6 +329,8 @@ export function startWorkerProgressMonitor(
 	const everyMs = options.everyMs ?? Math.max(5, options.config.jobPollSeconds) * 1000;
 	const refreshMs = options.refreshMs ?? Math.max(10, options.config.jobProgressSeconds) * 1000;
 	const firstUpdateMs = options.firstUpdateMs ?? Math.min(refreshMs, 30_000);
+	const backoffAfterUpdates = options.backoffAfterUpdates ?? DEFAULT_BACKOFF_AFTER_UPDATES;
+	const backoffRefreshMs = options.backoffRefreshMs ?? Math.max(refreshMs, DEFAULT_BACKOFF_REFRESH_MS);
 	const quietConfirmMs = options.quietConfirmMs ?? DEFAULT_QUIET_CONFIRM_MS;
 	const stallMs = options.stallMs ?? STALL_MS;
 	const nowFn = options.now ?? Date.now;
@@ -345,9 +357,22 @@ export function startWorkerProgressMonitor(
 
 	const tracked = new Map<string, TrackedRun>();
 	let running = false;
+	let stopped = false;
+	const stopController = new AbortController();
+
+	const isWorkerStillActive = async (
+		conversationId: ConversationId,
+		name: string,
+		sessionId: string,
+		run: WorkerRecord["run"],
+	): Promise<boolean> => {
+		if (stopped || context.abortSignal?.aborted === true) return false;
+		const latest = (await agent.harness.snapshot(Workers, conversationId, context))?.workers[name];
+		return latest !== undefined && latest.status === "working" && latest.sessionId === sessionId && latest.run === run;
+	};
 
 	const tick = async () => {
-		if (running) return;
+		if (running || stopped || context.abortSignal?.aborted === true) return;
 		running = true;
 		try {
 			const now = nowFn();
@@ -371,6 +396,7 @@ export function startWorkerProgressMonitor(
 							lastCheckedAt: worker.startedAt ?? now,
 							position: 0,
 							told: [],
+							postedCount: 0,
 							seen: 0,
 							lastActivityAt: worker.startedAt ?? now,
 							stallNoted: false,
@@ -395,12 +421,27 @@ export function startWorkerProgressMonitor(
 					const stalledMs = now - state.lastActivityAt;
 					// A stall is noted once it's actually been said; until then every check may still say it.
 					const stalled = !state.stallNoted && stalledMs >= stallMs;
+					const errors = freshActivity !== "" && interruptWorthy(freshActivity);
 					const topicAt = Math.max(startedAt, worker.touchedAt ?? 0);
 					const replyTo = worker.ask === undefined ? {} : { replyTo: worker.ask };
 					const decisionId = `worker-progress:${name}:${worker.sessionId}:${items.length}`;
 
 					// They're talking about something else: only a failure, a snag, or a bad stall is worth breaking in for.
 					const side = await sideChat(conversationId, worker, topicAt, now);
+
+					// Cadence backoff on long runs: after `backoffAfterUpdates` posted updates, widen minimum spacing
+					// unless a stall, quiet-confirm, or side-chat failure/retry warrants speaking sooner.
+					if (
+						state.postedCount >= backoffAfterUpdates &&
+						state.lastNoteAt !== undefined &&
+						now - state.lastNoteAt < backoffRefreshMs &&
+						!stalled &&
+						!quietDue &&
+						!(side !== undefined && errors)
+					) {
+						continue;
+					}
+
 					const settle = () => {
 						state.position = items.length;
 						state.lastCheckedAt = now;
@@ -416,7 +457,6 @@ export function startWorkerProgressMonitor(
 					}
 
 					// One read on all three: how the timing looks, what the work is doing, and what the conversation is doing.
-					const errors = freshActivity !== "" && interruptWorthy(freshActivity);
 					let decided: Decided | undefined;
 					if (options.decisions.configured) {
 						decided = await options.decisions.ask({
@@ -476,9 +516,20 @@ export function startWorkerProgressMonitor(
 						continue;
 					}
 
+					// Skip generating an update if the worker already finished while d1/sideChat was in flight.
+					if (!(await isWorkerStillActive(conversationId, name, worker.sessionId, worker.run))) {
+						activeKeys.delete(key);
+						tracked.delete(key);
+						continue;
+					}
+
 					const hint = guided && decided !== undefined && side === undefined ? workerProgressGuidance(decided.answers, agent.prompts) : undefined;
 					const activity =
 						side !== undefined ? freshActivity : freshActivity || describeActivity(items.slice(-4)) || formatWorkerProgress(items, state.startedAt, now);
+					const genSignal =
+						context.abortSignal === undefined
+							? AbortSignal.any([stopController.signal, AbortSignal.timeout(30_000)])
+							: AbortSignal.any([context.abortSignal, stopController.signal, AbortSignal.timeout(30_000)]);
 					const { status, message } = await generateWorkerProgressUpdate({
 						models: options.models,
 						config: options.config,
@@ -492,7 +543,15 @@ export function startWorkerProgressMonitor(
 						quietConfirm: side === undefined && quietDue && !stalled,
 						...(side === undefined ? {} : { sideChat: side }),
 						...(stalled ? { stalledMs } : {}),
+						signal: genSignal,
 					});
+
+					// Re-check right before posting so a progress bubble can never land after the worker completed or stopped.
+					if (!(await isWorkerStillActive(conversationId, name, worker.sessionId, worker.run))) {
+						activeKeys.delete(key);
+						tracked.delete(key);
+						continue;
+					}
 
 					settle();
 					let posted = false;
@@ -509,6 +568,7 @@ export function startWorkerProgressMonitor(
 							})
 							.catch((error: unknown) => console.error(`[pclaw] progress surface ${channel}/${name}`, error));
 						state.lastNoteAt = now;
+						state.postedCount += 1;
 						state.told = [...state.told, message].slice(-5);
 						posted = true;
 						if (stalled) state.stallNoted = true;
@@ -537,5 +597,12 @@ export function startWorkerProgressMonitor(
 	};
 
 	const timer = setInterval(() => void tick().catch((error: unknown) => console.error("[pclaw] worker progress", error)), everyMs);
-	return { stop: () => clearInterval(timer), tick };
+	return {
+		stop: () => {
+			stopped = true;
+			clearInterval(timer);
+			stopController.abort();
+		},
+		tick,
+	};
 }

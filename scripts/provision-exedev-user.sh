@@ -119,6 +119,18 @@ ssh "${SSH_OPTS[@]}" "$VM_HOST" '
   agent-browser --version
 '
 
+# 6. Register agent-browser's core skill in Muse at user scope (idempotent).
+echo "==> Registering agent-browser user-scope Muse skill on '${VM_HOST}'"
+ssh "${SSH_OPTS[@]}" "$VM_HOST" '
+  set -euo pipefail
+  if [ -x "$HOME/.local/bin/muse" ] && [ -d /usr/lib/node_modules/agent-browser/skill-data/core ]; then
+    "$HOME/.local/bin/muse" skills install /usr/lib/node_modules/agent-browser/skill-data/core --scope user --name agent-browser --force
+    "$HOME/.local/bin/muse" skills list --source user --json
+  else
+    echo "Warning: skipping agent-browser Muse skill install (muse binary or skill-data/core missing)." >&2
+  fi
+'
+
 cat <<EOF
 
 ==> Provisioning complete for user '${USER_ID}' on '${VM_HOST}'.
