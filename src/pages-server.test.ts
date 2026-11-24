@@ -966,3 +966,16 @@ test("grug-pages table heading planner stays linear on long imported headings an
 	// Pinned edge: crisp divider and opaque padding gutter, no translucent shadow
 	assert.doesNotMatch(globalCss, /--table-sticky-shadow|right: -13px/);
 });
+
+test("grug-pages theme button has a 48px hit area without moving the header", () => {
+	const baseLayout = readFileSync(new URL("../sites/grug-pages/src/layouts/BaseLayout.astro", import.meta.url), "utf8");
+	const button = baseLayout.match(/<button\s+id="theme-toggle"[\s\S]*?<\/button>/)?.[0] ?? "";
+	assert.ok(button, "theme toggle button present");
+	// The button itself is 48×48; -m-2 keeps its layout footprint at the 32×32 visual chip
+	assert.match(button, /class="group -m-2 inline-flex size-12 /);
+	// The hover/focus chip and icon stay the same visual size
+	assert.match(button, /<span\s+class="inline-flex size-8 items-center justify-center rounded-md group-hover:/);
+	assert.match(button, /group-focus-visible:outline-2/);
+	assert.equal((button.match(/class="size-4 shrink-0/g) ?? []).length, 2);
+	assert.doesNotMatch(button, /pointer-fine:hidden/);
+});
