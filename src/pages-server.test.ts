@@ -19,6 +19,7 @@ import { startPagesServer } from "./pages-server.ts";
 import { createPromptResolver, filterWorkerPrompt } from "./prompts.ts";
 import { createSshSandbox, SandboxManager, validateStagedPages } from "./sandbox.ts";
 import { UserRegistry } from "./users.ts";
+import { HEADING_ONE_LINE_MAX, planTableHeading, splitKeepingHyphenated } from "../sites/grug-pages/lib/table-heading.mjs";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -902,9 +903,8 @@ test("grug-pages Iteration 4 tables: real row headers, unbroken header labels, s
 	assert.doesNotMatch(globalCss, /hyphens: auto/);
 	assert.match(globalCss, /tr\.pick > :nth-child\(2\)/);
 
-	// Headers never break at a hyphen; short labels stay on one line
-	assert.match(baseLayout, /const headerOneLineMax = 14;/);
-	assert.match(baseLayout, /span\.className = "th-nowrap"/);
+	// Headers never break at a hyphen; short labels stay on one line (planner covered in the Iteration 5 test)
+	assert.match(baseLayout, /node\.className = "th-nowrap"/);
 	assert.match(globalCss, /thead th\[data-nowrap="true"\], thead th \.th-nowrap\)[^{]*\{\s*white-space: nowrap;/);
 
 	// Sticky col 2 uses the fractional col-1 width and fills 1px back over the boundary
@@ -913,4 +913,56 @@ test("grug-pages Iteration 4 tables: real row headers, unbroken header labels, s
 	assert.match(globalCss, /td:nth-child\(2\)\):not\(\.not-prose, \.not-prose \*\)::before \{[^}]*left: -1px;[^}]*background-color: inherit;/);
 
 	assert.match(grugPageSkill, /Keep column headings short \(1–2 words\)/);
+});
+
+test("grug-pages table heading planner stays linear on long imported headings and keeps hyphenated words whole", () => {
+	const baseLayout = readFileSync(new URL("../sites/grug-pages/src/layouts/BaseLayout.astro", import.meta.url), "utf8");
+	const globalCss = readFileSync(new URL("../sites/grug-pages/src/styles/global.css", import.meta.url), "utf8");
+	const render = (text: string) =>
+		planTableHeading(text)
+			.runs.map((run) => (run.nowrap ? `[${run.text}]` : run.text))
+			.join("");
+
+	// Short headings stay on one line; mid-length ones become two whole word groups
+	assert.equal(HEADING_ONE_LINE_MAX, 14);
+	assert.deepEqual(planTableHeading("Rate Field"), { oneLine: true, runs: [{ text: "Rate Field", nowrap: true }] });
+	assert.equal(render("First-year cost"), "[First-year] [cost]");
+	assert.equal(render("B: Rate Field lots"), "[B: Rate] [Field lots]");
+	assert.equal(render("Combined all-districts"), "[Combined] [all-districts]");
+	assert.equal(render("Provider / plan"), "[Provider /] [plan]");
+
+	// Long headings: bounded work, hyphenated words kept whole, CSS balances the lines
+	const words = ["district", "tax", "share", "year-one", "base-case", "net", "levy", "per-unit", "value", "fund"];
+	const heading = (length: number) => {
+		let text = "";
+		for (let i = 0; text.length < length; i++) text += `${words[i % words.length]} `;
+		return text.slice(0, length).trim();
+	};
+	const manyHyphens = Array.from({ length: 120 }, (_, i) => `a${i}-b${i}-c${i}`).join(" ");
+	for (const text of [heading(150), heading(400), manyHyphens, "x".repeat(5000), "-".repeat(5000)]) {
+		const started = performance.now();
+		const plan = planTableHeading(text);
+		const elapsed = performance.now() - started;
+		assert.ok(elapsed < 50, `planning a ${text.length}-char heading took ${elapsed.toFixed(1)}ms`);
+		assert.equal(plan.oneLine, false);
+		assert.equal(plan.runs.map((run) => run.text).join(""), text.replace(/\s+/g, " ").trim());
+		for (const run of plan.runs) {
+			if (/[^\s-]-[^\s-]/.test(run.text)) assert.equal(run.nowrap, true, `hyphenated run must stay whole: ${run.text}`);
+		}
+	}
+	assert.equal(planTableHeading(manyHyphens).runs.filter((run) => run.nowrap).length, 120);
+	assert.deepEqual(splitKeepingHyphenated("City share (ex-stadium) only"), [
+		{ text: "City share ", nowrap: false },
+		{ text: "(ex-stadium)", nowrap: true },
+		{ text: " only", nowrap: false },
+	]);
+
+	// The page inlines this same module; no partition search remains in the layout
+	assert.match(baseLayout, /import tableHeadingSource from "\.\.\/\.\.\/lib\/table-heading\.mjs\?raw";/);
+	assert.match(baseLayout, /<script is:inline set:html=\{tableHeadingScript\} \/>/);
+	assert.doesNotMatch(baseLayout, /balanceTokens|const solve =/);
+	assert.match(globalCss, /\.prose :where\(thead th\)[^{]*\{[^}]*text-wrap: balance;/);
+
+	// Pinned edge: crisp divider and opaque padding gutter, no translucent shadow
+	assert.doesNotMatch(globalCss, /--table-sticky-shadow|right: -13px/);
 });

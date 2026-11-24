@@ -456,13 +456,8 @@
   }
 
   .prose .table-scroll {
-    --table-sticky-shadow: color-mix(in oklab, var(--color-stone-950) 11%, transparent);
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-x: contain;
-
-    @variant dark {
-      --table-sticky-shadow: rgba(0, 0, 0, 0.55);
-    }
   }
 
   .prose .table-scroll-inner {
@@ -621,8 +616,11 @@
     z-index: 2;
   }
 
-  /* Default (entity in col 1): subtle sticky right-edge divider when scrollable, strengthening with shadow when panned */
+  /* Pinned edge: an opaque padding gutter between the pinned text and a crisp 1px divider on the
+     cell's outer edge (no translucent shadow), so nothing scrolled ever shows on the pinned side.
+     The divider strengthens once the table is panned. Default layout: entity in col 1. */
   .prose .table-scroll[data-scrollable="true"] :where(table:not([data-sticky-entity="2"])) :where(th:first-child, td:first-child):not(.not-prose, .not-prose *) {
+    padding-right: --spacing(3);
     border-right: 1px solid color-mix(in oklab, var(--color-stone-950) 8%, transparent);
 
     @variant dark {
@@ -631,27 +629,13 @@
   }
 
   .prose .table-scroll[data-scrollable="true"][data-scrolled-start="false"] :where(table:not([data-sticky-entity="2"])) :where(th:first-child, td:first-child):not(.not-prose, .not-prose *) {
-    border-right-color: color-mix(in oklab, var(--color-stone-950) 14%, transparent);
+    border-right-color: color-mix(in oklab, var(--color-stone-950) 18%, transparent);
 
     @variant dark {
-      border-right-color: color-mix(in oklab, var(--color-white) 14%, transparent);
+      border-right-color: color-mix(in oklab, var(--color-white) 16%, transparent);
     }
   }
 
-  .prose .table-scroll[data-scrollable="true"][data-scrolled-start="false"] :where(table:not([data-sticky-entity="2"])) :where(th:first-child, td:first-child):not(.not-prose, .not-prose *)::after {
-    content: "";
-    position: absolute;
-    top: 0;
-    bottom: -1px;
-    right: -13px;
-    width: 12px;
-    pointer-events: none;
-    background: linear-gradient(
-      to right,
-      var(--table-sticky-shadow),
-      transparent
-    );
-  }
 
   /* Smart rank/index col 1 + sticky entity col 2 pinned directly beside it */
   .prose .table-scroll[data-scrollable="true"] :where(table[data-sticky-entity="2"]) :where(th:first-child, td:first-child):not(.not-prose, .not-prose *) {
@@ -665,6 +649,7 @@
     left: var(--sticky-col1-w, 3.5rem);
     z-index: 1;
     padding-left: --spacing(2);
+    padding-right: --spacing(3);
     background-color: var(--color-paper);
     border-right: 1px solid color-mix(in oklab, var(--color-stone-950) 8%, transparent);
 
@@ -691,27 +676,13 @@
   }
 
   .prose .table-scroll[data-scrollable="true"][data-scrolled-start="false"] :where(table[data-sticky-entity="2"]) :where(th:nth-child(2), td:nth-child(2)):not(.not-prose, .not-prose *) {
-    border-right-color: color-mix(in oklab, var(--color-stone-950) 14%, transparent);
+    border-right-color: color-mix(in oklab, var(--color-stone-950) 18%, transparent);
 
     @variant dark {
-      border-right-color: color-mix(in oklab, var(--color-white) 14%, transparent);
+      border-right-color: color-mix(in oklab, var(--color-white) 16%, transparent);
     }
   }
 
-  .prose .table-scroll[data-scrollable="true"][data-scrolled-start="false"] :where(table[data-sticky-entity="2"]) :where(th:nth-child(2), td:nth-child(2)):not(.not-prose, .not-prose *)::after {
-    content: "";
-    position: absolute;
-    top: 0;
-    bottom: -1px;
-    right: -13px;
-    width: 12px;
-    pointer-events: none;
-    background: linear-gradient(
-      to right,
-      var(--table-sticky-shadow),
-      transparent
-    );
-  }
 
   /* Keep sticky entity column compact on mobile scrollable tables so remaining columns have ample room */
   @media (width < 40rem) {

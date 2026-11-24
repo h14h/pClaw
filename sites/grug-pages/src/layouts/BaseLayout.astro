@@ -3,6 +3,7 @@ import "@styles/global.css";
 import geistFontUrl from "../assets/fonts/geist-latin-wght-normal.woff2?url";
 import GrugMark from "@components/GrugMark.astro";
 import { absoluteUrl, withBase } from "@lib/urls";
+import tableHeadingSource from "../../lib/table-heading.mjs?raw";
 
 interface Props {
   title: string;
@@ -30,6 +31,9 @@ const canonicalUrl = canonicalPath
   ? absoluteUrl(canonicalPath, Astro.site)
   : new URL(Astro.url.pathname, Astro.site ?? "https://grug.h14h.com").toString();
 const ogImageUrl = absoluteUrl(ogImagePath, Astro.site);
+
+// Shared, tested heading planner inlined as a classic-script global for the table script below
+const tableHeadingScript = `const grugTableHeading = (() => {\n${tableHeadingSource.replace(/^export /gm, "")}\nreturn { planTableHeading, splitKeepingHyphenated };\n})();`;
 ---
 
 <!doctype html>
@@ -127,6 +131,7 @@ const ogImageUrl = absoluteUrl(ogImagePath, Astro.site);
       </main>
     </div>
 
+    <script is:inline set:html={tableHeadingScript} />
     <script is:inline>
       (() => {
         const btn = document.getElementById("theme-toggle");
@@ -194,80 +199,41 @@ const ogImageUrl = absoluteUrl(ogImagePath, Astro.site);
           cell.replaceWith(th);
         };
 
-        // Header cells: short labels stay on one line; longer ones wrap only between
-        // balanced word groups (never at a hyphen), so the table pans instead of squeezing.
-        const headerOneLineMax = 14;
-        const headerLineChars = 16;
-        const punctTokenRe = /^[/&+|:–—-]+$/;
-        const hyphenWordRe = /\S*[^\s-]-[^\s-]\S*/g;
-        const nowrapSpan = (text) => {
-          const span = document.createElement("span");
-          span.className = "th-nowrap";
-          span.textContent = text;
-          return span;
-        };
-        const balanceTokens = (tokens, parts) => {
-          const n = tokens.length;
-          const segLen = (a, b) => tokens.slice(a, b).join(" ").length;
-          const solve = (start, k) => {
-            if (k === 1) return { cost: segLen(start, n), cuts: [] };
-            let best = null;
-            for (let end = start + 1; end <= n - k + 1; end++) {
-              const rest = solve(end, k - 1);
-              const cost = Math.max(segLen(start, end), rest.cost);
-              if (!best || cost < best.cost) best = { cost, cuts: [end, ...rest.cuts] };
+        // Header cells: planned by lib/table-heading.mjs (linear, inlined above). Short labels stay
+        // on one line, mid-length ones wrap only between two word groups, long ones only keep
+        // hyphenated words whole and let CSS balance the lines.
+        const appendRuns = (parent, runs, before) => {
+          for (const run of runs) {
+            let node;
+            if (run.nowrap) {
+              node = document.createElement("span");
+              node.className = "th-nowrap";
+              node.textContent = run.text;
+            } else {
+              node = document.createTextNode(run.text);
             }
-            return best;
-          };
-          const { cuts } = solve(0, Math.min(parts, n));
-          const groups = [];
-          let from = 0;
-          for (const cut of [...cuts, n]) {
-            groups.push(tokens.slice(from, cut).join(" "));
-            from = cut;
+            parent.insertBefore(node, before);
           }
-          return groups;
         };
         const fitHeaderCell = (th) => {
-          const text = (th.textContent || "").replace(/\s+/g, " ").trim();
-          if (!text) return;
-          if (text.length <= headerOneLineMax) {
-            th.dataset.nowrap = "true";
-            return;
-          }
           const plainText = Array.from(th.childNodes).every((node) => node.nodeType === Node.TEXT_NODE);
           if (plainText) {
-            const tokens = [];
-            for (const word of text.split(" ")) {
-              if (tokens.length > 0 && punctTokenRe.test(word)) tokens[tokens.length - 1] += ` ${word}`;
-              else tokens.push(word);
-            }
-            const lines = Math.max(2, Math.ceil(text.length / headerLineChars));
+            const plan = grugTableHeading.planTableHeading(th.textContent || "");
+            if (plan.runs.length === 0) return;
+            if (plan.oneLine) th.dataset.nowrap = "true";
             th.textContent = "";
-            balanceTokens(tokens, lines).forEach((group, i) => {
-              if (i > 0) th.append(" ");
-              th.append(nowrapSpan(group));
-            });
+            appendRuns(th, plan.runs, null);
             return;
           }
-          // Mixed markup: keep each hyphenated word whole
+          // Mixed markup: keep each hyphenated word whole, one text node at a time
           const walker = document.createTreeWalker(th, NodeFilter.SHOW_TEXT);
           const textNodes = [];
           while (walker.nextNode()) textNodes.push(walker.currentNode);
           for (const node of textNodes) {
-            const value = node.nodeValue || "";
-            hyphenWordRe.lastIndex = 0;
-            if (!hyphenWordRe.test(value)) continue;
-            const frag = document.createDocumentFragment();
-            let last = 0;
-            value.replace(hyphenWordRe, (match, offset) => {
-              if (offset > last) frag.append(value.slice(last, offset));
-              frag.append(nowrapSpan(match));
-              last = offset + match.length;
-              return match;
-            });
-            if (last < value.length) frag.append(value.slice(last));
-            node.replaceWith(frag);
+            const runs = grugTableHeading.splitKeepingHyphenated(node.nodeValue || "");
+            if (!runs.some((run) => run.nowrap)) continue;
+            appendRuns(node.parentNode, runs, node);
+            node.remove();
           }
         };
 
@@ -326,7 +292,9 @@ const ogImageUrl = absoluteUrl(ogImagePath, Astro.site);
             toRowHeader(row.children[entityColIndex]);
           }
 
+          performance.mark("grug:table-headings:start");
           for (const th of headerCells) fitHeaderCell(th);
+          performance.measure("grug:table-headings", "grug:table-headings:start");
 
           // Only prose-heavy 3-column tables get a mobile min-width so compact 3-col tables fit naturally
           if (colCount === 3 && maxCellLen > 90) {
