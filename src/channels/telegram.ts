@@ -10,12 +10,13 @@ import {
 	type UserInput,
 } from "@earendil-works/pi-durable";
 import type { Agent } from "../agent.ts";
+import type { HostCircuitBreaker } from "../circuit-breaker.ts";
 import { type Config, paths, saveConfig } from "../config.ts";
 import { deliver, type Outbox } from "../delivery.ts";
 import type { Job } from "../extensions/jobs.ts";
 import { Reactions } from "../extensions/reactions.ts";
 import { Workers } from "../extensions/workers.ts";
-import { type Heard, memoLabel, transcribe } from "../speech.ts";
+import { type Heard, memoLabel, type SpeechBackend, type SpeechFallback, speechFallbackFromConfig, transcribe } from "../speech.ts";
 import { stamp } from "../time.ts";
 import { isDelegateAck, ReplyThreads } from "./reply-threads.ts";
 import {
@@ -866,12 +867,18 @@ export type BuildInputOptions = {
 	inboxDir?: string;
 	voiceDir?: string;
 	speechUrl?: string;
+	speechFallback?: SpeechFallback;
+	breaker?: HostCircuitBreaker;
 	isGroup?: boolean;
 	extraContext?: string[];
 	/** Optional remote staging hook (e.g. `sandbox.putFile` for SSH VM users); returns the sandbox path. */
 	stageFile?: (localPath: string, filename: string) => Promise<string>;
 	transcribeFn?: typeof transcribe;
-	onVoiceResult?: (result: { id: string; ok: true; seconds: number; ms: number; words: number } | { id: string; ok: false; error: string }) => void;
+	onVoiceResult?: (
+		result:
+			| { id: string; ok: true; seconds: number; ms: number; words: number; backend?: SpeechBackend }
+			| { id: string; ok: false; error: string },
+	) => void;
 };
 
 /**
@@ -938,12 +945,12 @@ export async function buildTelegramUserInput(
 			}
 		}
 
-		// 2. Voice / audio -> transcribe via speechUrl.
+		// 2. Voice / audio -> transcribe via speechUrl (with optional cloud speechFallback + shared host breaker).
 		const audioMedia = message.voice ?? message.audio;
 		if (audioMedia !== undefined) {
 			const isVoice = message.voice !== undefined;
 			const id = `telegram:${message.message_id}`;
-			if (options.speechUrl === undefined) {
+			if (options.speechUrl === undefined && options.speechFallback === undefined) {
 				notes.push(isVoice ? "[sent a voice memo, but pclaw has no speech server configured]" : "[sent an audio file, but pclaw has no speech server configured]");
 			} else if (audioMedia.file_size !== undefined && audioMedia.file_size > MAX_FILE_BYTES) {
 				notes.push("[sent an audio message larger than Telegram's 20 MB Bot API download limit]");
@@ -964,18 +971,30 @@ export async function buildTelegramUserInput(
 					const audio = await options.api.downloadFile(file.file_path);
 					if (audio.byteLength > MAX_FILE_BYTES) throw new Error("audio exceeds 20 MB limit");
 					const ext = extname(file.file_path) || ".ogg";
+					const savedName = `telegram-${chatId}-${message.message_id}${ext}`;
 					mkdirSync(voiceDir, { recursive: true, mode: 0o700 });
-					writeFileSync(join(voiceDir, `telegram-${chatId}-${message.message_id}${ext}`), audio, { mode: 0o600 });
-					const heard: Heard = await transcribeFn(options.speechUrl, audio);
+					writeFileSync(join(voiceDir, savedName), audio, { mode: 0o600 });
+					let backend: SpeechBackend | undefined;
+					const heard: Heard = await transcribeFn(options.speechUrl, audio, {
+						filename: basename(file.file_path) || savedName,
+						...(audioMedia.duration === undefined ? {} : { durationSeconds: audioMedia.duration }),
+						...(options.speechFallback === undefined ? {} : { fallback: options.speechFallback }),
+						...(options.breaker === undefined ? {} : { breaker: options.breaker }),
+						onBackend: (info) => {
+							backend = info.backend;
+						},
+					});
+					const usedBackend = backend ?? heard.backend ?? "primary";
 					hasVoice = true;
 					options.onVoiceResult?.({
 						id,
 						ok: true,
+						backend: usedBackend,
 						seconds: heard.seconds,
 						ms: heard.ms,
 						words: heard.text.split(/\s+/).filter(Boolean).length,
 					});
-					console.log(`[pclaw] heard a ${Math.round(heard.seconds)}s Telegram voice memo in ${heard.ms}ms`);
+					console.log(`[pclaw] heard a ${Math.round(heard.seconds)}s Telegram voice memo in ${heard.ms}ms (${usedBackend})`);
 					notes.push(memoLabel(heard.seconds), heard.text);
 					if (heard.text.trim() === "") {
 						await unmark();
@@ -1440,6 +1459,7 @@ export async function startTelegram(
 
 		const inboxDir = options.inboxDir ?? userPaths?.inbox;
 		const voiceDir = options.voiceDir ?? userPaths?.voice;
+		const speechFallback = speechFallbackFromConfig(config);
 		const built = await buildTelegramUserInput(messages, {
 			api,
 			timeZone: userTimeZone,
@@ -1447,6 +1467,8 @@ export async function startTelegram(
 			...(inboxDir === undefined ? {} : { inboxDir }),
 			...(voiceDir === undefined ? {} : { voiceDir }),
 			...(config.speechUrl === undefined ? {} : { speechUrl: config.speechUrl }),
+			...(speechFallback === undefined ? {} : { speechFallback }),
+			breaker: agent.breaker,
 			isGroup: auth.isGroup,
 			...(userSandbox?.type === "ssh"
 				? { stageFile: (localPath: string, filename: string) => userSandbox.putFile(localPath, filename) }

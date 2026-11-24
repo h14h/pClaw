@@ -15,6 +15,7 @@ import {
 	type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
+import { HostCircuitBreaker } from "./circuit-breaker.ts";
 import { type Config, isPagesEnabled, isT3Enabled, paths } from "./config.ts";
 import { episodesExtension } from "./extensions/episodes.ts";
 import { filesExtension, FileSenders } from "./extensions/files.ts";
@@ -66,6 +67,8 @@ export type Agent = {
 	workerItems(sessionId: string): WorkerItem[];
 	/** Per-agent prompt resolver (supports `voiceFile` / `personaDir` without global mutation). */
 	prompts: PromptResolver;
+	/** Shared host circuit breaker across primary LAN/tailnet services (d1 decisions and Parakeet speech). */
+	breaker: HostCircuitBreaker;
 	/** Unified SQLite episode store + FTS5 recall index (`pclaw-index.sqlite`). */
 	searchIndex: SearchIndex;
 	/** Flush unreviewed conversation entries into `notes.md` immediately (used before `pi.reset`). */
@@ -224,11 +227,14 @@ export async function openAgent(
 		indexDbPath?: string;
 		/** Optional opt-in per-channel extensions loaded statically per route channel (e.g. `{ matrix: [matrixExt] }`). */
 		channelExtensions?: Record<string, Extension[]>;
+		/** Shared per-host circuit breaker for primary LAN/tailnet services. */
+		breaker?: HostCircuitBreaker;
 		now?: () => number;
 	},
 	context: Context,
 ): Promise<Agent> {
 	const { config, models, notes } = options;
+	const breaker = options.breaker ?? new HostCircuitBreaker(options.now === undefined ? undefined : { now: options.now });
 	const profile = loadProfile(config.profile);
 	const promptResolver = createPromptResolver({
 		profileDir: profile.dir,
@@ -341,6 +347,7 @@ export async function openAgent(
 			logFile: paths.decisions,
 			holdout: config.decisionHoldout,
 			prompts: promptResolver,
+			breaker,
 			...(fallback === undefined ? {} : { fallback }),
 		});
 	install(
@@ -631,6 +638,7 @@ export async function openAgent(
 		progressSurfaces,
 		workerItems: findWorkerItems,
 		prompts: promptResolver,
+		breaker,
 		searchIndex,
 		flushMemory: (conversationId, ctx) => memory.flushMemory(harness, conversationId, ctx),
 		crossClientHint: (conversationId, ctx) =>

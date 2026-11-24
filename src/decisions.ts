@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { appendFileSync } from "node:fs";
 import type { Models } from "@earendil-works/pi-ai/models";
+import { type HostCircuitBreaker, hostOf } from "./circuit-breaker.ts";
 import { type PromptResolver, readPrompt } from "./prompts.ts";
 
 /**
@@ -63,8 +64,9 @@ export function decisionClient(options: {
 	fetchFn?: typeof fetch;
 	fallback?: DecisionFallback;
 	prompts?: PromptResolver;
+	breaker?: HostCircuitBreaker;
 }): Decisions {
-	const { url, logFile, holdout = 0.2, timeoutMs = D1_TIMEOUT_MS, fetchFn = fetch, fallback, prompts } = options;
+	const { url, logFile, holdout = 0.2, timeoutMs = D1_TIMEOUT_MS, fetchFn = fetch, fallback, prompts, breaker } = options;
 	const record: Decisions["record"] = (event) => {
 		try {
 			appendFileSync(logFile, `${JSON.stringify({ at: new Date().toISOString(), ...event })}\n`, { mode: 0o600 });
@@ -72,15 +74,36 @@ export function decisionClient(options: {
 			console.error("[pclaw] couldn't write the decision log", error);
 		}
 	};
+	const tripBreaker = (reason: string) => {
+		if (url !== undefined && breaker?.recordFailure(url, reason)) {
+			console.warn(`[pclaw] primary host ${hostOf(url)} unreachable; using cloud fallback for ${Math.round(breaker.cooldownMs / 1000)}s`);
+		}
+	};
+	const recoverBreaker = () => {
+		if (url !== undefined && breaker?.recordSuccess(url)) {
+			console.log(`[pclaw] primary host ${hostOf(url)} recovered`);
+		}
+	};
 	const askD1 = async (stateText: string, questions: Questions, limit: number): Promise<Answers> => {
-		const response = await fetchFn(`${url!.replace(/\/$/, "")}/v1/decisions`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ state: stateText, questions }),
-			signal: AbortSignal.timeout(Math.min(limit, D1_TIMEOUT_MS)),
-		});
-		if (!response.ok) throw new Error(`decision model returned ${response.status}: ${(await response.text()).slice(0, 200)}`);
+		let response: Response;
+		try {
+			response = await fetchFn(`${url!.replace(/\/$/, "")}/v1/decisions`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ state: stateText, questions }),
+				signal: AbortSignal.timeout(Math.min(limit, D1_TIMEOUT_MS)),
+			});
+		} catch (error) {
+			tripBreaker(error instanceof Error ? error.message : String(error));
+			throw error;
+		}
+		if (!response.ok) {
+			const message = `decision model returned ${response.status}: ${(await response.text()).slice(0, 200)}`;
+			if (response.status >= 500) tripBreaker(message);
+			throw new Error(message);
+		}
 		const { answers } = (await response.json()) as { answers: Answers };
+		recoverBreaker();
 		return answers;
 	};
 	return {
@@ -92,8 +115,9 @@ export function decisionClient(options: {
 			const stateText = typeof state === "string" ? state : JSON.stringify(state);
 			const base = { type: "decision", id, site, arm, templates: templatesVersion(prompts), ...(job === undefined ? {} : { job }), state: stateText.slice(0, STATE_LOG_LIMIT) };
 			const suffix = job === undefined ? "" : ` job=${job}`;
+			const skippedPrimary = url !== undefined && fallback !== undefined && breaker?.isOpen(url) === true;
 			const attempts: [Backend, () => Promise<Answers>][] = [
-				...(url === undefined ? [] : [["d1", () => askD1(stateText, questions, limit)] as [Backend, () => Promise<Answers>]]),
+				...(url === undefined || skippedPrimary ? [] : [["d1", () => askD1(stateText, questions, limit)] as [Backend, () => Promise<Answers>]]),
 				...(fallback === undefined ? [] : [["fallback", () => askFallback(fallback, stateText, questions)] as [Backend, () => Promise<Answers>]]),
 			];
 			for (const [backend, attempt] of attempts) {
@@ -101,12 +125,12 @@ export function decisionClient(options: {
 				try {
 					const answers = await attempt();
 					const ms = Math.round(performance.now() - started);
-					record({ ...base, backend, ok: true, ms, answers });
-					console.log(`[pclaw] decide ${site} ${arm} ${backend} ${ms}ms ${brief(answers)}${suffix}`);
+					record({ ...base, backend, ...(skippedPrimary ? { skippedPrimary: true } : {}), ok: true, ms, answers });
+					console.log(`[pclaw] decide ${site} ${arm} ${backend}${skippedPrimary ? " (breaker)" : ""} ${ms}ms ${brief(answers)}${suffix}`);
 					return { id, site, arm, answers, backend };
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
-					record({ ...base, backend, ok: false, ms: Math.round(performance.now() - started), error: message });
+					record({ ...base, backend, ...(skippedPrimary ? { skippedPrimary: true } : {}), ok: false, ms: Math.round(performance.now() - started), error: message });
 					console.error(`[pclaw] decide ${site} ${backend} failed${backend === "d1" && fallback !== undefined ? ", trying the fallback" : ", going without a hint"}: ${message}`);
 				}
 			}

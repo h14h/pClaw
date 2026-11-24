@@ -218,8 +218,14 @@ export type Config = {
 	decisionFallback?: boolean;
 	/** The model for that stand-in, on the front model's provider. Defaults to the front model. */
 	decisionFallbackModel?: string;
-	/** A speech-to-text server (deploy/speech-server.py). Unset: voice memos can't be heard. */
+	/** A speech-to-text server (deploy/speech-server.py). Unset: voice memos can't be heard unless `speechFallbackUrl` is set. */
 	speechUrl?: string;
+	/** Cloud OpenAI-compatible `/v1/audio/transcriptions` fallback used when `speechUrl` is unreachable or unset. */
+	speechFallbackUrl?: string;
+	/** Model for `speechFallbackUrl`. Defaults to `"gpt-transcribe"`. */
+	speechFallbackModel?: string;
+	/** Optional Bearer API key for `speechFallbackUrl` (omitted for keyless endpoints such as `llm.int.exe.xyz`). */
+	speechFallbackApiKey?: string;
 	/** Share of decisions asked and logged but not shown, for comparing behavior with and without hints. */
 	decisionHoldout: number;
 	/** Per-client idle/daily session reset & episode distillation. Opt-in (`enabled: true`). */
@@ -319,6 +325,9 @@ export function loadConfig(): Config {
 		allowT3: parseBoolEnv(env.PCLAW_ALLOW_T3),
 		t3Url: env.PCLAW_T3_URL,
 		t3RedirectUri: env.PCLAW_T3_REDIRECT_URI,
+		speechFallbackUrl: env.PCLAW_SPEECH_FALLBACK_URL,
+		speechFallbackModel: env.PCLAW_SPEECH_FALLBACK_MODEL,
+		speechFallbackApiKey: env.PCLAW_SPEECH_FALLBACK_API_KEY,
 	};
 	const defined = Object.fromEntries(Object.entries(fromEnv).filter(([, value]) => value !== undefined));
 	const merged = { ...defaults, ...readStored(), ...defined };

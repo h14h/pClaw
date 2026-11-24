@@ -11,6 +11,7 @@ import { openAgent } from "./agent.ts";
 import { startDiscord } from "./channels/discord.ts";
 import { startTelegram } from "./channels/telegram.ts";
 import { chatInTerminal } from "./channels/terminal.ts";
+import { HostCircuitBreaker } from "./circuit-breaker.ts";
 import { type Config, ensureHome, loadConfig, paths, saveConfig } from "./config.ts";
 import { startContextKeeper } from "./context-keeper.ts";
 import { startNotesCleanup } from "./notes-cleanup.ts";
@@ -23,6 +24,7 @@ import { listProfiles, loadProfile, registerProfiles } from "./profiles.ts";
 import { useProfile } from "./prompts.ts";
 import { chooseService, serviceReady, services } from "./search.ts";
 import { startSessionKeeper } from "./session-keeper.ts";
+import { DEFAULT_SPEECH_FALLBACK_MODEL } from "./speech.ts";
 import { startWorkerProgressMonitor } from "./worker-progress.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -170,7 +172,8 @@ async function start(): Promise<void> {
 	if (config.discordToken === undefined && config.telegramToken === undefined) {
 		throw new Error("No Discord or Telegram token configured. Run `pnpm setup` or set DISCORD_TOKEN / TELEGRAM_BOT_TOKEN.");
 	}
-	const agent = await openAgent(await openNodeSqliteStorage(paths.db), { config, models, notes, workers }, context);
+	const breaker = new HostCircuitBreaker();
+	const agent = await openAgent(await openNodeSqliteStorage(paths.db), { config, models, notes, workers, breaker }, context);
 	const backfill = await agent.searchIndex.backfillAll(agent.harness, context, agent.users);
 	const idxStats = agent.searchIndex.stats();
 	console.log(
@@ -212,8 +215,12 @@ async function start(): Promise<void> {
 		},
 		context,
 	);
+	const speechSummary =
+		config.speechUrl === undefined && config.speechFallbackUrl === undefined
+			? "off"
+			: `${config.speechUrl ?? "off"}${config.speechFallbackUrl === undefined ? "" : ` (fallback ${config.speechFallbackModel ?? DEFAULT_SPEECH_FALLBACK_MODEL})`}`;
 	console.log(
-		`[pclaw] jobs ${agent.t3Enabled ? "on" : "off"}, users ${agent.users.enabled ? agent.users.all().length : "single-owner"}, session-reset ${sessionResetEnabled ? "on" : "off"}, decision model ${config.decisionUrl ?? "off"}${config.decisionFallback === false ? "" : `, fallback ${config.decisionFallbackModel ?? config.model}`}`,
+		`[pclaw] jobs ${agent.t3Enabled ? "on" : "off"}, users ${agent.users.enabled ? agent.users.all().length : "single-owner"}, session-reset ${sessionResetEnabled ? "on" : "off"}, decision model ${config.decisionUrl ?? "off"}${config.decisionFallback === false ? "" : `, fallback ${config.decisionFallbackModel ?? config.model}`}, speech ${speechSummary}`,
 	);
 
 	let stopping = false;

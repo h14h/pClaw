@@ -32,7 +32,7 @@ import type { Job, JobState, JobSurface } from "../extensions/jobs.ts";
 import { Reactions } from "../extensions/reactions.ts";
 import { Workers } from "../extensions/workers.ts";
 import { sanitizeFilename } from "../sandbox.ts";
-import { type Heard, memoLabel, transcribe } from "../speech.ts";
+import { type Heard, memoLabel, type SpeechBackend, speechFallbackFromConfig, transcribe } from "../speech.ts";
 import { stamp } from "../time.ts";
 import { isDelegateAck, ReplyThreads } from "./reply-threads.ts";
 
@@ -452,10 +452,12 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 		return undefined;
 	}
 
+	const speechFallback = speechFallbackFromConfig(config);
+
 	/** The first audio attachment as text, or undefined. A failure leaves a note for the front model to pass on. */
 	async function hear(message: Message, voiceDir = paths.voice): Promise<Heard | undefined> {
 		const attachment = message.attachments.find((each) => each.contentType?.startsWith("audio/") === true);
-		if (attachment === undefined || config.speechUrl === undefined) return undefined;
+		if (attachment === undefined || (config.speechUrl === undefined && speechFallback === undefined)) return undefined;
 		const id = `message:${message.id}`;
 		try {
 			if (message.channel.isSendable()) await message.channel.sendTyping();
@@ -464,9 +466,26 @@ export async function startDiscord(agent: Agent, config: Config, context: Contex
 			const audio = new Uint8Array(await download.arrayBuffer());
 			mkdirSync(voiceDir, { recursive: true, mode: 0o700 });
 			writeFileSync(join(voiceDir, `${message.id}.ogg`), audio, { mode: 0o600 });
-			const heard = await transcribe(config.speechUrl, audio);
-			jobs.decisions.record({ type: "voice", id, ok: true, seconds: heard.seconds, ms: heard.ms, words: heard.text.split(/\s+/).filter(Boolean).length });
-			console.log(`[pclaw] heard a ${Math.round(heard.seconds)}s voice memo in ${heard.ms}ms`);
+			let backend: SpeechBackend | undefined;
+			const heard = await transcribe(config.speechUrl, audio, {
+				filename: attachment.name ?? `${message.id}.ogg`,
+				...(speechFallback === undefined ? {} : { fallback: speechFallback }),
+				breaker: agent.breaker,
+				onBackend: (info) => {
+					backend = info.backend;
+				},
+			});
+			const usedBackend = backend ?? heard.backend ?? "primary";
+			jobs.decisions.record({
+				type: "voice",
+				id,
+				ok: true,
+				backend: usedBackend,
+				seconds: heard.seconds,
+				ms: heard.ms,
+				words: heard.text.split(/\s+/).filter(Boolean).length,
+			});
+			console.log(`[pclaw] heard a ${Math.round(heard.seconds)}s voice memo in ${heard.ms}ms (${usedBackend})`);
 			return heard;
 		} catch (error) {
 			const reason = error instanceof Error ? error.message : String(error);
