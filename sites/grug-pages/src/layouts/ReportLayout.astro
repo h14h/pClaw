@@ -4,6 +4,7 @@ import BaseLayout from "./BaseLayout.astro";
 import { formatDate, withBase } from "@lib/urls";
 
 interface Props {
+  slug?: string;
   title: string;
   subtitle?: string;
   date: string;
@@ -13,13 +14,22 @@ interface Props {
   headings?: MarkdownHeading[];
 }
 
-const { title, subtitle, date, updated, summary, tags = [], headings = [] } = Astro.props;
+const { slug, title, subtitle, date, updated, summary, tags = [], headings = [] } = Astro.props;
 const tocHeadings = headings.filter((h) => h.depth === 2);
 const showToc = tocHeadings.length >= 4;
 const homeHref = withBase("/");
+const ogImagePath = slug ? `/og/${slug}.png` : "/og/index.png";
+const canonicalPath = slug ? `/${slug}/` : undefined;
 ---
 
-<BaseLayout title={title} description={summary} breadcrumb={title}>
+<BaseLayout
+  title={title}
+  description={summary}
+  breadcrumb={title}
+  ogType="article"
+  ogImagePath={ogImagePath}
+  canonicalPath={canonicalPath}
+>
   <header class="pb-7 border-b border-stone-950/8 dark:border-white/8">
     <h1 class="text-2xl font-semibold tracking-tight text-pretty text-stone-900 sm:text-3xl dark:text-zinc-100">
       {title}

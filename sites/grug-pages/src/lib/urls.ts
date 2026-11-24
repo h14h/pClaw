@@ -6,6 +6,12 @@ export function withBase(path: string): string {
   return BASE ? `${BASE}${clean}` : clean;
 }
 
+/** Build an absolute canonical/OG URL under Astro's configured `site` and `base`. */
+export function absoluteUrl(path: string, site?: URL): string {
+  const origin = (site?.origin ?? "https://grug.h14h.com").replace(/\/+$/, "");
+  return `${origin}${withBase(path)}`;
+}
+
 /** Normalize an Astro Content Layer entry id (`foo/index` or `foo`) into its canonical URL slug (`foo`). */
 export function normalizePageSlug(id: string): string {
   return id.replace(/\/index$/i, "").replace(/\.(md|mdx)$/i, "");

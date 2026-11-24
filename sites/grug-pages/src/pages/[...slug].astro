@@ -13,10 +13,12 @@ export async function getStaticPaths() {
 }
 
 const { entry } = Astro.props;
+const slug = normalizePageSlug(entry.id);
 const { Content, headings } = await render(entry);
 ---
 
 <ReportLayout
+  slug={slug}
   title={entry.data.title}
   subtitle={entry.data.subtitle}
   date={entry.data.date}

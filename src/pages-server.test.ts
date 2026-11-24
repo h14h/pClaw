@@ -214,19 +214,42 @@ test("pages-server routing, security headers, non-existent code 404s, and path c
 });
 
 test("validateStagedPages and createSshSandbox.syncPages validate safety, block symlinks/external assets, and swap atomically", async () => {
-	// 1. Direct validateStagedPages checks
+	// 1. Direct validateStagedPages checks (including absolute canonical + OG/Twitter metadata + favicon links)
 	const goodDir = join(dir, "stage-good");
 	mkdirSync(join(goodDir, "trip-plan"), { recursive: true });
+	mkdirSync(join(goodDir, "og"), { recursive: true });
 	writeFileSync(
 		join(goodDir, "index.html"),
-		'<!doctype html><html><head><link rel="canonical" href="https://grug.h14h.com/abc12345/"></head><body><a href="https://example.com">link</a></body></html>',
+		[
+			"<!doctype html><html><head>",
+			'<link rel="icon" href="/abc12345/favicon.svg" type="image/svg+xml">',
+			'<link rel="icon" href="/abc12345/favicon-32x32.png" sizes="32x32" type="image/png">',
+			'<link rel="apple-touch-icon" href="/abc12345/apple-touch-icon.png" sizes="180x180">',
+			'<link rel="canonical" href="https://grug.h14h.com/abc12345/">',
+			'<meta property="og:type" content="website">',
+			'<meta property="og:url" content="https://grug.h14h.com/abc12345/">',
+			'<meta property="og:image" content="https://grug.h14h.com/abc12345/og/index.png">',
+			'<meta name="twitter:card" content="summary_large_image">',
+			'<meta name="twitter:image" content="https://grug.h14h.com/abc12345/og/index.png">',
+			'</head><body><a href="https://example.com">link</a></body></html>',
+		].join(""),
 	);
 	writeFileSync(
 		join(goodDir, "trip-plan", "index.html"),
-		'<!doctype html><html><body><a href="https://example.com">source</a></body></html>',
+		[
+			"<!doctype html><html><head>",
+			'<link rel="canonical" href="https://grug.h14h.com/abc12345/trip-plan/">',
+			'<meta property="og:type" content="article">',
+			'<meta property="og:url" content="https://grug.h14h.com/abc12345/trip-plan/">',
+			'<meta property="og:image" content="https://grug.h14h.com/abc12345/og/trip-plan.png">',
+			'<meta name="twitter:image" content="https://grug.h14h.com/abc12345/og/trip-plan.png">',
+			'</head><body><a href="https://example.com">source</a></body></html>',
+		].join(""),
 	);
+	writeFileSync(join(goodDir, "og", "index.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+	writeFileSync(join(goodDir, "og", "trip-plan.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
 	const okStats = validateStagedPages(goodDir, "trip-plan");
-	assert.equal(okStats.fileCount, 2);
+	assert.equal(okStats.fileCount, 4);
 	assert.ok(okStats.totalBytes > 0);
 
 	// Missing slug index.html
