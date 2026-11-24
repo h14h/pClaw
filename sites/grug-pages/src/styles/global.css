@@ -526,7 +526,7 @@
     }
   }
 
-  .prose :where(tbody td):not(.not-prose, .not-prose *) {
+  .prose :where(tbody td, tbody th):not(.not-prose, .not-prose *) {
     border-bottom: 1px solid color-mix(in oklab, var(--color-stone-950) 8%, transparent);
 
     @variant dark {
@@ -534,18 +534,18 @@
     }
   }
 
-  .prose :where(tbody tr:last-child td):not(.not-prose, .not-prose *) {
+  .prose :where(tbody tr:last-child td, tbody tr:last-child th):not(.not-prose, .not-prose *) {
     border-bottom: 0;
   }
 
-  .prose :where(th):not(.not-prose, .not-prose *) {
+  .prose :where(thead th):not(.not-prose, .not-prose *) {
     padding: --spacing(2.5) --spacing(2.5);
     text-align: left;
     vertical-align: bottom;
     font-weight: var(--font-weight-medium);
     white-space: normal;
     text-wrap: balance;
-    hyphens: auto;
+    hyphens: manual;
     color: var(--color-stone-900);
 
     @variant sm {
@@ -557,7 +557,8 @@
     }
   }
 
-  .prose :where(td):not(.not-prose, .not-prose *) {
+  /* Body cells, including row-header <th scope="row"> identity cells, share one look */
+  .prose :where(td, tbody th):not(.not-prose, .not-prose *) {
     padding: --spacing(2.5) --spacing(2.5);
     vertical-align: top;
     font-variant-numeric: tabular-nums;
@@ -570,6 +571,16 @@
     @variant dark {
       color: var(--color-stone-300);
     }
+  }
+
+  .prose :where(tbody th):not(.not-prose, .not-prose *) {
+    text-align: left;
+    font-weight: inherit;
+  }
+
+  /* Header labels: short ones on one line, longer ones wrap only between script-balanced groups (never at a hyphen) */
+  .prose :where(thead th[data-nowrap="true"], thead th .th-nowrap):not(.not-prose, .not-prose *) {
+    white-space: nowrap;
   }
 
   .prose :where(th[align="right"], td[align="right"]):not(.not-prose, .not-prose *) {
@@ -667,6 +678,18 @@
     z-index: 2;
   }
 
+  /* Opaque fill 1px past col 2's left edge so no sub-pixel sliver of scrolling content shows between the pinned pair */
+  .prose .table-scroll[data-scrollable="true"] :where(table[data-sticky-entity="2"]) :where(th:nth-child(2), td:nth-child(2)):not(.not-prose, .not-prose *)::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -1px;
+    width: 1px;
+    pointer-events: none;
+    background-color: inherit;
+  }
+
   .prose .table-scroll[data-scrollable="true"][data-scrolled-start="false"] :where(table[data-sticky-entity="2"]) :where(th:nth-child(2), td:nth-child(2)):not(.not-prose, .not-prose *) {
     border-right-color: color-mix(in oklab, var(--color-stone-950) 14%, transparent);
 
@@ -703,7 +726,7 @@
     }
   }
 
-  .prose :where(tr.pick > td, tr[data-pick] > td):not(.not-prose, .not-prose *) {
+  .prose :where(tr.pick > td, tr.pick > th, tr[data-pick] > td, tr[data-pick] > th):not(.not-prose, .not-prose *) {
     background-color: color-mix(in oklab, var(--color-accent) 7%, transparent);
 
     @variant dark {
@@ -711,8 +734,8 @@
     }
   }
 
-  .prose .table-scroll[data-scrollable="true"] :where(tr.pick > td:first-child, tr[data-pick] > td:first-child):not(.not-prose, .not-prose *),
-  .prose .table-scroll[data-scrollable="true"] :where(table[data-sticky-entity="2"]) :where(tr.pick > td:nth-child(2), tr[data-pick] > td:nth-child(2)):not(.not-prose, .not-prose *) {
+  .prose .table-scroll[data-scrollable="true"] :where(tr.pick > :first-child, tr[data-pick] > :first-child):not(.not-prose, .not-prose *),
+  .prose .table-scroll[data-scrollable="true"] :where(table[data-sticky-entity="2"]) :where(tr.pick > :nth-child(2), tr[data-pick] > :nth-child(2)):not(.not-prose, .not-prose *) {
     background-color: color-mix(in oklab, var(--color-accent) 7%, var(--color-paper));
 
     @variant dark {

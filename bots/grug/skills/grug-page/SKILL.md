@@ -76,6 +76,7 @@ import { Callout, StatGrid, Stat, Details, Sources, Tabs } from "@components/mdx
 - `<Sources checked="2026-11-24">` wrapping a numbered Markdown list of links — always include at the bottom.
 - Standard Markdown tables work out of the box (automatically wrapped for mobile horizontal scroll with `tabular-nums`).
 - **Never use a standalone `Rank` or `#` column as Column 1** — put the identifying name (Provider, Option, Site, Scenario) in Column 1 (e.g. `1. GFiber Webpass`) so future tables are naturally compact and self-identifying.
+- **Keep column headings short (1–2 words)**, like `Rate Field`, `All districts`, `City share`, `First year`. Put site prefixes (`A:`/`B:`), units, and bases such as "21.5%" in a sentence right above or below the table, never in the heading. Long headings wrap and widen the table on phones.
 
 ## Sourcing and content rules
 

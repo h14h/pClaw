@@ -180,6 +180,97 @@ const ogImageUrl = absoluteUrl(ogImagePath, Astro.site);
           return best;
         };
 
+        // Swap a body <td> for <th scope="row">, keeping its attributes and children
+        const toRowHeader = (cell) => {
+          if (!cell) return;
+          if (cell.tagName === "TH") {
+            if (!cell.hasAttribute("scope")) cell.setAttribute("scope", "row");
+            return;
+          }
+          const th = document.createElement("th");
+          for (const attr of Array.from(cell.attributes)) th.setAttribute(attr.name, attr.value);
+          while (cell.firstChild) th.appendChild(cell.firstChild);
+          th.setAttribute("scope", "row");
+          cell.replaceWith(th);
+        };
+
+        // Header cells: short labels stay on one line; longer ones wrap only between
+        // balanced word groups (never at a hyphen), so the table pans instead of squeezing.
+        const headerOneLineMax = 14;
+        const headerLineChars = 16;
+        const punctTokenRe = /^[/&+|:–—-]+$/;
+        const hyphenWordRe = /\S*[^\s-]-[^\s-]\S*/g;
+        const nowrapSpan = (text) => {
+          const span = document.createElement("span");
+          span.className = "th-nowrap";
+          span.textContent = text;
+          return span;
+        };
+        const balanceTokens = (tokens, parts) => {
+          const n = tokens.length;
+          const segLen = (a, b) => tokens.slice(a, b).join(" ").length;
+          const solve = (start, k) => {
+            if (k === 1) return { cost: segLen(start, n), cuts: [] };
+            let best = null;
+            for (let end = start + 1; end <= n - k + 1; end++) {
+              const rest = solve(end, k - 1);
+              const cost = Math.max(segLen(start, end), rest.cost);
+              if (!best || cost < best.cost) best = { cost, cuts: [end, ...rest.cuts] };
+            }
+            return best;
+          };
+          const { cuts } = solve(0, Math.min(parts, n));
+          const groups = [];
+          let from = 0;
+          for (const cut of [...cuts, n]) {
+            groups.push(tokens.slice(from, cut).join(" "));
+            from = cut;
+          }
+          return groups;
+        };
+        const fitHeaderCell = (th) => {
+          const text = (th.textContent || "").replace(/\s+/g, " ").trim();
+          if (!text) return;
+          if (text.length <= headerOneLineMax) {
+            th.dataset.nowrap = "true";
+            return;
+          }
+          const plainText = Array.from(th.childNodes).every((node) => node.nodeType === Node.TEXT_NODE);
+          if (plainText) {
+            const tokens = [];
+            for (const word of text.split(" ")) {
+              if (tokens.length > 0 && punctTokenRe.test(word)) tokens[tokens.length - 1] += ` ${word}`;
+              else tokens.push(word);
+            }
+            const lines = Math.max(2, Math.ceil(text.length / headerLineChars));
+            th.textContent = "";
+            balanceTokens(tokens, lines).forEach((group, i) => {
+              if (i > 0) th.append(" ");
+              th.append(nowrapSpan(group));
+            });
+            return;
+          }
+          // Mixed markup: keep each hyphenated word whole
+          const walker = document.createTreeWalker(th, NodeFilter.SHOW_TEXT);
+          const textNodes = [];
+          while (walker.nextNode()) textNodes.push(walker.currentNode);
+          for (const node of textNodes) {
+            const value = node.nodeValue || "";
+            hyphenWordRe.lastIndex = 0;
+            if (!hyphenWordRe.test(value)) continue;
+            const frag = document.createDocumentFragment();
+            let last = 0;
+            value.replace(hyphenWordRe, (match, offset) => {
+              if (offset > last) frag.append(value.slice(last, offset));
+              frag.append(nowrapSpan(match));
+              last = offset + match.length;
+              return match;
+            });
+            if (last < value.length) frag.append(value.slice(last));
+            node.replaceWith(frag);
+          }
+        };
+
         const labelCounts = new Map();
         const regionLabels = new WeakMap();
 
@@ -224,18 +315,18 @@ const ogImageUrl = absoluteUrl(ogImagePath, Astro.site);
 
           let maxCellLen = 0;
           for (const row of bodyRows) {
-            const entityCell = row.children[entityColIndex];
-            if (entityCell && !entityCell.hasAttribute("scope")) {
-              entityCell.setAttribute("scope", "row");
-            }
-            for (const cell of row.querySelectorAll("td")) {
+            for (const cell of Array.from(row.children)) {
               const text = (cell.textContent || "").trim();
               if (text.length > maxCellLen) maxCellLen = text.length;
               if (text.length > 0 && text.length <= 18 && compactNumRe.test(text)) {
                 cell.dataset.compactNum = "true";
               }
             }
+            // Identity cell becomes a real row header so assistive tech exposes it as `rowheader`
+            toRowHeader(row.children[entityColIndex]);
           }
+
+          for (const th of headerCells) fitHeaderCell(th);
 
           // Only prose-heavy 3-column tables get a mobile min-width so compact 3-col tables fit naturally
           if (colCount === 3 && maxCellLen > 90) {
@@ -268,7 +359,8 @@ const ogImageUrl = absoluteUrl(ogImagePath, Astro.site);
             table.querySelector("thead th:first-child") ||
             table.querySelector("tbody tr > :first-child");
           if (!col1) return;
-          const widthPx = Math.floor(col1.getBoundingClientRect().width);
+          // Keep the fractional width so col 2 pins exactly flush against col 1
+          const widthPx = Math.round(col1.getBoundingClientRect().width * 1000) / 1000;
           if (widthPx > 0) {
             const val = `${widthPx}px`;
             if (wrap && wrap.style.getPropertyValue("--sticky-col1-w") !== val) {

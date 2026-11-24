@@ -881,3 +881,36 @@ test("grug-pages Iteration 3 table polish: smart sticky entity col, content-driv
 	// SKILL.md forbids standalone Rank/# column 1 in future tables
 	assert.match(grugPageSkill, /Never use a standalone `Rank` or `#` column as Column 1/);
 });
+
+test("grug-pages Iteration 4 tables: real row headers, unbroken header labels, seam-free sticky pair, and short-heading rule", () => {
+	const baseLayout = readFileSync(new URL("../sites/grug-pages/src/layouts/BaseLayout.astro", import.meta.url), "utf8");
+	const globalCss = readFileSync(new URL("../sites/grug-pages/src/styles/global.css", import.meta.url), "utf8");
+	const grugPageSkill = readFileSync(new URL("../bots/grug/skills/grug-page/SKILL.md", import.meta.url), "utf8");
+
+	// Identity cells are swapped for <th scope="row"> (attributes + children kept), so a11y trees expose `rowheader`
+	assert.match(baseLayout, /const toRowHeader = \(cell\) =>/);
+	assert.match(baseLayout, /document\.createElement\("th"\)/);
+	assert.match(baseLayout, /th\.setAttribute\(attr\.name, attr\.value\)/);
+	assert.match(baseLayout, /cell\.replaceWith\(th\)/);
+	assert.match(baseLayout, /toRowHeader\(row\.children\[entityColIndex\]\)/);
+
+	// Body row headers keep body-cell styling; header-only styling is scoped to thead
+	assert.match(globalCss, /\.prose :where\(td, tbody th\)/);
+	assert.match(globalCss, /\.prose :where\(tbody td, tbody th\)/);
+	assert.match(globalCss, /\.prose :where\(tbody th\)[^{]*\{\s*text-align: left;\s*font-weight: inherit;/);
+	assert.match(globalCss, /\.prose :where\(thead th\)[^{]*\{[^}]*hyphens: manual;/);
+	assert.doesNotMatch(globalCss, /hyphens: auto/);
+	assert.match(globalCss, /tr\.pick > :nth-child\(2\)/);
+
+	// Headers never break at a hyphen; short labels stay on one line
+	assert.match(baseLayout, /const headerOneLineMax = 14;/);
+	assert.match(baseLayout, /span\.className = "th-nowrap"/);
+	assert.match(globalCss, /thead th\[data-nowrap="true"\], thead th \.th-nowrap\)[^{]*\{\s*white-space: nowrap;/);
+
+	// Sticky col 2 uses the fractional col-1 width and fills 1px back over the boundary
+	assert.doesNotMatch(baseLayout, /Math\.floor\(col1\.getBoundingClientRect\(\)\.width\)/);
+	assert.doesNotMatch(baseLayout, /offsetWidth/);
+	assert.match(globalCss, /td:nth-child\(2\)\):not\(\.not-prose, \.not-prose \*\)::before \{[^}]*left: -1px;[^}]*background-color: inherit;/);
+
+	assert.match(grugPageSkill, /Keep column headings short \(1–2 words\)/);
+});
