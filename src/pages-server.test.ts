@@ -845,3 +845,37 @@ if (mode === "timeout-stage2" && stage === "ultracave") {
 	assert.match(remoteWithPages, /One page per topic: run `grug-page list`/);
 	assert.doesNotMatch(remoteWithPages, /ultracave|caveman/i);
 });
+
+test("grug-pages Iteration 3 table polish: smart sticky entity col, content-driven sizing, reserved cue, and unique aria-labels", () => {
+	const baseLayout = readFileSync(new URL("../sites/grug-pages/src/layouts/BaseLayout.astro", import.meta.url), "utf8");
+	const globalCss = readFileSync(new URL("../sites/grug-pages/src/styles/global.css", import.meta.url), "utf8");
+	const grugPageSkill = readFileSync(new URL("../bots/grug/skills/grug-page/SKILL.md", import.meta.url), "utf8");
+
+	// Smart rank-column detection & entity scope="row"
+	assert.match(baseLayout, /data-sticky-entity/);
+	assert.match(baseLayout, /--sticky-col1-w/);
+	assert.match(baseLayout, /setAttribute\("scope", "row"\)/);
+	assert.match(baseLayout, /data-wide-prose/);
+	assert.match(baseLayout, /— scrollable table/);
+
+	// Content-driven sizing: mobile-only min-widths, no blanket 3-col or desktop 50rem forced widths
+	assert.match(globalCss, /table\[data-wide-prose="true"\]/);
+	assert.match(globalCss, /min-width:\s*30rem/);
+	assert.match(globalCss, /min-width:\s*28rem/);
+	assert.match(globalCss, /min-width:\s*34rem/);
+	assert.doesNotMatch(globalCss, /min-width:\s*50rem/);
+	assert.doesNotMatch(globalCss, /min-width:\s*44rem/);
+	assert.doesNotMatch(globalCss, /min-width:\s*32rem/);
+
+	// Sticky col 2 pinned next to col 1, soft 26px fade, reserved cue hidden at end without display:none
+	assert.match(globalCss, /left:\s*var\(--sticky-col1-w/);
+	assert.match(globalCss, /max-width:\s*8\.5rem/);
+	assert.match(globalCss, /width:\s*1\.625rem/);
+	assert.match(
+		globalCss,
+		/\.table-block\[data-scrollable="true"\]\[data-scrolled-end="true"\] > \.table-scroll-hint\s*\{[\s\S]*opacity:\s*0;[\s\S]*visibility:\s*hidden;/,
+	);
+
+	// SKILL.md forbids standalone Rank/# column 1 in future tables
+	assert.match(grugPageSkill, /Never use a standalone `Rank` or `#` column as Column 1/);
+});

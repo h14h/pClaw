@@ -161,15 +161,87 @@ const ogImageUrl = absoluteUrl(ogImagePath, Astro.site);
 
         const compactNumRe =
           /^[~$€£¥<>≤≥±+\-]?\d[\d,.\s/–—\-×x%$€£¥kKmMbB]*(?:\s*(?:yr|mo|ft|mi|ac|Mbps|Gbps|sqft|unit))?$/i;
+        const rankHeaderRe = /^(#|rank|no\.?|pos|step)$/i;
+        const rankCellRe = /^(?:#?\d{1,3}\.?|n\/a|—|–|-)$/i;
 
-        for (const scroller of scrollers) {
-          for (const cell of scroller.querySelectorAll("td")) {
-            const text = (cell.textContent || "").trim();
-            if (text.length > 0 && text.length <= 18 && compactNumRe.test(text)) {
-              cell.dataset.compactNum = "true";
+        const findNearestHeading = (el) => {
+          const root = el.closest("article, main") || document.body;
+          const headings = Array.from(root.querySelectorAll("h2, h3, h4"));
+          let best = "";
+          for (const h of headings) {
+            const rel = h.compareDocumentPosition(el);
+            if (rel & Node.DOCUMENT_POSITION_FOLLOWING) {
+              const txt = (h.textContent || "").replace(/\s+/g, " ").trim();
+              if (txt) best = txt;
+            } else {
+              break;
             }
           }
-        }
+          return best;
+        };
+
+        const labelCounts = new Map();
+        const regionLabels = new WeakMap();
+
+        scrollers.forEach((scroller, index) => {
+          const table = scroller.querySelector("table");
+          const block = scroller.closest(".table-block") || scroller;
+
+          // Unique accessible name per scrollable table region
+          const captionText = (table?.querySelector("caption")?.textContent || "")
+            .replace(/\s+/g, " ")
+            .trim();
+          const headingText = captionText || findNearestHeading(block);
+          const baseLabel = headingText
+            ? `${headingText} — scrollable table`
+            : `Scrollable data table ${index + 1}`;
+          const count = (labelCounts.get(baseLabel) || 0) + 1;
+          labelCounts.set(baseLabel, count);
+          regionLabels.set(scroller, count === 1 ? baseLabel : `${baseLabel} (${count})`);
+
+          if (!table) return;
+
+          const headerCells = Array.from(table.querySelectorAll("thead tr:first-child > th"));
+          const bodyRows = Array.from(table.querySelectorAll("tbody > tr"));
+          const colCount = headerCells.length || (bodyRows[0]?.children.length ?? 0);
+
+          // Smart rank-column detection: pin col 1 + col 2 when col 1 is a short rank/index column
+          const col1Header = (headerCells[0]?.textContent || "").trim();
+          const col1Values = bodyRows
+            .map((row) => (row.children[0]?.textContent || "").trim())
+            .filter(Boolean);
+          const isRankCol =
+            colCount >= 3 &&
+            (rankHeaderRe.test(col1Header) ||
+              (col1Values.length > 0 &&
+                col1Values.some((val) => /\d/.test(val)) &&
+                col1Values.every((val) => val.length <= 4 && rankCellRe.test(val))));
+
+          const entityColIndex = isRankCol ? 1 : 0;
+          if (isRankCol) {
+            table.setAttribute("data-sticky-entity", "2");
+          }
+
+          let maxCellLen = 0;
+          for (const row of bodyRows) {
+            const entityCell = row.children[entityColIndex];
+            if (entityCell && !entityCell.hasAttribute("scope")) {
+              entityCell.setAttribute("scope", "row");
+            }
+            for (const cell of row.querySelectorAll("td")) {
+              const text = (cell.textContent || "").trim();
+              if (text.length > maxCellLen) maxCellLen = text.length;
+              if (text.length > 0 && text.length <= 18 && compactNumRe.test(text)) {
+                cell.dataset.compactNum = "true";
+              }
+            }
+          }
+
+          // Only prose-heavy 3-column tables get a mobile min-width so compact 3-col tables fit naturally
+          if (colCount === 3 && maxCellLen > 90) {
+            table.setAttribute("data-wide-prose", "true");
+          }
+        });
 
         const setAttr = (el, name, val) => {
           if (!el) return;
@@ -177,6 +249,30 @@ const ogImageUrl = absoluteUrl(ogImagePath, Astro.site);
             if (el.hasAttribute(name)) el.removeAttribute(name);
           } else if (el.getAttribute(name) !== val) {
             el.setAttribute(name, val);
+          }
+        };
+
+        const syncStickyCol1Width = (scroller, scrollable) => {
+          const wrap = scroller.closest(".table-wrap");
+          const table = scroller.querySelector("table");
+          if (!scrollable || !table || table.getAttribute("data-sticky-entity") !== "2") {
+            if (wrap) wrap.style.removeProperty("--sticky-col1-w");
+            scroller.style.removeProperty("--sticky-col1-w");
+            return;
+          }
+          const col1 =
+            table.querySelector("thead th:first-child") ||
+            table.querySelector("tbody tr > :first-child");
+          if (!col1) return;
+          const widthPx = Math.floor(col1.getBoundingClientRect().width);
+          if (widthPx > 0) {
+            const val = `${widthPx}px`;
+            if (wrap && wrap.style.getPropertyValue("--sticky-col1-w") !== val) {
+              wrap.style.setProperty("--sticky-col1-w", val);
+            }
+            if (scroller.style.getPropertyValue("--sticky-col1-w") !== val) {
+              scroller.style.setProperty("--sticky-col1-w", val);
+            }
           }
         };
 
@@ -195,6 +291,7 @@ const ogImageUrl = absoluteUrl(ogImagePath, Astro.site);
             setAttr(block, "data-scrollable", null);
             setAttr(block, "data-scrolled-start", null);
             setAttr(block, "data-scrolled-end", null);
+            syncStickyCol1Width(scroller, false);
             return;
           }
 
@@ -205,10 +302,11 @@ const ogImageUrl = absoluteUrl(ogImagePath, Astro.site);
           setAttr(scroller, "data-scrolled-end", String(atEnd));
           setAttr(scroller, "tabindex", "0");
           setAttr(scroller, "role", "region");
-          setAttr(scroller, "aria-label", "Scrollable data table");
+          setAttr(scroller, "aria-label", regionLabels.get(scroller) || "Scrollable data table");
           setAttr(block, "data-scrollable", "true");
           setAttr(block, "data-scrolled-start", String(atStart));
           setAttr(block, "data-scrolled-end", String(atEnd));
+          syncStickyCol1Width(scroller, true);
         };
 
         const syncAll = () => {

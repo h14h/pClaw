@@ -75,6 +75,7 @@ import { Callout, StatGrid, Stat, Details, Sources, Tabs } from "@components/mdx
 - `<Details summary="Methodology and assumptions" open={false}>...</Details>` — collapsible secondary detail.
 - `<Sources checked="2026-11-24">` wrapping a numbered Markdown list of links — always include at the bottom.
 - Standard Markdown tables work out of the box (automatically wrapped for mobile horizontal scroll with `tabular-nums`).
+- **Never use a standalone `Rank` or `#` column as Column 1** — put the identifying name (Provider, Option, Site, Scenario) in Column 1 (e.g. `1. GFiber Webpass`) so future tables are naturally compact and self-identifying.
 
 ## Sourcing and content rules
 

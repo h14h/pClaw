@@ -401,21 +401,29 @@
     }
   }
 
-  /* Tables: sticky first column + right-edge fade overlay + keyboard-accessible scroll region */
+  /* Tables: content-driven sizing + sticky identity column(s) + soft right-edge fade + keyboard scroll region */
   .prose .table-scroll-hint {
     display: none;
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 150ms ease, visibility 150ms ease;
   }
 
   .prose .table-block[data-scrollable="true"] > .table-scroll-hint {
     display: flex;
   }
 
+  .prose .table-block[data-scrollable="true"][data-scrolled-end="true"] > .table-scroll-hint {
+    opacity: 0;
+    visibility: hidden;
+  }
+
   .prose .table-wrap {
-    --table-fade-edge: color-mix(in oklab, var(--color-stone-950) 9%, transparent);
+    --table-fade-edge: color-mix(in oklab, var(--color-stone-950) 7%, transparent);
     --table-fade-surface: var(--color-paper);
 
     @variant dark {
-      --table-fade-edge: rgba(0, 0, 0, 0.55);
+      --table-fade-edge: rgba(0, 0, 0, 0.42);
       --table-fade-surface: var(--color-obsidian);
     }
   }
@@ -424,7 +432,7 @@
     content: "";
     position: absolute;
     inset: 0 0 0 auto;
-    width: 2.75rem;
+    width: 1.625rem;
     pointer-events: none;
     z-index: 3;
     opacity: 0;
@@ -433,12 +441,12 @@
       linear-gradient(
         to left,
         var(--table-fade-edge) 0%,
-        transparent 58%
+        transparent 60%
       ),
       linear-gradient(
         to left,
         var(--table-fade-surface) 0%,
-        color-mix(in oklab, var(--table-fade-surface) 84%, transparent) 45%,
+        color-mix(in oklab, var(--table-fade-surface) 72%, transparent) 48%,
         transparent 100%
       );
   }
@@ -455,6 +463,20 @@
     @variant dark {
       --table-sticky-shadow: rgba(0, 0, 0, 0.55);
     }
+  }
+
+  .prose .table-scroll-inner {
+    padding-left: --spacing(5);
+    padding-right: --spacing(5);
+
+    @variant sm {
+      padding-left: --spacing(8);
+      padding-right: --spacing(8);
+    }
+  }
+
+  .prose .table-scroll[data-scrollable="true"] > .table-scroll-inner {
+    padding-left: 0;
   }
 
   .prose .table-scroll:focus-visible {
@@ -481,21 +503,19 @@
     }
   }
 
-  /* Prevent 3+ column prose tables from crushing into narrow vertical strips on mobile */
-  .prose :where(table):has(tr > :nth-child(3)):not(.not-prose, .not-prose *) {
-    min-width: 32rem;
-  }
+  /* Mobile-only minimum widths: compact 2–3 column tables fit naturally without forced scrolling */
+  @media (width < 40rem) {
+    .prose :where(table[data-wide-prose="true"]):not(.not-prose, .not-prose *) {
+      min-width: 30rem;
+    }
 
-  .prose :where(table):has(tr > :nth-child(4)):not(.not-prose, .not-prose *) {
-    min-width: 38rem;
-  }
+    .prose :where(table):has(tr > :nth-child(4)):not(.not-prose, .not-prose *) {
+      min-width: 28rem;
+    }
 
-  .prose :where(table):has(tr > :nth-child(5)):not(.not-prose, .not-prose *) {
-    min-width: 44rem;
-  }
-
-  .prose :where(table):has(tr > :nth-child(6)):not(.not-prose, .not-prose *) {
-    min-width: 50rem;
+    .prose :where(table):has(tr > :nth-child(5)):not(.not-prose, .not-prose *) {
+      min-width: 34rem;
+    }
   }
 
   .prose :where(thead th):not(.not-prose, .not-prose *) {
@@ -519,17 +539,17 @@
   }
 
   .prose :where(th):not(.not-prose, .not-prose *) {
-    padding: --spacing(2.5) --spacing(3);
+    padding: --spacing(2.5) --spacing(2.5);
     text-align: left;
     vertical-align: bottom;
     font-weight: var(--font-weight-medium);
     white-space: normal;
     text-wrap: balance;
-    hyphens: none;
+    hyphens: auto;
     color: var(--color-stone-900);
 
     @variant sm {
-      padding: --spacing(2.5) --spacing(2.5);
+      padding: --spacing(2.5) --spacing(3);
     }
 
     @variant dark {
@@ -538,13 +558,13 @@
   }
 
   .prose :where(td):not(.not-prose, .not-prose *) {
-    padding: --spacing(2.5) --spacing(3);
+    padding: --spacing(2.5) --spacing(2.5);
     vertical-align: top;
     font-variant-numeric: tabular-nums;
     color: var(--color-stone-700);
 
     @variant sm {
-      padding: --spacing(2.5) --spacing(2.5);
+      padding: --spacing(2.5) --spacing(3);
     }
 
     @variant dark {
@@ -569,8 +589,8 @@
     padding-right: 0;
   }
 
-  /* Sticky first column inside .table-scroll with opaque surface aligned to prose margins */
-  .prose .table-scroll :where(th:first-child, td:first-child):not(.not-prose, .not-prose *) {
+  /* Sticky first column inside scrollable .table-scroll with opaque surface aligned to prose margins */
+  .prose .table-scroll[data-scrollable="true"] :where(th:first-child, td:first-child):not(.not-prose, .not-prose *) {
     position: sticky;
     left: 0;
     z-index: 1;
@@ -586,29 +606,12 @@
     }
   }
 
-  .prose .table-scroll :where(thead th:first-child):not(.not-prose, .not-prose *) {
+  .prose .table-scroll[data-scrollable="true"] :where(thead th:first-child):not(.not-prose, .not-prose *) {
     z-index: 2;
   }
 
-  .prose .table-scroll :where(th:last-child, td:last-child):not(.not-prose, .not-prose *) {
-    padding-right: --spacing(5);
-
-    @variant sm {
-      padding-right: --spacing(8);
-    }
-  }
-
-  /* Keep column 1 compact on mobile overflowing/multi-column tables so col 2+ has horizontal room */
-  @media (width < 40rem) {
-    .prose .table-scroll[data-scrollable="true"] :where(th:first-child, td:first-child):not(.not-prose, .not-prose *),
-    .prose .table-scroll :where(table):has(tr > :nth-child(3)) :where(th:first-child, td:first-child):not(.not-prose, .not-prose *) {
-      max-width: 9.5rem;
-      overflow-wrap: break-word;
-    }
-  }
-
-  /* Subtle sticky column right-edge divider when scrollable, strengthening with shadow when panned */
-  .prose .table-scroll[data-scrollable="true"] :where(th:first-child, td:first-child):not(.not-prose, .not-prose *) {
+  /* Default (entity in col 1): subtle sticky right-edge divider when scrollable, strengthening with shadow when panned */
+  .prose .table-scroll[data-scrollable="true"] :where(table:not([data-sticky-entity="2"])) :where(th:first-child, td:first-child):not(.not-prose, .not-prose *) {
     border-right: 1px solid color-mix(in oklab, var(--color-stone-950) 8%, transparent);
 
     @variant dark {
@@ -616,7 +619,7 @@
     }
   }
 
-  .prose .table-scroll[data-scrollable="true"][data-scrolled-start="false"] :where(th:first-child, td:first-child):not(.not-prose, .not-prose *) {
+  .prose .table-scroll[data-scrollable="true"][data-scrolled-start="false"] :where(table:not([data-sticky-entity="2"])) :where(th:first-child, td:first-child):not(.not-prose, .not-prose *) {
     border-right-color: color-mix(in oklab, var(--color-stone-950) 14%, transparent);
 
     @variant dark {
@@ -624,7 +627,7 @@
     }
   }
 
-  .prose .table-scroll[data-scrollable="true"][data-scrolled-start="false"] :where(th:first-child, td:first-child):not(.not-prose, .not-prose *)::after {
+  .prose .table-scroll[data-scrollable="true"][data-scrolled-start="false"] :where(table:not([data-sticky-entity="2"])) :where(th:first-child, td:first-child):not(.not-prose, .not-prose *)::after {
     content: "";
     position: absolute;
     top: 0;
@@ -639,6 +642,67 @@
     );
   }
 
+  /* Smart rank/index col 1 + sticky entity col 2 pinned directly beside it */
+  .prose .table-scroll[data-scrollable="true"] :where(table[data-sticky-entity="2"]) :where(th:first-child, td:first-child):not(.not-prose, .not-prose *) {
+    width: auto;
+    padding-right: --spacing(2);
+    white-space: nowrap;
+  }
+
+  .prose .table-scroll[data-scrollable="true"] :where(table[data-sticky-entity="2"]) :where(th:nth-child(2), td:nth-child(2)):not(.not-prose, .not-prose *) {
+    position: sticky;
+    left: var(--sticky-col1-w, 3.5rem);
+    z-index: 1;
+    padding-left: --spacing(2);
+    background-color: var(--color-paper);
+    border-right: 1px solid color-mix(in oklab, var(--color-stone-950) 8%, transparent);
+
+    @variant dark {
+      background-color: var(--color-obsidian);
+      border-right-color: color-mix(in oklab, var(--color-white) 8%, transparent);
+    }
+  }
+
+  .prose .table-scroll[data-scrollable="true"] :where(table[data-sticky-entity="2"]) :where(thead th:nth-child(2)):not(.not-prose, .not-prose *) {
+    z-index: 2;
+  }
+
+  .prose .table-scroll[data-scrollable="true"][data-scrolled-start="false"] :where(table[data-sticky-entity="2"]) :where(th:nth-child(2), td:nth-child(2)):not(.not-prose, .not-prose *) {
+    border-right-color: color-mix(in oklab, var(--color-stone-950) 14%, transparent);
+
+    @variant dark {
+      border-right-color: color-mix(in oklab, var(--color-white) 14%, transparent);
+    }
+  }
+
+  .prose .table-scroll[data-scrollable="true"][data-scrolled-start="false"] :where(table[data-sticky-entity="2"]) :where(th:nth-child(2), td:nth-child(2)):not(.not-prose, .not-prose *)::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: -1px;
+    right: -13px;
+    width: 12px;
+    pointer-events: none;
+    background: linear-gradient(
+      to right,
+      var(--table-sticky-shadow),
+      transparent
+    );
+  }
+
+  /* Keep sticky entity column compact on mobile scrollable tables so remaining columns have ample room */
+  @media (width < 40rem) {
+    .prose .table-scroll[data-scrollable="true"] :where(table:not([data-sticky-entity="2"])) :where(th:first-child, td:first-child):not(.not-prose, .not-prose *) {
+      max-width: 9rem;
+      overflow-wrap: break-word;
+    }
+
+    .prose .table-scroll[data-scrollable="true"] :where(table[data-sticky-entity="2"]) :where(th:nth-child(2), td:nth-child(2)):not(.not-prose, .not-prose *) {
+      max-width: 8.5rem;
+      overflow-wrap: break-word;
+    }
+  }
+
   .prose :where(tr.pick > td, tr[data-pick] > td):not(.not-prose, .not-prose *) {
     background-color: color-mix(in oklab, var(--color-accent) 7%, transparent);
 
@@ -647,7 +711,8 @@
     }
   }
 
-  .prose .table-scroll :where(tr.pick > td:first-child, tr[data-pick] > td:first-child):not(.not-prose, .not-prose *) {
+  .prose .table-scroll[data-scrollable="true"] :where(tr.pick > td:first-child, tr[data-pick] > td:first-child):not(.not-prose, .not-prose *),
+  .prose .table-scroll[data-scrollable="true"] :where(table[data-sticky-entity="2"]) :where(tr.pick > td:nth-child(2), tr[data-pick] > td:nth-child(2)):not(.not-prose, .not-prose *) {
     background-color: color-mix(in oklab, var(--color-accent) 7%, var(--color-paper));
 
     @variant dark {
@@ -719,7 +784,14 @@
     background-color: transparent !important;
   }
 
-  .prose .table-scroll :where(th:first-child, td:first-child)::after {
+  .prose .table-scroll :where(th:nth-child(2), td:nth-child(2)) {
+    position: static !important;
+    max-width: none !important;
+    border-right: 0 !important;
+    background-color: transparent !important;
+  }
+
+  .prose .table-scroll :where(th:first-child, td:first-child, th:nth-child(2), td:nth-child(2))::after {
     display: none !important;
   }
 
@@ -728,6 +800,6 @@
   }
 
   .prose .table-scroll-inner {
-    padding-inline: 0;
+    padding-inline: 0 !important;
   }
 }
