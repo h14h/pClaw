@@ -973,6 +973,8 @@ test("grug-pages theme button has a 48px hit area without moving the header", ()
 	assert.ok(button, "theme toggle button present");
 	// The button itself is 48×48; -m-2 keeps its layout footprint at the 32×32 visual chip
 	assert.match(button, /class="group -m-2 inline-flex size-12 /);
+	// Square corners on the 48×48 box so its whole area hit-tests (the visible rounding lives on the chip)
+	assert.match(button, /class="group -m-2 inline-flex size-12 items-center justify-center focus-visible:outline-none"/);
 	// The hover/focus chip and icon stay the same visual size
 	assert.match(button, /<span\s+class="inline-flex size-8 items-center justify-center rounded-md group-hover:/);
 	assert.match(button, /group-focus-visible:outline-2/);
