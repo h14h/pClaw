@@ -503,17 +503,17 @@
     }
   }
 
-  /* Mobile-only minimum widths: compact 2–3 column tables fit naturally without forced scrolling */
+  /* Mobile-only minimum widths for prose-heavy tables; compact tables (short cells) size to their content */
   @media (width < 40rem) {
     .prose :where(table[data-wide-prose="true"]):not(.not-prose, .not-prose *) {
       min-width: 30rem;
     }
 
-    .prose :where(table):has(tr > :nth-child(4)):not(.not-prose, .not-prose *) {
+    .prose :where(table:not([data-compact="true"])):has(tr > :nth-child(4)):not(.not-prose, .not-prose *) {
       min-width: 28rem;
     }
 
-    .prose :where(table):has(tr > :nth-child(5)):not(.not-prose, .not-prose *) {
+    .prose :where(table:not([data-compact="true"])):has(tr > :nth-child(5)):not(.not-prose, .not-prose *) {
       min-width: 34rem;
     }
   }

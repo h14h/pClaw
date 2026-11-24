@@ -241,6 +241,10 @@ const ogImageUrl = absoluteUrl(ogImagePath, Astro.site);
           if (colCount === 3 && maxCellLen > 90) {
             table.setAttribute("data-wide-prose", "true");
           }
+          // Short-cell tables (numbers, labels) never get a forced mobile floor; they scroll only if content truly overflows
+          if (maxCellLen > 0 && maxCellLen <= 24) {
+            table.setAttribute("data-compact", "true");
+          }
         });
 
         const setAttr = (el, name, val) => {

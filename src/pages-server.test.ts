@@ -860,6 +860,8 @@ test("grug-pages Iteration 3 table polish: smart sticky entity col, content-driv
 
 	// Content-driven sizing: mobile-only min-widths, no blanket 3-col or desktop 50rem forced widths
 	assert.match(globalCss, /table\[data-wide-prose="true"\]/);
+	assert.match(baseLayout, /setAttribute\("data-compact", "true"\)/);
+	assert.match(globalCss, /table:not\(\[data-compact="true"\]\)\):has\(tr > :nth-child\(5\)\)/);
 	assert.match(globalCss, /min-width:\s*30rem/);
 	assert.match(globalCss, /min-width:\s*28rem/);
 	assert.match(globalCss, /min-width:\s*34rem/);
