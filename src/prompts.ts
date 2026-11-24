@@ -142,9 +142,15 @@ export function filterFormattingPrompt(text: string, flags: PromptFeatureFlags =
 	return out.trim();
 }
 
+const REMOTE_BROWSER_GUIDANCE = [
+	"- Use `agent-browser` (`open <url>`, `snapshot -i`, `click @ref`, `screenshot <path>`, `close`) when `web_fetch` misses JS-rendered content or prices, when a public search form needs interaction, or when capturing a visual/product image to save and report back.",
+	"- Always run `agent-browser close` before finishing.",
+	"- Never attempt to solve CAPTCHAs or anti-bot challenges; stop and report if blocked.",
+].join("\n");
+
 /**
  * Adapt `worker.md` for an isolated remote SSH VM sandbox (no pclaw systemd service rules,
- * rely on Muse's native `web_search` and `web_fetch` instead of host CLI tools).
+ * rely on Muse's native `web_search` and `web_fetch` instead of host CLI tools, and add `agent-browser` guidance).
  */
 export function filterWorkerPrompt(text: string, options: { remote?: boolean } = {}): string {
 	let out = text;
@@ -153,6 +159,11 @@ export function filterWorkerPrompt(text: string, options: { remote?: boolean } =
 			.replace(/^- You run inside pclaw's service,[^\n]*\n?/gm, "")
 			.replace(/Use `search` for the web:/g, "Use `web_search` for the web:")
 			.replace(/Open a page with `read_page`/g, "Open a page with `web_fetch`");
+		if (/^- Open a page with `web_fetch`[^\n]*$/m.test(out)) {
+			out = out.replace(/^(- Open a page with `web_fetch`[^\n]*)$/m, `$1\n${REMOTE_BROWSER_GUIDANCE}`);
+		} else {
+			out = `${out.trimEnd()}\n\n${REMOTE_BROWSER_GUIDANCE}`;
+		}
 	}
 	return out.replace(/\n{3,}/g, "\n\n").trim();
 }

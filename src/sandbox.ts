@@ -15,6 +15,10 @@ const DEFAULT_SSH_WORK_DIR = "~/work";
 const DEFAULT_SSH_INBOX_DIR = "~/inbox";
 const DEFAULT_SSH_MUSE_BIN = "~/.local/bin/muse";
 const SSH_FILE_TIMEOUT_MS = 120_000;
+const SSH_CLEANUP_TIMEOUT_MS = 5_000;
+/** Best-effort remote teardown for any headless browser processes left on an SSH VM after a worker run. */
+export const REMOTE_BROWSER_CLEANUP_COMMAND =
+	'export PATH="$HOME/.local/bin:$PATH"; agent-browser close >/dev/null 2>&1 || true; pkill -f \'[a]gent-browser-linux|[.]agent-browser/browsers/|[c]hrome-headless-shell|[c]hromium\' >/dev/null 2>&1 || true';
 /** ssh exits 255 for its own failures (connection refused, reset, auth): the remote command never ran. */
 const SSH_OWN_FAILURE = 255;
 const SSH_RETRY_DELAY_MS = 1_000;
@@ -210,6 +214,10 @@ export type SshSandboxOptions = {
 	spawnFn?: typeof spawn;
 	/** Wait before retrying after ssh's own failure (exit 255). */
 	retryDelayMs?: number;
+	/** Remote teardown command run after every worker run finishes, aborts, or times out. */
+	cleanupCommand?: string;
+	/** Timeout in milliseconds for post-run remote browser teardown (default 5000). */
+	cleanupTimeoutMs?: number;
 };
 
 /** Build the remote POSIX shell command that launches `muse serve` (MSP v1 over stdio) in `workDir`. */
@@ -305,6 +313,42 @@ export function createSshSandbox(options: SshSandboxOptions): WorkerSandbox {
 	const sshCommand = options.sshCommand ?? "ssh";
 	const spawnFn = options.spawnFn ?? spawn;
 	const retryDelayMs = options.retryDelayMs ?? SSH_RETRY_DELAY_MS;
+	const cleanupCommand = options.cleanupCommand ?? REMOTE_BROWSER_CLEANUP_COMMAND;
+	const cleanupTimeoutMs = options.cleanupTimeoutMs ?? SSH_CLEANUP_TIMEOUT_MS;
+
+	const cleanupRemoteBrowsers = (): Promise<void> =>
+		new Promise((resolveCleanup) => {
+			if (cleanupCommand.trim() === "") {
+				resolveCleanup();
+				return;
+			}
+			let done = false;
+			const finish = () => {
+				if (done) return;
+				done = true;
+				clearTimeout(timer);
+				resolveCleanup();
+			};
+			let child: ReturnType<typeof spawnFn>;
+			try {
+				child = spawnFn(sshCommand, [...SSH_BASE_ARGS, host, cleanupCommand], {
+					stdio: ["ignore", "ignore", "ignore"],
+					env: sshEnv(),
+				});
+			} catch {
+				resolveCleanup();
+				return;
+			}
+			const timer = setTimeout(() => {
+				try {
+					child.kill("SIGKILL");
+				} catch {}
+				finish();
+			}, cleanupTimeoutMs);
+			timer.unref();
+			child.on("error", finish);
+			child.on("close", finish);
+		});
 
 	return {
 		type: "ssh",
@@ -336,25 +380,29 @@ export function createSshSandbox(options: SshSandboxOptions): WorkerSandbox {
 				workDir,
 				model: req.job.model,
 			});
-			const result = await runMuseMsp({
-				spawnProcess: () =>
-					spawnFn(sshCommand, [...SSH_BASE_ARGS, host, remoteCmd], {
-						stdio: ["pipe", "pipe", "pipe"],
-						env: sshEnv(),
-					}),
-				sessionId: req.sessionId,
-				model: req.job.model,
-				effort: req.thinking,
-				prompt,
-				transcript,
-				resume: !first,
-				timeoutMs: req.timeoutMs,
-				...(req.signal === undefined ? {} : { signal: req.signal }),
-				...(req.onHandle === undefined ? {} : { onHandle: req.onHandle }),
-				label: `${sshCommand} to ${host}`,
-				preInitRetryDelayMs: retryDelayMs,
-			});
-			return { ok: result.ok, output: clip(result.output) };
+			try {
+				const result = await runMuseMsp({
+					spawnProcess: () =>
+						spawnFn(sshCommand, [...SSH_BASE_ARGS, host, remoteCmd], {
+							stdio: ["pipe", "pipe", "pipe"],
+							env: sshEnv(),
+						}),
+					sessionId: req.sessionId,
+					model: req.job.model,
+					effort: req.thinking,
+					prompt,
+					transcript,
+					resume: !first,
+					timeoutMs: req.timeoutMs,
+					...(req.signal === undefined ? {} : { signal: req.signal }),
+					...(req.onHandle === undefined ? {} : { onHandle: req.onHandle }),
+					label: `${sshCommand} to ${host}`,
+					preInitRetryDelayMs: retryDelayMs,
+				});
+				return { ok: result.ok, output: clip(result.output) };
+			} finally {
+				await cleanupRemoteBrowsers();
+			}
 		},
 		async putFile(localPath, filename, signal) {
 			const bytes = readFileSync(localPath);

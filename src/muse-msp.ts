@@ -274,8 +274,8 @@ async function runMuseMspOnce(options: MuseMspRunOptions): Promise<OnceResult> {
 	let sessionIdOnWire = mspSessionId;
 	let activeTurnId: string | undefined;
 	const outstandingTurns = new Set<string>();
-	/** Accepted `turn/steer` commandIds not yet observed as consumed (either in-turn `userMessage` or `pure_followup` `turn/started`). */
-	const pendingSteers = new Set<string>();
+	/** Accepted `turn/steer` commands not yet observed as consumed (either in-turn `userMessage` or `pure_followup` `turn/started`). */
+	const pendingSteers = new Map<string, { id: string; message: string; effort?: string; resubmitted?: boolean }>();
 	let steerGraceTimer: NodeJS.Timeout | undefined;
 	const turnOrder: string[] = [];
 	const turnTerminals = new Map<string, { terminal: string; errorText?: string }>();
@@ -479,21 +479,48 @@ async function runMuseMspOnce(options: MuseMspRunOptions): Promise<OnceResult> {
 			clearSteerGraceTimer();
 			return;
 		}
-		if (pendingSteers.size > 0) {
-			// When `turn/steer` arrives after T1's final model step starts, Muse lets T1 emit `turn/completed`
-			// without consuming the steer, then spawns a `pure_followup` successor turn (~25ms later) whose
-			// `turnId` equals the steer's `commandId`. Wait briefly for that successor turn before leaving.
+		const hasUnsubmittedSteers = [...pendingSteers.values()].some((steer) => !steer.resubmitted);
+		if (hasUnsubmittedSteers) {
+			// When `turn/steer` arrives near T1's end-of-turn gate, Muse may let T1 emit `turn/completed`
+			// without consuming the steer, then either spawn a `pure_followup` successor turn (~25ms later)
+			// or silently drop the steer with `already_terminal`. Wait briefly for a real `turn/started`;
+			// if none arrives before `steerGraceMs`, re-submit any unconsumed steer(s) once via `turn/start`.
 			if (steerGraceTimer === undefined) {
 				steerGraceTimer = trackTimer(
 					setTimeout(() => {
 						steerGraceTimer = undefined;
-						pendingSteers.clear();
-						finishIfDrained();
+						if (closing || closed || settled) return;
+						if (outstandingTurns.size > 0 || inFlightControl > 0) return;
+						const toResubmit = [...pendingSteers.values()].filter((steer) => !steer.resubmitted);
+						if (toResubmit.length === 0) {
+							finishIfDrained();
+							return;
+						}
+						for (const steer of toResubmit) steer.resubmitted = true;
+						inFlightControl++;
+						void (async () => {
+							try {
+								for (const steer of toResubmit) {
+									if (closing || closed || settled) break;
+									try {
+										await enqueueTurn(steer.message, steer.effort);
+									} catch (error) {
+										console.warn(
+											`[pclaw] MSP dropped-steer resubmit failed: ${error instanceof Error ? error.message : error}`,
+										);
+									}
+								}
+							} finally {
+								inFlightControl--;
+								finishIfDrained();
+							}
+						})();
 					}, steerGraceMs),
 				);
 			}
 			return;
 		}
+		pendingSteers.clear();
 		clearSteerGraceTimer();
 		closing = true;
 		void (async () => {
@@ -511,9 +538,16 @@ async function runMuseMspOnce(options: MuseMspRunOptions): Promise<OnceResult> {
 			return true;
 		}
 		if (fallbackOldest && pendingSteers.size > 0) {
-			const oldest = pendingSteers.values().next().value;
-			if (oldest !== undefined) {
-				pendingSteers.delete(oldest);
+			let oldestKey: string | undefined;
+			for (const [key, entry] of pendingSteers) {
+				if (!entry.resubmitted) {
+					oldestKey = key;
+					break;
+				}
+			}
+			if (oldestKey === undefined) oldestKey = pendingSteers.keys().next().value;
+			if (oldestKey !== undefined) {
+				pendingSteers.delete(oldestKey);
 				return true;
 			}
 		}
@@ -567,7 +601,7 @@ async function runMuseMspOnce(options: MuseMspRunOptions): Promise<OnceResult> {
 			if (item?.kind === "userMessage") {
 				const cmdId = typeof item.commandId === "string" ? item.commandId : undefined;
 				if (item.steered === true || (cmdId !== undefined && pendingSteers.has(cmdId))) {
-					const removed = consumePendingSteer(cmdId, item.steered === true && cmdId === undefined);
+					const removed = consumePendingSteer(cmdId, item.steered === true);
 					if (removed && outstandingTurns.size === 0 && inFlightControl === 0) finishIfDrained();
 				}
 				return;
@@ -820,7 +854,7 @@ async function runMuseMspOnce(options: MuseMspRunOptions): Promise<OnceResult> {
 				...(eff === undefined ? {} : { reasoningEffort: eff }),
 			});
 			const turnId = typeof res.turnId === "string" ? res.turnId : uuidv7();
-			outstandingTurns.add(turnId);
+			if (!turnTerminals.has(turnId)) outstandingTurns.add(turnId);
 			if (!turnOrder.includes(turnId)) turnOrder.push(turnId);
 			if (res.disposition === "started") activeTurnId = turnId;
 			return {
@@ -844,7 +878,11 @@ async function runMuseMspOnce(options: MuseMspRunOptions): Promise<OnceResult> {
 				const expected = activeTurnId;
 				if (expected !== undefined) {
 					const steerCommandId = uuidv7();
-					pendingSteers.add(steerCommandId);
+					pendingSteers.set(steerCommandId, {
+						id: steerCommandId,
+						message,
+						...(effort === undefined ? {} : { effort }),
+					});
 					try {
 						const res = await request<{ turnId?: string }>("turn/steer", {
 							commandId: steerCommandId,
@@ -854,7 +892,11 @@ async function runMuseMspOnce(options: MuseMspRunOptions): Promise<OnceResult> {
 							...(eff === undefined ? {} : { reasoningEffort: eff }),
 						});
 						const turnId = typeof res.turnId === "string" ? res.turnId : expected;
-						if (!turnTerminals.has(turnId)) outstandingTurns.add(turnId);
+						// Muse 1.4.25 returns `{ turnId: steerCommandId }` (`!== expected`) even when the steer
+						// is absorbed into `expected` or dropped at EOT. Never add a phantom `turnId` to
+						// `outstandingTurns`; track unconsumed steers strictly in `pendingSteers` until a real
+						// `turn/started` or steered `userMessage` arrives.
+						if (turnId === expected && !turnTerminals.has(expected)) outstandingTurns.add(expected);
 						return { disposition: "steered", turnId };
 					} catch (error) {
 						pendingSteers.delete(steerCommandId);
@@ -960,7 +1002,7 @@ async function runMuseMspOnce(options: MuseMspRunOptions): Promise<OnceResult> {
 			...(reasoningEffort === undefined ? {} : { reasoningEffort }),
 		});
 		const turnId = typeof started.turnId === "string" ? started.turnId : uuidv7();
-		outstandingTurns.add(turnId);
+		if (!turnTerminals.has(turnId)) outstandingTurns.add(turnId);
 		if (!turnOrder.includes(turnId)) turnOrder.push(turnId);
 		if (started.disposition === "started") activeTurnId = turnId;
 

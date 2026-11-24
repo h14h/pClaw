@@ -723,14 +723,19 @@ rl.on("line", (line) => {
 	await chmod(fakeMuse, 0o755);
 
 	// Create a fake `ssh` script that records argv + env, sets HOME=fakeVmHome, and executes the remote sh command!
+	// Intercept remote browser cleanup commands so tests never run `pkill` on the host machine.
 	const fakeSsh = join(root, "fake-ssh.sh");
 	await writeFile(
 		fakeSsh,
 		`#!/usr/bin/env bash
 set -euo pipefail
+cmd="\${@: -1}"
+if [[ "$cmd" == *"agent-browser close"* ]]; then
+  printf '%s\\n' "$cmd" >> "${join(logDir, "ssh-cleanup.txt")}"
+  exit 1
+fi
 printf '%s\\n' "$@" > "${join(logDir, "ssh-args.txt")}"
 env > "${join(logDir, "ssh-env.txt")}"
-cmd="\${@: -1}"
 HOME="${fakeVmHome}" exec bash -c "$cmd"
 `,
 	);
@@ -748,7 +753,8 @@ HOME="${fakeVmHome}" exec bash -c "$cmd"
 	assert.match(remoteCmdPreview, /exec "\$HOME"\/'\.local\/bin\/muse' serve --model 'muse-wonder-full-1\.0'/);
 	assert.match(remoteCmdPreview, /--disable-sandbox --disable-request-user-input/);
 
-	// Verify VM-safe preamble omits host worker-cli.ts, systemctl restart, and publish_page
+	// Verify VM-safe preamble omits host worker-cli.ts, systemctl restart, and publish_page,
+	// and includes remote agent-browser guidance (while local worker preamble stays clean).
 	const fakeWorkerOpts = makeFakeWorkers("ssh-worker-opts");
 	const remotePreamble = musePreamble({
 		promptFile: fakeWorkerOpts.promptFile,
@@ -759,9 +765,20 @@ HOME="${fakeVmHome}" exec bash -c "$cmd"
 	});
 	assert.match(remotePreamble, /web_search/);
 	assert.match(remotePreamble, /web_fetch/);
+	assert.match(remotePreamble, /agent-browser/);
+	assert.match(remotePreamble, /agent-browser close/);
+	assert.match(remotePreamble, /CAPTCHA/);
 	assert.doesNotMatch(remotePreamble, /worker-cli\.ts/);
 	assert.doesNotMatch(remotePreamble, /systemctl --user restart pclaw/);
 	assert.doesNotMatch(remotePreamble, /publish_page/);
+	const localPreamble = musePreamble({
+		promptFile: fakeWorkerOpts.promptFile,
+		cliFile: fakeWorkerOpts.cliFile,
+		skills: fakeWorkerOpts.skills,
+		allowPages: false,
+		remote: false,
+	});
+	assert.doesNotMatch(localPreamble, /agent-browser/);
 
 	// Set host secrets in process.env to prove SSH sandbox NEVER leaks them into ssh subprocess env.
 	const prevTavily = process.env.TAVILY_API_KEY;
@@ -833,6 +850,12 @@ HOME="${fakeVmHome}" exec bash -c "$cmd"
 		assert.doesNotMatch(receivedPrompt2, /## Tools here/);
 		assert.equal(receivedPrompt2, "Message from pclaw:\n\nfollow-up turn");
 
+		// Verify remote browser teardown ran after BOTH turns and non-zero cleanup exit did not fail either run
+		const cleanups = readFileSync(join(logDir, "ssh-cleanup.txt"), "utf8").trim().split("\n");
+		assert.equal(cleanups.length, 2);
+		assert.match(cleanups[0]!, /agent-browser close/);
+		assert.match(cleanups[0]!, /pkill -f/);
+
 		// putFile stages into VM ~/inbox/<filename> and returns the exact VM path
 		const localPdf = join(root, "local-invoice.pdf");
 		writeFileSync(localPdf, "PDF-CONTENT-123");
@@ -861,6 +884,75 @@ HOME="${fakeVmHome}" exec bash -c "$cmd"
 
 		// Reject invalid SSH hosts (option injection)
 		assert.throws(() => createSshSandbox({ host: "-oProxyCommand=evil" }), /Invalid SSH host/);
+
+		// Verify remote browser teardown also runs on abort and timeout (never failing or skipped)
+		const hangMuse = join(root, "hang-muse.mjs");
+		await writeFile(
+			hangMuse,
+			`#!${process.execPath}
+import { createInterface } from "node:readline";
+const send = (msg) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...msg }) + "\\n");
+let sessionId = "";
+createInterface({ input: process.stdin, crlfDelay: Infinity }).on("line", (line) => {
+	if (!line.trim()) return;
+	const msg = JSON.parse(line);
+	if (msg.method === "initialize") send({ id: msg.id, result: { serverInfo: { name: "hang-muse", version: "1.0.0" } } });
+	else if (msg.method === "session/start") {
+		sessionId = msg.params.sessionId;
+		send({ id: msg.id, result: { session: { sessionId, approvalMode: { mode: "allowAll" } } } });
+	} else if (msg.method === "turn/start") {
+		const tid = msg.params.commandId;
+		send({ id: msg.id, result: { commandId: tid, disposition: "started", startedNewTurn: true, status: "accepted", turnId: tid } });
+		send({ method: "turn/started", params: { sessionId, turnId: tid, commandId: tid } });
+	} else if (msg.method === "turn/interrupt") {
+		send({ id: msg.id, result: { commandId: msg.params.commandId, status: "accepted" } });
+		process.exit(0);
+	}
+});
+`,
+		);
+		await chmod(hangMuse, 0o755);
+
+		const hangSandbox = createSshSandbox({
+			host: "grug-max.exe.xyz",
+			workDir: "~/work",
+			inboxDir: "~/inbox",
+			museBin: hangMuse,
+			sshCommand: fakeSsh,
+		});
+
+		// Timeout triggers remote browser teardown
+		const timedOut = await hangSandbox.runWorker({
+			sessionId: "22222222-3333-4444-5555-666666666666",
+			sessionDir,
+			message: "hang until timeout",
+			thinking: "low",
+			job: { provider: MUSE, model: "muse-wonder-full-1.0" },
+			timeoutMs: 250,
+			workerOptions: fakeWorkerOpts,
+		});
+		assert.equal(timedOut.ok, false);
+		assert.match(timedOut.output, /Timed out/);
+		assert.equal(readFileSync(join(logDir, "ssh-cleanup.txt"), "utf8").trim().split("\n").length, 3);
+
+		// Abort triggers remote browser teardown
+		const ac = new AbortController();
+		setTimeout(() => ac.abort(new Error("user cancelled")), 150);
+		await assert.rejects(
+			() =>
+				hangSandbox.runWorker({
+					sessionId: "33333333-4444-5555-6666-777777777777",
+					sessionDir,
+					message: "hang until abort",
+					thinking: "low",
+					job: { provider: MUSE, model: "muse-wonder-full-1.0" },
+					timeoutMs: 10_000,
+					signal: ac.signal,
+					workerOptions: fakeWorkerOpts,
+				}),
+			/user cancelled/,
+		);
+		assert.equal(readFileSync(join(logDir, "ssh-cleanup.txt"), "utf8").trim().split("\n").length, 4);
 	} finally {
 		if (prevTavily === undefined) delete process.env.TAVILY_API_KEY;
 		else process.env.TAVILY_API_KEY = prevTavily;

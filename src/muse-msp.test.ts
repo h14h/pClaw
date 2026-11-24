@@ -555,6 +555,9 @@ test("WorkerSandbox ssh supports live mid-turn steering over mocked SSH with res
 		`#!/usr/bin/env bash
 set -euo pipefail
 cmd="\${@: -1}"
+if [[ "$cmd" == *"agent-browser close"* ]]; then
+  exit 0
+fi
 HOME="${vmHome}" exec bash -c "$cmd"
 `,
 	);
@@ -737,12 +740,13 @@ rl.on("line", (line) => {
 	assert.equal(transcriptLines.filter((e) => e.method === "turn/completed").length, 2);
 });
 
-test("runMuseMsp closes cleanly after steerGraceMs and returns T1 result if no successor turn ever spawns", async () => {
+test("runMuseMsp closes cleanly after steerGraceMs and returns T1 result if resubmit also fails", async () => {
 	const gateFile = join(dir, "grace-fallback-gate.txt");
 	const transcript = join(dir, "muse_grace_fallback.jsonl");
 	const server = join(dir, "mock-msp-grace-fallback.mjs");
 
-	// Accepts turn/steer on T1, completes T1 without emitting a steered userMessage, and NEVER starts T2.
+	// Accepts turn/steer on T1, completes T1 without emitting a steered userMessage, never starts T2,
+	// and rejects any re-submitted turn/start — verifies runMuseMsp never loops or hangs.
 	await writeFile(
 		server,
 		`#!${process.execPath}
@@ -752,6 +756,7 @@ const gateFile = ${JSON.stringify(gateFile)};
 const send = (msg) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...msg }) + "\\n");
 let sessionId = "";
 let t1Id = "";
+let startCount = 0;
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
 rl.on("line", (line) => {
 	if (!line.trim()) return;
@@ -762,6 +767,11 @@ rl.on("line", (line) => {
 		sessionId = msg.params.sessionId;
 		send({ id: msg.id, result: { session: { sessionId, approvalMode: { mode: "allowAll" } } } });
 	} else if (msg.method === "turn/start") {
+		startCount++;
+		if (startCount > 1) {
+			send({ id: msg.id, error: { code: -32000, message: "session busy or closing" } });
+			return;
+		}
 		t1Id = msg.params.commandId;
 		send({ id: msg.id, result: { commandId: t1Id, disposition: "started", startedNewTurn: true, status: "accepted", turnId: t1Id } });
 		send({ method: "turn/started", params: { sessionId, turnId: t1Id, commandId: t1Id } });
@@ -772,7 +782,7 @@ rl.on("line", (line) => {
 			send({ method: "turn/completed", params: { sessionId, turnId: t1Id, terminal: "completed" } });
 		}, 20);
 	} else if (msg.method === "turn/steer") {
-		send({ id: msg.id, result: { commandId: msg.params.commandId, status: "accepted", turnId: t1Id } });
+		send({ id: msg.id, result: { commandId: msg.params.commandId, status: "accepted", turnId: msg.params.commandId } });
 	} else if (msg.method === "session/leave") {
 		send({ id: msg.id, result: { commandId: msg.params.commandId, status: "accepted" } });
 		process.exit(0);
@@ -811,6 +821,209 @@ rl.on("line", (line) => {
 	assert.equal(res.ok, true);
 	assert.equal(res.output, "T1 completed cleanly.");
 	assert.ok(Date.now() - startedAt < 5_000, "must close shortly after steerGraceMs instead of hanging");
+});
+
+test("runMuseMsp recovers from Muse 1.4.25 late-EOT-steer race: phantom commandId turnId + silently dropped steer is re-submitted via turn/start", async () => {
+	const logFile = join(dir, "eot-drop-log.jsonl");
+	const gateFile = join(dir, "eot-drop-gate.txt");
+	const transcript = join(dir, "muse_eot_drop.jsonl");
+	const server = join(dir, "mock-msp-eot-drop.mjs");
+
+	// Models real Muse 1.4.25 late-EOT-steer race:
+	// 1. turn/steer returns `{ turnId: commandId }` (`!== t1Id`).
+	// 2. t1Id emits `turn/completed` with NO steered userMessage and NO pure_followup `turn/started`
+	//    (Muse accepted the RPC at the EOT gate and then silently dropped it with `already_terminal`).
+	// 3. After `steerGraceMs`, runMuseMsp must fire the grace timer (no hang on phantom turnId!),
+	//    re-submit the dropped steer via `turn/start` (`ifBusy: "queue"`), wait for T2, and return T2's report.
+	await writeFile(
+		server,
+		`#!${process.execPath}
+import { appendFileSync, existsSync } from "node:fs";
+import { createInterface } from "node:readline";
+const logFile = ${JSON.stringify(logFile)};
+const gateFile = ${JSON.stringify(gateFile)};
+const log = (entry) => appendFileSync(logFile, JSON.stringify(entry) + "\\n");
+const send = (msg) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...msg }) + "\\n");
+let sessionId = "";
+let turnCount = 0;
+const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
+rl.on("line", (line) => {
+	if (!line.trim()) return;
+	const msg = JSON.parse(line);
+	if (msg.method) log({ method: msg.method, params: msg.params });
+	if (msg.method === "initialize") {
+		send({ id: msg.id, result: { serverInfo: { name: "mock-muse-1.4.25", version: "1.4.25" } } });
+	} else if (msg.method === "session/start") {
+		sessionId = msg.params.sessionId;
+		send({ id: msg.id, result: { session: { sessionId, approvalMode: { mode: "allowAll" } } } });
+	} else if (msg.method === "turn/start") {
+		turnCount++;
+		const tid = msg.params.commandId;
+		const text = msg.params.input.map((p) => p.text ?? "").join("\\n");
+		send({ id: msg.id, result: { commandId: tid, disposition: "started", startedNewTurn: true, status: "accepted", turnId: tid } });
+		send({ method: "turn/started", params: { sessionId, turnId: tid, commandId: tid } });
+		if (turnCount === 1) {
+			const poll = setInterval(() => {
+				if (!existsSync(gateFile)) return;
+				clearInterval(poll);
+				send({ method: "item/completed", params: { sessionId, item: { itemId: "am-t1", kind: "agentMessage", messagePhase: "finalAnswer", status: "completed", text: "T1 draft before EOT drop.", turnId: tid } } });
+				send({ method: "turn/completed", params: { sessionId, turnId: tid, terminal: "completed" } });
+			}, 20);
+		} else {
+			setTimeout(() => {
+				send({ method: "item/completed", params: { sessionId, item: { itemId: "um-t2", commandId: tid, kind: "userMessage", status: "completed", text, turnId: tid } } });
+				send({ method: "item/completed", params: { sessionId, item: { itemId: "am-t2", kind: "agentMessage", messagePhase: "finalAnswer", status: "completed", text: "T2 RESUBMITTED_OK: " + text, turnId: tid } } });
+				send({ method: "turn/completed", params: { sessionId, turnId: tid, terminal: "completed" } });
+			}, 25);
+		}
+	} else if (msg.method === "turn/steer") {
+		// Real Muse 1.4.25 returns commandId as turnId (not expectedTurnId) and drops it at EOT.
+		send({ id: msg.id, result: { commandId: msg.params.commandId, status: "accepted", turnId: msg.params.commandId } });
+	} else if (msg.method === "session/leave") {
+		send({ id: msg.id, result: { commandId: msg.params.commandId, status: "accepted" } });
+		process.exit(0);
+	}
+});
+`,
+	);
+	await chmod(server, 0o755);
+
+	let liveHandle: LiveWorkerHandle | undefined;
+	const startedAt = Date.now();
+	const runPromise = runMuseMsp({
+		spawnProcess: () => spawn(server, ["serve"], { stdio: ["pipe", "pipe", "pipe"] }),
+		sessionId: uuidv7(),
+		workspaceRoot: dir,
+		model: "muse-wonder-full-1.0",
+		effort: "medium",
+		prompt: "initial brief",
+		transcript,
+		resume: false,
+		timeoutMs: 10_000,
+		steerGraceMs: 120,
+		onHandle: (h) => {
+			liveHandle = h;
+		},
+	});
+
+	const deadline = Date.now() + 5_000;
+	while (liveHandle === undefined && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+	assert.ok(liveHandle !== undefined);
+
+	const steered = await liveHandle.steer("SWITCH_TO_DETROIT_STYLE", "high");
+	assert.equal(steered.disposition, "steered");
+	writeFileSync(gateFile, "go\n");
+
+	const res = await runPromise;
+	assert.equal(res.ok, true);
+	assert.ok(res.output.startsWith("T2 RESUBMITTED_OK:"), res.output);
+	assert.match(res.output, /SWITCH_TO_DETROIT_STYLE/);
+	assert.ok(Date.now() - startedAt < 5_000, "must recover promptly after steerGraceMs without hanging");
+
+	const events = readFileSync(logFile, "utf8")
+		.trim()
+		.split("\n")
+		.map((l) => JSON.parse(l) as { method: string; params?: Record<string, unknown> });
+	const starts = events.filter((e) => e.method === "turn/start");
+	assert.equal(starts.length, 2, "must re-submit the dropped steer exactly once via turn/start");
+	assert.equal(starts[1]?.params?.ifBusy, "queue");
+	assert.equal(starts[1]?.params?.reasoningEffort, "high");
+	assert.equal(events.filter((e) => e.method === "session/leave").length, 1);
+});
+
+test("runMuseMsp drains cleanly when Muse 1.4.25 mid-turn steer returns commandId (!== t1Id) and T1 absorbs it", async () => {
+	const logFile = join(dir, "mid-steer-cmdid-log.jsonl");
+	const gateFile = join(dir, "mid-steer-cmdid-gate.txt");
+	const transcript = join(dir, "muse_mid_steer_cmdid.jsonl");
+	const server = join(dir, "mock-msp-mid-steer-cmdid.mjs");
+
+	// Models real Muse 1.4.25 normal mid-turn steer:
+	// 1. turn/steer returns `{ turnId: commandId }` (`!== t1Id`).
+	// 2. T1 emits steered userMessage (`steered: true`) and completes (`turnId: t1Id`).
+	// 3. Session must drain immediately without hanging on the phantom commandId or double-submitting.
+	await writeFile(
+		server,
+		`#!${process.execPath}
+import { appendFileSync, existsSync } from "node:fs";
+import { createInterface } from "node:readline";
+const logFile = ${JSON.stringify(logFile)};
+const gateFile = ${JSON.stringify(gateFile)};
+const log = (entry) => appendFileSync(logFile, JSON.stringify(entry) + "\\n");
+const send = (msg) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...msg }) + "\\n");
+let sessionId = "";
+let t1Id = "";
+let steeredText = "";
+const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
+rl.on("line", (line) => {
+	if (!line.trim()) return;
+	const msg = JSON.parse(line);
+	if (msg.method) log({ method: msg.method });
+	if (msg.method === "initialize") {
+		send({ id: msg.id, result: { serverInfo: { name: "mock-muse-1.4.25", version: "1.4.25" } } });
+	} else if (msg.method === "session/start") {
+		sessionId = msg.params.sessionId;
+		send({ id: msg.id, result: { session: { sessionId, approvalMode: { mode: "allowAll" } } } });
+	} else if (msg.method === "turn/start") {
+		t1Id = msg.params.commandId;
+		send({ id: msg.id, result: { commandId: t1Id, disposition: "started", startedNewTurn: true, status: "accepted", turnId: t1Id } });
+		send({ method: "turn/started", params: { sessionId, turnId: t1Id, commandId: t1Id } });
+		const poll = setInterval(() => {
+			if (!existsSync(gateFile)) return;
+			clearInterval(poll);
+			send({ method: "item/completed", params: { sessionId, item: { itemId: "am-t1", kind: "agentMessage", messagePhase: "finalAnswer", status: "completed", text: "T1 absorbed steer: " + steeredText, turnId: t1Id } } });
+			send({ method: "turn/completed", params: { sessionId, turnId: t1Id, terminal: "completed" } });
+		}, 20);
+	} else if (msg.method === "turn/steer") {
+		steeredText = msg.params.input.map((p) => p.text ?? "").join("\\n");
+		// Returns commandId (!== t1Id) just like Muse 1.4.25, then absorbs into T1.
+		send({ id: msg.id, result: { commandId: msg.params.commandId, status: "accepted", turnId: msg.params.commandId } });
+		send({ method: "item/completed", params: { sessionId, item: { itemId: "um-steer", commandId: msg.params.commandId, kind: "userMessage", steered: true, status: "completed", text: steeredText, turnId: t1Id } } });
+	} else if (msg.method === "session/leave") {
+		send({ id: msg.id, result: { commandId: msg.params.commandId, status: "accepted" } });
+		process.exit(0);
+	}
+});
+`,
+	);
+	await chmod(server, 0o755);
+
+	let liveHandle: LiveWorkerHandle | undefined;
+	const startedAt = Date.now();
+	const runPromise = runMuseMsp({
+		spawnProcess: () => spawn(server, ["serve"], { stdio: ["pipe", "pipe", "pipe"] }),
+		sessionId: uuidv7(),
+		workspaceRoot: dir,
+		model: "muse-wonder-full-1.0",
+		effort: "medium",
+		prompt: "initial brief",
+		transcript,
+		resume: false,
+		timeoutMs: 10_000,
+		steerGraceMs: 3_000,
+		onHandle: (h) => {
+			liveHandle = h;
+		},
+	});
+
+	const deadline = Date.now() + 5_000;
+	while (liveHandle === undefined && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+	assert.ok(liveHandle !== undefined);
+
+	const steered = await liveHandle.steer("ABSORBED_IN_T1");
+	assert.equal(steered.disposition, "steered");
+	writeFileSync(gateFile, "go\n");
+
+	const res = await runPromise;
+	assert.equal(res.ok, true);
+	assert.match(res.output, /ABSORBED_IN_T1/);
+	assert.ok(Date.now() - startedAt < 2_500, "must drain immediately without waiting for steerGraceMs or hanging");
+
+	const events = readFileSync(logFile, "utf8")
+		.trim()
+		.split("\n")
+		.map((l) => JSON.parse(l) as { method: string });
+	assert.equal(events.filter((e) => e.method === "turn/start").length, 1, "must not double-submit");
+	assert.equal(events.filter((e) => e.method === "session/leave").length, 1);
 });
 
 // Multi-turn reports, pre-init retries, and message_worker defaults.

@@ -13,7 +13,8 @@
 #   SSH_WAIT_SECS  Seconds to wait for the new VM to accept SSH (default: 90)
 #
 # Safe to re-run: skips VM creation if <vmName>.exe.xyz already answers SSH,
-# and installs muse + PDF tools (poppler-utils, pypdf, pdfplumber) idempotently.
+# and installs muse, PDF tools (poppler-utils, pypdf, pdfplumber, pymupdf),
+# and headless browser automation (Node 24 + agent-browser + Chromium) idempotently.
 
 set -euo pipefail
 
@@ -100,6 +101,22 @@ ssh "${SSH_OPTS[@]}" "$VM_HOST" '
   sudo uv pip install --system --break-system-packages pypdf pdfplumber pymupdf
   python3 -c "import pypdf, pdfplumber, pymupdf; print(\"PDF libs OK:\", pypdf.__version__, pdfplumber.__version__, \"pymupdf\")"
   pdftotext -v 2>&1 | head -n 1 || true
+'
+
+# 5. Install Node.js 24, agent-browser, and headless Chromium + OS deps idempotently.
+echo "==> Installing Node.js 24, agent-browser, and headless Chromium on '${VM_HOST}'"
+ssh "${SSH_OPTS[@]}" "$VM_HOST" '
+  set -euo pipefail
+  if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+    curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
+  fi
+  if ! command -v agent-browser >/dev/null 2>&1; then
+    sudo npm install -g agent-browser
+  fi
+  agent-browser install --with-deps
+  sudo apt-get clean
+  agent-browser --version
 '
 
 cat <<EOF
