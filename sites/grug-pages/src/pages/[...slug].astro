@@ -1,0 +1,29 @@
+---
+import { getCollection, render } from "astro:content";
+import ReportLayout from "@layouts/ReportLayout.astro";
+import Table from "@components/mdx/Table.astro";
+import { normalizePageSlug } from "@lib/urls";
+
+export async function getStaticPaths() {
+  const entries = await getCollection("pages");
+  return entries.map((entry) => ({
+    params: { slug: normalizePageSlug(entry.id) },
+    props: { entry },
+  }));
+}
+
+const { entry } = Astro.props;
+const { Content, headings } = await render(entry);
+---
+
+<ReportLayout
+  title={entry.data.title}
+  subtitle={entry.data.subtitle}
+  date={entry.data.date}
+  updated={entry.data.updated}
+  summary={entry.data.summary}
+  tags={entry.data.tags}
+  headings={headings}
+>
+  <Content components={{ table: Table }} />
+</ReportLayout>

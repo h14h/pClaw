@@ -1,0 +1,41 @@
+---
+interface Props {
+  type?: "note" | "tip" | "warn";
+  title?: string;
+}
+
+const { type = "note", title } = Astro.props;
+
+const defaultTitles = {
+  note: "Note",
+  tip: "Tip",
+  warn: "Caveat",
+} as const;
+
+const barStyles = {
+  note: "border-l-stone-400 dark:border-l-zinc-500",
+  tip: "border-l-accent dark:border-l-accent-dark",
+  warn: "border-l-amber-600 dark:border-l-amber-400",
+} as const;
+
+const titleStyles = {
+  note: "text-stone-900 dark:text-zinc-100",
+  tip: "text-accent dark:text-accent-dark",
+  warn: "text-amber-800 dark:text-amber-300",
+} as const;
+
+const heading = title ?? defaultTitles[type];
+---
+
+<aside
+  class={`not-prose callout my-6 rounded-r-lg border border-stone-950/8 border-l-2 bg-paper-subtle/75 px-4 py-3.5 dark:border-white/8 dark:bg-obsidian-subtle ${barStyles[type]}`}
+>
+  {heading && (
+    <p class={`text-base/6 font-medium sm:text-sm/5 ${titleStyles[type]}`}>
+      {heading}
+    </p>
+  )}
+  <div class="mt-1.5 space-y-2 text-base/7 text-pretty text-stone-700 sm:text-sm/6 dark:text-zinc-300 [&>p]:m-0 [&_a]:underline [&_a]:underline-offset-3 [&_code]:font-mono [&_code]:text-[0.875em]">
+    <slot />
+  </div>
+</aside>

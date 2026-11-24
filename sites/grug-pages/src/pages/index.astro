@@ -1,0 +1,42 @@
+---
+import { getCollection } from "astro:content";
+import BaseLayout from "@layouts/BaseLayout.astro";
+import PageIndex, { type PageListItem } from "@components/PageIndex.svelte";
+import { formatDate, normalizePageSlug, withBase } from "@lib/urls";
+
+const entries = await getCollection("pages");
+
+const pages: PageListItem[] = entries
+  .map((entry) => {
+    const slug = normalizePageSlug(entry.id);
+    return {
+      slug,
+      title: entry.data.title,
+      subtitle: entry.data.subtitle,
+      date: entry.data.date,
+      formattedDate: formatDate(entry.data.date),
+      updated: entry.data.updated,
+      summary: entry.data.summary,
+      tags: entry.data.tags ?? [],
+      href: withBase(`/${slug}/`),
+    };
+  })
+  .sort((a, b) => {
+    const dateCmp = (b.updated ?? b.date).localeCompare(a.updated ?? a.date);
+    if (dateCmp !== 0) return dateCmp;
+    return a.title.localeCompare(b.title);
+  });
+---
+
+<BaseLayout title="grug pages" description="Personal research notes, comparisons, and tools." isHome>
+  <header>
+    <h1 class="text-2xl font-semibold tracking-tight text-pretty text-stone-900 sm:text-3xl dark:text-zinc-100">
+      Pages
+    </h1>
+    <p class="mt-2 text-base/7 text-pretty text-stone-600 dark:text-zinc-400">
+      Research reports, comparisons, guides, and interactive tools.
+    </p>
+  </header>
+
+  <PageIndex client:load pages={pages} />
+</BaseLayout>

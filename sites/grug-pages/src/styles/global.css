@@ -1,0 +1,442 @@
+@font-face {
+  font-family: "Geist";
+  src: url("../assets/fonts/geist-latin-wght-normal.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  src: url("../assets/fonts/geist-mono-latin-wght-normal.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --color-paper: #faf9f7;
+  --color-paper-subtle: #f3f1ed;
+  --color-obsidian: #131416;
+  --color-obsidian-raised: #1b1d20;
+  --color-obsidian-subtle: #181a1d;
+  --color-ink: #1c1917;
+  --color-ink-muted: #57534e;
+  --color-accent: #0f5c57;
+  --color-accent-dark: #5eead4;
+}
+
+:root {
+  color-scheme: light;
+}
+
+:root.dark {
+  color-scheme: dark;
+}
+
+/* Shiki dual-theme support under .dark class */
+.astro-code,
+.astro-code span {
+  background-color: transparent !important;
+}
+
+:root.dark .astro-code span {
+  color: var(--shiki-dark) !important;
+  font-style: var(--shiki-dark-font-style) !important;
+  font-weight: var(--shiki-dark-font-weight) !important;
+}
+
+/* Editorial prose styling — custom .prose without @tailwindcss/typography.
+   Never sets max-width inside .prose; page layout controls measure. */
+.prose {
+  font-size: var(--text-base);
+  line-height: --spacing(7);
+  color: var(--color-stone-800);
+
+  @variant dark {
+    color: var(--color-zinc-300);
+  }
+}
+
+.prose > * + * {
+  margin-top: --spacing(5);
+}
+
+.prose :where(h1, h2, h3, h4, h5, h6):not(.not-prose, .not-prose *) {
+  font-family: var(--font-sans);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-stone-900);
+  text-wrap: balance;
+  scroll-margin-top: --spacing(6);
+
+  @variant dark {
+    color: var(--color-zinc-100);
+  }
+}
+
+.prose :where(h2):not(.not-prose, .not-prose *) {
+  margin-top: --spacing(12);
+  margin-bottom: --spacing(4);
+  padding-top: --spacing(6);
+  border-top: 1px solid color-mix(in oklab, var(--color-stone-950) 8%, transparent);
+  font-size: var(--text-xl);
+  letter-spacing: var(--tracking-tight);
+
+  @variant dark {
+    border-top-color: color-mix(in oklab, var(--color-white) 8%, transparent);
+  }
+}
+
+.prose > :where(h2):first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.prose :where(h3):not(.not-prose, .not-prose *) {
+  margin-top: --spacing(8);
+  margin-bottom: --spacing(3);
+  font-size: var(--text-lg);
+  font-weight: var(--font-weight-medium);
+}
+
+.prose :where(h4, h5, h6):not(.not-prose, .not-prose *) {
+  margin-top: --spacing(6);
+  margin-bottom: --spacing(2);
+  font-size: var(--text-base);
+  font-weight: var(--font-weight-medium);
+}
+
+.prose :where(h2, h3, h4) + * {
+  margin-top: 0;
+}
+
+.prose :where(p):not(.not-prose, .not-prose *) {
+  text-wrap: pretty;
+}
+
+.prose :where(a):not(.not-prose, .not-prose *) {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in oklab, var(--color-accent) 35%, transparent);
+
+  @variant hover {
+    text-decoration-color: currentColor;
+  }
+
+  @variant dark {
+    color: var(--color-accent-dark);
+    text-decoration-color: color-mix(in oklab, var(--color-accent-dark) 40%, transparent);
+
+    @variant hover {
+      text-decoration-color: currentColor;
+    }
+  }
+}
+
+.prose :where(strong):not(.not-prose, .not-prose *) {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-stone-900);
+
+  @variant dark {
+    color: var(--color-zinc-100);
+  }
+}
+
+.prose :where(ul, ol):not(.not-prose, .not-prose *) {
+  padding-left: --spacing(6);
+}
+
+.prose :where(ul):not(.not-prose, .not-prose *) {
+  list-style-type: disc;
+}
+
+.prose :where(ol):not(.not-prose, .not-prose *) {
+  list-style-type: decimal;
+}
+
+.prose :where(li):not(.not-prose, .not-prose *) {
+  padding-left: --spacing(1);
+}
+
+.prose :where(li + li):not(.not-prose, .not-prose *) {
+  margin-top: --spacing(2);
+}
+
+.prose :where(li)::marker {
+  color: var(--color-stone-400);
+
+  @variant dark {
+    color: var(--color-zinc-500);
+  }
+}
+
+.prose :where(ul ul, ul ol, ol ul, ol ol):not(.not-prose, .not-prose *) {
+  margin-top: --spacing(2);
+}
+
+.prose :where(blockquote):not(.not-prose, .not-prose *) {
+  border-left: 2px solid color-mix(in oklab, var(--color-stone-950) 18%, transparent);
+  padding-left: --spacing(4);
+  color: var(--color-stone-600);
+  font-style: normal;
+
+  @variant dark {
+    border-left-color: color-mix(in oklab, var(--color-white) 18%, transparent);
+    color: var(--color-zinc-400);
+  }
+}
+
+.prose :where(hr):not(.not-prose, .not-prose *) {
+  margin-top: --spacing(10);
+  margin-bottom: --spacing(10);
+  border: 0;
+  border-top: 1px solid color-mix(in oklab, var(--color-stone-950) 10%, transparent);
+
+  @variant dark {
+    border-top-color: color-mix(in oklab, var(--color-white) 10%, transparent);
+  }
+}
+
+.prose :where(code):not(pre code, .not-prose, .not-prose *) {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  padding: --spacing(0.5) --spacing(1.5);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-paper-subtle);
+  color: var(--color-stone-900);
+
+  @variant dark {
+    background-color: var(--color-obsidian-raised);
+    color: var(--color-zinc-100);
+  }
+}
+
+.prose :where(pre):not(.not-prose, .not-prose *) {
+  overflow-x: auto;
+  padding: --spacing(4);
+  border-radius: var(--radius-lg);
+  background-color: var(--color-paper-subtle);
+  border: 1px solid color-mix(in oklab, var(--color-stone-950) 8%, transparent);
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  line-height: --spacing(6);
+
+  @variant dark {
+    background-color: var(--color-obsidian-raised);
+    border-color: color-mix(in oklab, var(--color-white) 8%, transparent);
+  }
+}
+
+.prose :where(pre code):not(.not-prose, .not-prose *) {
+  font-family: inherit;
+  font-size: inherit;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+}
+
+.prose :where(img):not(.not-prose, .not-prose *) {
+  max-width: 100%;
+  height: auto;
+  border-radius: min(1vw, 12px);
+  border: 1px solid color-mix(in oklab, var(--color-stone-950) 8%, transparent);
+
+  @variant dark {
+    border-color: color-mix(in oklab, var(--color-white) 10%, transparent);
+  }
+}
+
+.prose :where(figure):not(.not-prose, .not-prose *) {
+  margin-top: --spacing(7);
+  margin-bottom: --spacing(7);
+}
+
+.prose :where(figcaption):not(.not-prose, .not-prose *) {
+  margin-top: --spacing(2);
+  font-size: var(--text-sm);
+  color: var(--color-stone-500);
+
+  @variant dark {
+    color: var(--color-zinc-400);
+  }
+}
+
+/* Description lists: higher-contrast medium <dt>, regular muted <dd> */
+.prose :where(dl):not(.not-prose, .not-prose *) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  row-gap: --spacing(3);
+  border-top: 1px solid color-mix(in oklab, var(--color-stone-950) 8%, transparent);
+  padding-top: --spacing(4);
+
+  @variant sm {
+    grid-template-columns: minmax(--spacing(36), auto) minmax(0, 1fr);
+    column-gap: --spacing(6);
+  }
+
+  @variant dark {
+    border-top-color: color-mix(in oklab, var(--color-white) 8%, transparent);
+  }
+}
+
+.prose :where(dt):not(.not-prose, .not-prose *) {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-stone-900);
+
+  @variant dark {
+    color: var(--color-zinc-100);
+  }
+}
+
+.prose :where(dd):not(.not-prose, .not-prose *) {
+  margin: 0;
+  font-weight: var(--font-weight-normal);
+  color: var(--color-stone-600);
+
+  @variant dark {
+    color: var(--color-zinc-400);
+  }
+}
+
+/* Tables: horizontal scroll wrapper matching page container padding (px-5 sm:px-8),
+   horizontal dividers only, sentence-case nowrap headings, tabular numerals. */
+.prose .table-scroll {
+  margin-block: --spacing(6);
+  margin-inline: calc(--spacing(5) * -1);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+
+  @variant sm {
+    margin-inline: calc(--spacing(8) * -1);
+  }
+}
+
+.prose .table-scroll-inner {
+  display: inline-block;
+  min-width: 100%;
+  padding: --spacing(2) --spacing(5);
+  vertical-align: middle;
+
+  @variant sm {
+    padding-inline: --spacing(8);
+  }
+}
+
+.prose :where(table):not(.not-prose, .not-prose *) {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+  line-height: --spacing(6);
+  font-variant-numeric: tabular-nums;
+}
+
+.prose :where(thead tr):not(.not-prose, .not-prose *) {
+  border-bottom: 1px solid color-mix(in oklab, var(--color-stone-950) 14%, transparent);
+
+  @variant dark {
+    border-bottom-color: color-mix(in oklab, var(--color-white) 14%, transparent);
+  }
+}
+
+.prose :where(tbody tr):not(.not-prose, .not-prose *) {
+  border-bottom: 1px solid color-mix(in oklab, var(--color-stone-950) 8%, transparent);
+
+  @variant dark {
+    border-bottom-color: color-mix(in oklab, var(--color-white) 8%, transparent);
+  }
+}
+
+.prose :where(tbody tr:last-child):not(.not-prose, .not-prose *) {
+  border-bottom: 0;
+}
+
+.prose :where(th):not(.not-prose, .not-prose *) {
+  padding: --spacing(2.5) --spacing(3);
+  text-align: left;
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  color: var(--color-stone-900);
+
+  @variant dark {
+    color: var(--color-zinc-100);
+  }
+}
+
+.prose :where(td):not(.not-prose, .not-prose *) {
+  padding: --spacing(2.5) --spacing(3);
+  vertical-align: top;
+  color: var(--color-stone-700);
+
+  @variant dark {
+    color: var(--color-zinc-300);
+  }
+}
+
+.prose :where(th:first-child, td:first-child):not(.not-prose, .not-prose *) {
+  padding-left: 0;
+}
+
+.prose :where(th:last-child, td:last-child):not(.not-prose, .not-prose *) {
+  padding-right: 0;
+}
+
+.prose :where(tr.pick, tr[data-pick]):not(.not-prose, .not-prose *) {
+  background-color: color-mix(in oklab, var(--color-accent) 7%, transparent);
+
+  @variant dark {
+    background-color: color-mix(in oklab, var(--color-accent-dark) 8%, transparent);
+  }
+}
+
+/* Print stylesheet: clean ink on white paper, hide interactive chrome */
+@media print {
+  :root,
+  :root.dark {
+    color-scheme: light;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #111111 !important;
+    font-size: 11pt;
+  }
+
+  .print-hide {
+    display: none !important;
+  }
+
+  .prose {
+    color: #111111 !important;
+  }
+
+  .prose a {
+    color: #111111 !important;
+    text-decoration: underline !important;
+  }
+
+  .prose pre,
+  .prose blockquote,
+  .prose table,
+  .callout,
+  .stat-grid {
+    break-inside: avoid;
+  }
+
+  .prose .table-scroll {
+    margin-inline: 0;
+    overflow: visible;
+  }
+
+  .prose .table-scroll-inner {
+    padding-inline: 0;
+  }
+}

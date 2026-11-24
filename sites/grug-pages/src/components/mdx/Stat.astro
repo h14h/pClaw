@@ -1,0 +1,23 @@
+---
+interface Props {
+  label: string;
+  value: string;
+  note?: string;
+}
+
+const { label, value, note } = Astro.props;
+---
+
+<div class="min-w-0">
+  <dt class="truncate text-base/6 font-medium text-stone-500 sm:text-sm/5 dark:text-zinc-400">
+    {label}
+  </dt>
+  <dd class="mt-1 text-2xl font-semibold tracking-tight tabular-nums text-stone-900 sm:text-xl dark:text-zinc-100">
+    {value}
+  </dd>
+  {note && (
+    <p class="mt-1 text-base/6 text-pretty text-stone-500 sm:text-sm/5 dark:text-zinc-400">
+      {note}
+    </p>
+  )}
+</div>

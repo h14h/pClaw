@@ -3,3 +3,5 @@ node_modules/
 *.sqlite-*
 .env
 *.local.ts
+sites/grug-pages/dist/
+sites/grug-pages/.astro/
