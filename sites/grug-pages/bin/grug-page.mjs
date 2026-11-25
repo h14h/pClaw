@@ -20,6 +20,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { lintCarousels } from "../lib/carousel.mjs";
 import { fetchImage } from "../lib/fetch-image.mjs";
 import { createStaticHandler } from "../lib/static-handler.mjs";
 
@@ -631,6 +632,17 @@ function verifyDist(distDir, targetSlug) {
   return { totalBytes };
 }
 
+/** Non-blocking advice printed before the build, e.g. carousels with too many slides. */
+function warnPageLint(pagesDir, slugs) {
+  for (const slug of slugs) {
+    const file = [join(pagesDir, slug, "index.mdx"), join(pagesDir, `${slug}.mdx`)].find((f) => existsSync(f));
+    if (!file) continue;
+    for (const warning of lintCarousels(readFileSync(file, "utf8"))) {
+      process.stderr.write(`WARN ${slug}: ${warning}\n`);
+    }
+  }
+}
+
 function cmdBuild(cfg, args) {
   const slug = args.find((a) => !a.startsWith("-")) ?? null;
   if (slug) {
@@ -652,6 +664,7 @@ function cmdBuild(cfg, args) {
 
   const contentPagesDir = join(cfg.siteDir, "src", "content", "pages");
   const slugs = syncPagesToSite(cfg.pagesDir, contentPagesDir);
+  warnPageLint(cfg.pagesDir, slug ? [slug] : slugs);
 
   const astroBin = join(cfg.siteDir, "node_modules", ".bin", "astro");
   if (!existsSync(astroBin)) {

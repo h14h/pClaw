@@ -1116,3 +1116,94 @@ test("grug-pages Figure: portraits fit on screen, credits are 48px touch targets
 	assert.match(skill, /Chart or map: put takeaway in nearby text if labels too small on phone\./);
 	assert.match(skill, /Add `--background paper`/);
 });
+
+test("grug-pages Carousel: Figure slides on one frame, eager first slide, slot-true sizes, a11y wiring, and build lint", async () => {
+	const { buildCarousel, carouselFrame, lintCarousels, slideSizes, CAROUSEL_MAX_SLIDES } = await import(
+		"../sites/grug-pages/lib/carousel.mjs"
+	);
+	const figure = (width: number, height: number, alt: string) =>
+		`<figure class="not-prose my-8" style="--figure-ratio: 0.6; width: min(100%, 1rem);" data-portrait="true"><picture>` +
+		`<source srcset="a.avif 480w" type="image/avif" sizes="auto, (min-width: 48rem) 44rem, calc(100vw - 2.5rem)">` +
+		`<img src="a.jpg" alt="${alt}" sizes="auto, (min-width: 48rem) 44rem, calc(100vw - 2.5rem)" loading="lazy" decoding="async" width="${width}" height="${height}" class="block h-auto w-full"></picture>` +
+		`<figcaption>${alt} caption</figcaption></figure>`;
+
+	// One Figure degrades to that Figure, untouched; nothing or stray content fails the build
+	const single = buildCarousel(`\n${figure(1500, 1000, "One")}\n`);
+	assert.equal(single.kind, "single");
+	assert.equal(single.kind === "single" && single.html, figure(1500, 1000, "One"));
+	assert.throws(() => buildCarousel(""), /needs at least one <Figure>/);
+	assert.throws(() => buildCarousel(`<p>Hi</p>${figure(3, 2, "A")}${figure(3, 2, "B")}`), /takes only <Figure> children/);
+
+	// Shared frame is the median ratio, clamped to 3:4..16:9
+	assert.equal(carouselFrame([1.5, 1.33, 1.33, 4.32]), 1.415);
+	assert.equal(carouselFrame([4, 5, 6]), 1.7778);
+	assert.equal(carouselFrame([0.5, 0.4]), 0.75);
+
+	const built = buildCarousel([figure(1500, 1000, "A"), figure(1600, 1000, "B"), figure(3000, 1000, "Pano")].join("\n"));
+	assert.equal(built.kind, "carousel");
+	if (built.kind !== "carousel") return;
+	assert.equal(built.frame, 1.6);
+	assert.match(built.id, /^carousel-[a-z0-9]+$/);
+	// Near-frame shapes fill the frame; the panorama shows whole
+	assert.deepEqual(built.slides.map((s) => s.fit), ["cover", "cover", "contain"]);
+	// Figure's own portrait width and margin go; the first slide loads eagerly without sizes=auto, the rest stay lazy
+	for (const slide of built.slides) {
+		assert.match(slide.html, /^<figure class="not-prose">/);
+		assert.doesNotMatch(slide.html, /my-8|--figure-ratio|data-portrait/);
+	}
+	assert.match(built.slides[0]!.html, /loading="eager"/);
+	assert.doesNotMatch(built.slides[0]!.html, /sizes="auto/);
+	assert.match(built.slides[1]!.html, /loading="lazy"/);
+	assert.match(built.slides[1]!.html, /sizes="auto, \(min-width: 48rem\) min\(calc\(44rem - 3rem\)/);
+	// sizes follow the slide (column minus peek), the portrait cap, and the share of the frame the image covers
+	assert.equal(
+		slideSizes(1.6, 1),
+		"auto, (min-width: 48rem) min(calc(44rem - 3rem), 54.4rem, 104vh), (min-width: 40rem) min(calc(100vw - 4rem - 3rem), 54.4rem, 104vh), min(calc(100vw - 2.5rem - 3rem), 54.4rem, 104vh)",
+	);
+	assert.match(slideSizes(1.6, 0.5, { eager: true }), /^\(min-width: 48rem\) min\(calc\(\(44rem - 3rem\) \* 0\.5\), 27\.2rem, 52vh\)/);
+	// A wider image shown whole still spans the slide; a taller one only part of it
+	assert.ok(built.slides[2]!.html.includes(`sizes="${slideSizes(1.6, 1)}"`));
+	const tall = buildCarousel([figure(1600, 1000, "A"), figure(1600, 1000, "B"), figure(800, 1000, "Tall")].join(""));
+	assert.ok(tall.kind === "carousel" && tall.slides[2]!.fit === "contain" && tall.slides[2]!.html.includes(`sizes="${slideSizes(1.6, 0.5)}"`));
+
+	// Lint: too many slides, too many carousels, one-slide carousels, and page-local carousel components
+	const slides = (n: number) => Array.from({ length: n }, () => '<Figure src="img/a.jpg" alt="a" />').join("\n");
+	assert.deepEqual(lintCarousels(`<Carousel label="Ok">\n${slides(4)}\n</Carousel>`), []);
+	assert.match(lintCarousels(`<Carousel label="Big">\n${slides(CAROUSEL_MAX_SLIDES + 1)}\n</Carousel>`)[0]!, /"Big" has 9 slides/);
+	assert.match(lintCarousels(`<Carousel label="Lonely">\n${slides(1)}\n</Carousel>`)[0]!, /use a plain <Figure>/);
+	assert.match(lintCarousels(Array.from({ length: 4 }, () => `<Carousel label="x">\n${slides(3)}\n</Carousel>`).join("\n"))[0]!, /4 carousels on one page/);
+	assert.match(lintCarousels('import PhotoCarousel from "./components/PhotoCarousel.svelte";\n')[0]!, /use <Carousel> from "@components\/mdx"/);
+
+	const component = readFileSync(new URL("../sites/grug-pages/src/components/mdx/Carousel.astro", import.meta.url), "utf8");
+	const css = readFileSync(new URL("../sites/grug-pages/src/styles/global.css", import.meta.url), "utf8");
+	const index = readFileSync(new URL("../sites/grug-pages/src/components/mdx/index.ts", import.meta.url), "utf8");
+	const cli = readFileSync(new URL("../sites/grug-pages/bin/grug-page.mjs", import.meta.url), "utf8");
+	const skill = readFileSync(new URL("../bots/grug/skills/grug-page/SKILL.md", import.meta.url), "utf8");
+
+	assert.match(index, /export \{ default as Carousel \} from "\.\/Carousel\.astro";/);
+	// Region, slide groups "N of M", polite status, labelled buttons wired to the strip, 48px touch targets
+	assert.match(component, /role="region" aria-roledescription="carousel" aria-label=\{label\.trim\(\)\}/);
+	assert.match(component, /role="group"\s+aria-roledescription="slide"\s+aria-label=\{`\$\{i \+ 1\} of \$\{carousel\.slides\.length\}`\}/);
+	assert.match(component, /aria-live="polite" aria-atomic="true"/);
+	assert.match(component, /aria-label="Previous slide" aria-controls=\{carousel\.id\}/);
+	assert.match(component, /aria-label="Next slide" aria-controls=\{carousel\.id\}/);
+	assert.match(component, /pointer-coarse:size-12/);
+	assert.match(component, /tabindex="0"/);
+	// Keys, no autoplay, reduced motion, and the counter
+	assert.match(component, /ArrowLeft: from\(\) - 1, ArrowRight: from\(\) \+ 1, Home: 0, End: last/);
+	assert.match(component, /behavior: reducedMotion\.matches \? "auto" : "smooth"/);
+	assert.doesNotMatch(component, /setInterval|autoplay/i);
+	assert.match(component, /counter\.textContent = `\$\{this\.#index \+ 1\} \/ \$\{slides\.length\}`/);
+	// Scroll-snap core, gutter bleed with peek, one frame per strip, portrait cap, buttons only with JS
+	assert.match(css, /scroll-snap-type: x mandatory;/);
+	assert.match(css, /scroll-snap-align: start;/);
+	assert.match(css, /width: min\(100% - var\(--carousel-peek\), min\(65svh, 34rem\) \* var\(--frame\)\);/);
+	assert.match(css, /aspect-ratio: var\(--frame\);/);
+	assert.match(css, /\.carousel\[data-ready\] \.carousel-buttons \{\n {4}display: flex;/);
+	assert.match(css, /@media \(prefers-reduced-motion: no-preference\) \{\n {6}scroll-behavior: smooth;/);
+
+	assert.match(cli, /warnPageLint\(cfg\.pagesDir, slug \? \[slug\] : slugs\);/);
+	assert.match(skill, /Use `<Carousel>` only for 3–6 genuinely different views of one place or thing/);
+	assert.match(skill, /Never filler\. At most ~3 carousels per page\./);
+	assert.match(skill, /Never write page-local components for UI the template owns/);
+});

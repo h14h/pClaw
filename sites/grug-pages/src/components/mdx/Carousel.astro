@@ -1,0 +1,225 @@
+---
+/**
+ * A swipeable strip of `<Figure>`s: 3–6 genuinely different views of one place or thing.
+ *
+ *   <Carousel label="Leg 1 photos: Oslo S to Myrdal">
+ *     <Figure src="img/…" alt="…" caption="…" credit="…" href="…" />
+ *     …
+ *   </Carousel>
+ *
+ * Without JS it is a CSS scroll-snap strip (touch, trackpad, keyboard). The script adds prev/next buttons, a
+ * "2 / 5" counter, arrow keys, and polite announcements. Every slide shares one frame ratio (the median of its
+ * images), so mixed shapes never change the strip's height. Images within 10% of the frame fill it; the rest are
+ * shown whole on the figure's surface. One Figure renders as a plain Figure.
+ */
+import { buildCarousel } from "../../../lib/carousel.mjs";
+
+interface Props {
+  /** What the slides show, for screen readers ("Leg 1 photos: Oslo S to Myrdal"). */
+  label: string;
+}
+
+const { label } = Astro.props;
+if (!label || !label.trim()) {
+  throw new Error('<Carousel> needs a label saying what the slides show, e.g. label="Leg 1 photos: Oslo S to Myrdal".');
+}
+
+const html = Astro.slots.has("default") ? await Astro.slots.render("default") : "";
+const carousel = buildCarousel(html);
+// A 36px circle; on touch screens the button around it grows to a 48px target without the circle getting heavier.
+const button =
+  "group/btn inline-flex size-9 shrink-0 items-center justify-center rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent aria-disabled:pointer-events-none pointer-coarse:size-12 dark:focus-visible:outline-accent-dark";
+const circle =
+  "inline-flex size-9 items-center justify-center rounded-full border border-stone-950/12 text-stone-700 group-hover/btn:bg-stone-950/5 group-hover/btn:text-stone-950 group-aria-disabled/btn:opacity-35 dark:border-white/15 dark:text-stone-300 dark:group-hover/btn:bg-white/8 dark:group-hover/btn:text-stone-50";
+---
+
+{carousel.kind === "single" ? (
+  <Fragment set:html={carousel.html} />
+) : (
+  <grug-carousel class="carousel not-prose my-8 block">
+    <section role="region" aria-roledescription="carousel" aria-label={label.trim()}>
+      <div class="flex h-9 items-center justify-between gap-3 pointer-coarse:h-12">
+        <p class="font-mono text-xs tracking-wide text-stone-500 tabular-nums dark:text-stone-400" aria-hidden="true">
+          <span data-carousel-counter>{carousel.slides.length} images</span>
+        </p>
+        <p class="carousel-hint items-center gap-1 font-mono text-xs tracking-wide text-stone-500 select-none dark:text-stone-400" aria-hidden="true">
+          Scroll <span aria-hidden="true">&rarr;</span>
+        </p>
+        <div class="carousel-buttons items-center gap-2 pointer-coarse:-mr-1.5 pointer-coarse:gap-0">
+          <button type="button" class={button} aria-label="Previous slide" aria-controls={carousel.id} aria-disabled="true" data-carousel-prev>
+            <span class={circle}>
+              <svg viewBox="0 0 16 16" aria-hidden="true" class="size-4 fill-current">
+                <path fill-rule="evenodd" d="M9.78 4.22a.75.75 0 0 1 0 1.06L7.06 8l2.72 2.72a.75.75 0 1 1-1.06 1.06L5.47 8.53a.75.75 0 0 1 0-1.06l3.25-3.25a.75.75 0 0 1 1.06 0Z" clip-rule="evenodd" />
+              </svg>
+            </span>
+          </button>
+          <button type="button" class={button} aria-label="Next slide" aria-controls={carousel.id} data-carousel-next>
+            <span class={circle}>
+              <svg viewBox="0 0 16 16" aria-hidden="true" class="size-4 fill-current">
+                <path fill-rule="evenodd" d="M6.22 4.22a.75.75 0 0 1 1.06 0l3.25 3.25a.75.75 0 0 1 0 1.06l-3.25 3.25a.75.75 0 0 1-1.06-1.06L8.94 8 6.22 5.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
+              </svg>
+            </span>
+          </button>
+        </div>
+      </div>
+      <div
+        id={carousel.id}
+        class="carousel-strip mt-2 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent dark:focus-visible:outline-accent-dark"
+        style={`--frame: ${carousel.frame};`}
+        role="group"
+        aria-label="Slides"
+        tabindex="0"
+        data-carousel-strip
+      >
+        {carousel.slides.map((slide, i) => (
+          <div
+            class="carousel-slide"
+            role="group"
+            aria-roledescription="slide"
+            aria-label={`${i + 1} of ${carousel.slides.length}`}
+            data-fit={slide.fit}
+            data-carousel-slide
+          >
+            <Fragment set:html={slide.html} />
+          </div>
+        ))}
+      </div>
+      <p class="sr-only" aria-live="polite" aria-atomic="true" data-carousel-status></p>
+    </section>
+  </grug-carousel>
+)}
+
+<script>
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+  class GrugCarousel extends HTMLElement {
+    #index = 0;
+    #announced = 0;
+    #settle = 0;
+
+    connectedCallback() {
+      const strip = this.querySelector<HTMLElement>("[data-carousel-strip]");
+      const slides = Array.from(this.querySelectorAll<HTMLElement>("[data-carousel-slide]"));
+      const prev = this.querySelector<HTMLButtonElement>("[data-carousel-prev]");
+      const next = this.querySelector<HTMLButtonElement>("[data-carousel-next]");
+      const counter = this.querySelector<HTMLElement>("[data-carousel-counter]");
+      const status = this.querySelector<HTMLElement>("[data-carousel-status]");
+      if (!strip || slides.length < 2 || !prev || !next || !counter || !status || this.hasAttribute("data-ready")) return;
+
+      const last = slides.length - 1;
+      const offset = (i: number) => slides[i].offsetLeft - slides[0].offsetLeft;
+      const preload = (start: number) => {
+        for (const slide of slides.slice(start, start + 2)) {
+          for (const img of slide.querySelectorAll("img")) img.loading = "eager";
+        }
+      };
+
+      const render = () => {
+        counter.textContent = `${this.#index + 1} / ${slides.length}`;
+        prev.setAttribute("aria-disabled", String(this.#index === 0));
+        next.setAttribute("aria-disabled", String(this.#index === last));
+      };
+
+      const announce = () => {
+        if (this.#announced === this.#index) return;
+        this.#announced = this.#index;
+        status.textContent = `Slide ${this.#index + 1} of ${slides.length}`;
+      };
+
+      // The current slide is the one whose snap point is nearest; at the end of the strip it is the last, even when
+      // narrow (portrait) slides mean the last one can never reach the start edge.
+      const current = () => {
+        const left = strip.scrollLeft;
+        if (left >= strip.scrollWidth - strip.clientWidth - 2) return last;
+        let best = 0;
+        for (let i = 1; i < slides.length; i++) {
+          if (Math.abs(offset(i) - left) < Math.abs(offset(best) - left)) best = i;
+        }
+        return best;
+      };
+
+      // Where a button or key last sent the strip, so quick repeated presses add up while it is still moving.
+      let target: number | null = null;
+      const settle = (ms: number) => {
+        clearTimeout(this.#settle);
+        this.#settle = window.setTimeout(() => {
+          target = null;
+          announce();
+        }, ms);
+      };
+      const go = (i: number) => {
+        target = Math.max(0, Math.min(last, i));
+        settle(600);
+        preload(target);
+        strip.scrollTo({ left: offset(target), behavior: reducedMotion.matches ? "auto" : "smooth" });
+      };
+
+      let frame = 0;
+      strip.addEventListener(
+        "scroll",
+        () => {
+          if (!frame) {
+            frame = requestAnimationFrame(() => {
+              frame = 0;
+              const index = current();
+              if (index !== this.#index) {
+                this.#index = index;
+                preload(index + 1);
+                render();
+              }
+            });
+          }
+          settle(180);
+        },
+        { passive: true },
+      );
+
+      const from = () => target ?? this.#index;
+      prev.addEventListener("click", () => go(from() - 1));
+      next.addEventListener("click", () => go(from() + 1));
+      this.addEventListener("keydown", (event) => {
+        if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+        const moves: Record<string, number> = { ArrowLeft: from() - 1, ArrowRight: from() + 1, Home: 0, End: last };
+        if (!(event.key in moves)) return;
+        event.preventDefault();
+        go(moves[event.key]);
+      });
+
+      // Fetch the peeking slide once the carousel is close, so a first swipe never lands on a blank frame.
+      const near = new IntersectionObserver(
+        (entries) => {
+          if (entries.some((entry) => entry.isIntersecting)) {
+            preload(1);
+            near.disconnect();
+          }
+        },
+        { rootMargin: "400px 0px" },
+      );
+      near.observe(this);
+
+      // Captions show only on slides in full view, so the peeking slide reads as a picture, not cut-off text.
+      const whole = (slide: HTMLElement) => {
+        const box = strip.getBoundingClientRect();
+        const rect = slide.getBoundingClientRect();
+        return rect.left >= box.left - 1 && rect.right <= box.right + 1;
+      };
+      for (const slide of slides) slide.toggleAttribute("data-whole", whole(slide));
+      const view = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) entry.target.toggleAttribute("data-whole", entry.intersectionRatio >= 0.95);
+        },
+        { root: strip, threshold: [0, 0.95] },
+      );
+      for (const slide of slides) view.observe(slide);
+
+      this.#index = current();
+      this.#announced = this.#index;
+      render();
+      this.setAttribute("data-ready", "");
+      // Caption fades start after the first paint, so peeking captions don't visibly fade out on load.
+      requestAnimationFrame(() => requestAnimationFrame(() => this.setAttribute("data-settled", "")));
+    }
+  }
+
+  if (!customElements.get("grug-carousel")) customElements.define("grug-carousel", GrugCarousel);
+</script>

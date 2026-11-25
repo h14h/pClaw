@@ -1,4 +1,5 @@
 export { default as Callout } from "./Callout.astro";
+export { default as Carousel } from "./Carousel.astro";
 export { default as Details } from "./Details.astro";
 export { default as Figure } from "./Figure.astro";
 export { default as Sources } from "./Sources.astro";

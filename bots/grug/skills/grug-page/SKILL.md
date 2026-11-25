@@ -34,7 +34,7 @@ Pages live in `~/work/pages/<slug>/` (slug: lowercase letters, digits, hyphens; 
 ```text
 ~/work/pages/<slug>/
   index.mdx                 Required page content + YAML frontmatter
-  components/*.svelte       Optional per-page Svelte 5 interactive islands
+  components/*.svelte       Optional per-page Svelte 5 interactive islands (calculators, planners; never UI the template owns)
   assets/*                  Optional local images (.png, .jpg, .webp, .svg)
 ```
 
@@ -66,7 +66,7 @@ Required fields: `title`, `date` (`YYYY-MM-DD`), `summary`. Optional: `subtitle`
 Import from `@components/mdx`:
 
 ```mdx
-import { Callout, StatGrid, Stat, Details, Sources, Tabs, Figure } from "@components/mdx";
+import { Callout, StatGrid, Stat, Details, Sources, Tabs, Figure, Carousel } from "@components/mdx";
 ```
 
 - `<Callout type="note" | "tip" | "warn" title="Optional heading">...</Callout>` — key takeaway or caveat (max 2-3 per page; use `warn` for unverified facts or risks).
@@ -74,6 +74,7 @@ import { Callout, StatGrid, Stat, Details, Sources, Tabs, Figure } from "@compon
 - `<Tabs client:load labels={["Option A", "Option B"]}><div>...</div><div>...</div></Tabs>` — interactive tabbed views (also accepts `tabs={[{ label, content }]}`). Always include `client:load` on Svelte islands (`Tabs` and any custom `components/*.svelte`).
 - `<Details summary="Methodology and assumptions" open={false}>...</Details>` — collapsible secondary detail.
 - `<Figure src="img/3f9a1c2b7d4e.jpg" alt="..." caption="..." credit="..." href="..." [background="paper"] />` — a real image saved with `grug-page image` (see Images below). Never hand-write `src`; paste the line the command prints.
+- `<Carousel label="Leg 1 photos: Oslo S to Myrdal">` wrapping 2–8 `<Figure />` lines — swipeable photo strip (see Carousels below). No `client:load`.
 - `<Sources checked="2026-11-24">` wrapping a numbered Markdown list of links — always include at the bottom.
 - Standard Markdown tables work out of the box (automatically wrapped for mobile horizontal scroll with `tabular-nums`).
 - **Never use a standalone `Rank` or `#` column as Column 1** — put the identifying name (Provider, Option, Site, Scenario) in Column 1 (e.g. `1. GFiber Webpass`) so future tables are naturally compact and self-identifying.
@@ -83,7 +84,7 @@ import { Callout, StatGrid, Stat, Details, Sources, Tabs, Figure } from "@compon
 
 Real images make pages much better when they show something words can't: the place, the product, the chart, the map, the logo. Use them; just never as filler.
 
-- **When:** a photo of the actual place/product/thing, a source's chart or map, an official logo for options being compared. 1–4 per page, each next to the section it illustrates. Skip stock photos, mood images, AI art, and anything decorative.
+- **When:** a photo of the actual place/product/thing, a source's chart or map, an official logo for options being compared. 1–4 per page (a carousel counts as one), each next to the section it illustrates. Skip stock photos, mood images, AI art, and anything decorative.
 - **Find a direct image URL** (the file itself, ending in or serving `.jpg`/`.png`/`.webp`/`.gif`/`.avif`, not the page around it):
   - the `og:image` of a source article you read (`agent-browser open <url>` then `agent-browser eval "document.querySelector('meta[property=\"og:image\"]')?.content"`);
   - Wikimedia Commons: open the file page and use the "Original file" link (`upload.wikimedia.org/...`). Originals over 5 MB get refused; use a standard-size copy instead (1280 or 1920 wide): `https://upload.wikimedia.org/wikipedia/commons/thumb/<a>/<ab>/<File>/1920px-<File>`;
@@ -96,6 +97,22 @@ Real images make pages much better when they show something words can't: the pla
 - **Check the image itself before using it.** Open actual image. Confirm place, season, product version, or data period. Use only if it helps reader decide. Alt says what reader needs to see. Chart or map: put takeaway in nearby text if labels too small on phone. Caption adds one short useful fact; omit if surrounding text already does that job. Credit creator and link original source page, with license where required.
 - Transparent image with dark labels or lines (maps, logos, diagrams)? Add `--background paper` so it sits on a light surface in dark mode too.
 - If the command fails, try another source or leave the image out; never link remote images.
+
+### Carousels
+
+- Use `<Carousel>` only for 3–6 genuinely different views of one place or thing (a route leg, a venue inside and out). One view: plain `<Figure>`. Same view twice: cut one.
+- Never filler. At most ~3 carousels per page. Most pages need none.
+- Every slide: verified, relevant photo saved with `grug-page image`, real alt, credit with link. Same checks as single images.
+- Only `<Figure />` lines inside. `label` says what slides show, for screen readers.
+  ```mdx
+  <Carousel label="Nærøyfjord from the boat">
+  <Figure src="img/…" alt="…" caption="…" credit="…" href="…" />
+  <Figure src="img/…" alt="…" caption="…" credit="…" href="…" />
+  <Figure src="img/…" alt="…" caption="…" credit="…" href="…" />
+  </Carousel>
+  ```
+- Similar shapes look best: slides share one frame. Odd panorama or tall shot sits whole on a plain surface; give it its own `<Figure>` if it matters.
+- Use template `<Carousel>`, `<Tabs>`, `<Figure>`. Never write page-local components for UI the template owns (carousels, galleries, tabs, accordions). `grug-page build` warns on carousels over 8 slides, over 3 per page, or a page-local carousel.
 
 ## Sourcing and content rules
 
@@ -126,7 +143,7 @@ Real images make pages much better when they show something words can't: the pla
    Open the printed `PREVIEW_URL` in `agent-browser`:
    - Check desktop (`1280x800`) and mobile (`390x844`) viewports for overflow, broken tables, or awkward layout.
    - Toggle dark mode (`#theme-toggle`) and verify contrast and custom islands look right in both light and dark themes.
-   - Interact with any `<Tabs>` or custom Svelte island and check `agent-browser console` / `agent-browser errors` for **zero** console or CSP errors.
+   - Interact with any `<Tabs>`, `<Carousel>`, or custom Svelte island and check `agent-browser console` / `agent-browser errors` for **zero** console or CSP errors.
    - Fix anything broken and re-run `grug-page build <slug>` if needed.
    - Always clean up before finishing (if you opened a named `--session "$S"`, close that exact session):
      ```bash

@@ -716,6 +716,95 @@
   .prose :where(td[data-compact-num="true"], th[data-compact-num="true"]):not(.not-prose, .not-prose *) {
     white-space: nowrap;
   }
+
+  /* Carousel (<Carousel>): a scroll-snap strip that bleeds into the page gutters, so slides line up with the text
+     and the next one peeks in from the edge. Every slide shares the strip's frame ratio (--frame), capped like a
+     portrait Figure, so the strip's height never changes as you swipe. */
+  .carousel {
+    --carousel-gutter: --spacing(5);
+    --carousel-peek: 3rem;
+
+    @variant sm {
+      --carousel-gutter: --spacing(8);
+    }
+
+    /* Past 48rem the page has real margins; the strip stops at the column so the peek ends under the next button. */
+    @variant md {
+      --carousel-gutter: 0px;
+    }
+  }
+
+  .carousel-strip {
+    position: relative;
+    display: flex;
+    gap: --spacing(3);
+    margin-inline: calc(var(--carousel-gutter) * -1);
+    padding-inline: var(--carousel-gutter);
+    scroll-padding-inline: var(--carousel-gutter);
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x mandatory;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+
+    &::-webkit-scrollbar {
+      display: none;
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+      scroll-behavior: smooth;
+    }
+  }
+
+  .carousel-slide {
+    flex: none;
+    width: min(100% - var(--carousel-peek), min(65svh, 34rem) * var(--frame));
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
+
+    & img {
+      aspect-ratio: var(--frame);
+      height: auto;
+      object-fit: contain;
+    }
+
+    &[data-fit="cover"] img {
+      object-fit: cover;
+    }
+
+  }
+
+  .carousel[data-settled] .carousel-slide figcaption {
+    transition: opacity 150ms ease;
+  }
+
+  /* With the script running, captions show only on slides in full view, so the peek is a picture, not cut-off text. */
+  .carousel[data-ready] .carousel-slide:not([data-whole]) figcaption {
+    opacity: 0;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .carousel[data-settled] .carousel-slide figcaption {
+      transition: none;
+    }
+  }
+
+  .carousel-buttons {
+    display: none;
+  }
+
+  .carousel-hint {
+    display: flex;
+  }
+
+  .carousel[data-ready] .carousel-buttons {
+    display: flex;
+  }
+
+  .carousel[data-ready] .carousel-hint {
+    display: none;
+  }
 }
 
 /* Print stylesheet: clean ink on white paper, hide interactive chrome */
@@ -793,5 +882,23 @@
 
   .prose .table-scroll-inner {
     padding-inline: 0 !important;
+  }
+
+  .carousel-strip {
+    display: block !important;
+    margin-inline: 0 !important;
+    padding-inline: 0 !important;
+    overflow: visible !important;
+  }
+
+  .carousel-slide {
+    width: auto !important;
+    margin-bottom: 1.5rem;
+    break-inside: avoid;
+  }
+
+  .carousel-buttons,
+  .carousel-hint {
+    display: none !important;
   }
 }
