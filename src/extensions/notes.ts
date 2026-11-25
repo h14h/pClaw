@@ -3,6 +3,7 @@ import type { Context } from "@earendil-works/chord/context";
 import { obj, str } from "@earendil-works/pi-schema";
 import { type ConversationId, defineExtension, defineTool, type DocumentReader, section } from "@earendil-works/pi-durable";
 import { writePrivate } from "../config.ts";
+import { redactCoordinates } from "../location.ts";
 
 /** Notes live in a plain markdown file, one "- " line per note, so the person can read and edit them. */
 export class Notes {
@@ -16,9 +17,10 @@ export class Notes {
 		return existsSync(this.file) ? readFileSync(this.file, "utf8") : "";
 	}
 
+	/** Notes never hold precise coordinates, whoever writes them; a town is as close as they go. */
 	add(note: string): void {
 		const current = this.read();
-		const line = `- ${note.replace(/\s*\n\s*/g, " ").trim()}\n`;
+		const line = `- ${redactCoordinates(note).replace(/\s*\n\s*/g, " ").trim()}\n`;
 		writePrivate(this.file, current === "" || current.endsWith("\n") ? current + line : `${current}\n${line}`);
 	}
 
@@ -42,7 +44,7 @@ export class Notes {
 		const index = lines.findIndex((line) => line.replace(/^-\s*/, "").trim() === target);
 		if (target === "" || index === -1) return false;
 		if (next === undefined) lines.splice(index, 1);
-		else lines[index] = `- ${next.replace(/\s*\n\s*/g, " ").trim()}`;
+		else lines[index] = `- ${redactCoordinates(next).replace(/\s*\n\s*/g, " ").trim()}`;
 		writePrivate(this.file, lines.join("\n"));
 		return true;
 	}

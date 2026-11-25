@@ -3,6 +3,7 @@ import type { Models } from "@earendil-works/pi-ai/models";
 import { AssistantEntry, type EntryRecord, UserEntry } from "@earendil-works/pi-durable";
 import type { Config } from "./config.ts";
 import { STRIP_GUIDANCE } from "./decisions.ts";
+import { redactCoordinates, STRIP_LOCATION } from "./location.ts";
 import { type PromptResolver, readPrompt } from "./prompts.ts";
 import { type EpisodeRecord, STRIP_CROSS_CLIENT } from "./search-index.ts";
 import { stamp } from "./time.ts";
@@ -58,7 +59,7 @@ export function extractSessionTranscript(entries: readonly EntryRecord[]): Sessi
 		let line: string | undefined;
 
 		if (UserEntry.is(entry) && message.role === "user") {
-			const cleaned = textOf(message).replace(STRIP_GUIDANCE, "").replace(STRIP_CROSS_CLIENT, "").trim();
+			const cleaned = textOf(message).replace(STRIP_GUIDANCE, "").replace(STRIP_CROSS_CLIENT, "").replace(STRIP_LOCATION, "").trim();
 			const workerMatch = WORKER_REPORT_RE.exec(cleaned);
 			if (workerMatch !== null) {
 				const name = workerMatch[1]!.trim();
@@ -83,6 +84,7 @@ export function extractSessionTranscript(entries: readonly EntryRecord[]): Sessi
 		}
 
 		if (line !== undefined) {
+			line = redactCoordinates(line);
 			lines.push(line.length > MESSAGE_LIMIT ? `${line.slice(0, MESSAGE_LIMIT)} [...]` : line);
 		}
 	}

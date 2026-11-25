@@ -18,6 +18,7 @@ export type UserPaths = {
 	workerSessions: string;
 	inbox: string;
 	voice: string;
+	location: string;
 };
 
 const SAFE_USER_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
@@ -128,6 +129,7 @@ export class UserRegistry {
 			workerSessions: join(dir, "worker-sessions"),
 			inbox: join(dir, "inbox"),
 			voice: join(dir, "voice"),
+			location: join(dir, "location.json"),
 		};
 	}
 

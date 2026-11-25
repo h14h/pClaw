@@ -902,7 +902,7 @@ test("startTelegram end-to-end: pairs owner, loads telegram.md formatting, deliv
 		try {
 			await waitFor(() => sentMessages.length >= 1 && reactions.length >= 1);
 			assert.equal(pairedOwner, "501");
-			assert.deepEqual(pollParams[0]?.allowed_updates, ["message", "message_reaction"]);
+			assert.deepEqual(pollParams[0]?.allowed_updates, ["message", "edited_message", "message_reaction"]);
 			assert.equal(sentMessages[0]?.parse_mode, "HTML");
 			assert.deepEqual(sentMessages[0]?.link_preview_options, { is_disabled: true });
 			assert.equal(sentMessages[0]?.text, 'All <b>done</b> — see <a href="https://example.com">docs</a>.');

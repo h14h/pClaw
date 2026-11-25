@@ -18,6 +18,7 @@ import {
 import type { Config } from "../config.ts";
 import { STRIP_GUIDANCE } from "../decisions.ts";
 import { type PromptResolver, readPrompt } from "../prompts.ts";
+import { redactCoordinates, STRIP_LOCATION } from "../location.ts";
 import { STRIP_CROSS_CLIENT } from "../search-index.ts";
 import type { Notes, NotesResolver } from "./notes.ts";
 
@@ -62,12 +63,14 @@ export function conversationText(entries: readonly EntryRecord[]): { lines: stri
 		if ("timestamp" in message && typeof message.timestamp === "number") lastAt = Math.max(lastAt ?? 0, message.timestamp);
 		let line: string | undefined;
 		if (UserEntry.is(entry) && message.role === "user") {
-			const text = textOf(message).replace(STRIP_GUIDANCE, "").replace(STRIP_CROSS_CLIENT, "").trim();
+			const text = textOf(message).replace(STRIP_GUIDANCE, "").replace(STRIP_CROSS_CLIENT, "").replace(STRIP_LOCATION, "").trim();
 			if (!INTERNAL.test(text)) line = `them: ${text}`;
 		} else if (AssistantEntry.is(entry) && message.role === "assistant") {
 			const text = textOf(message).trim();
 			if ((message as AssistantMessage).stopReason !== "error" && text !== "" && !text.startsWith("NO_REPLY")) line = `pclaw: ${text}`;
 		}
+		// Notes never get precise coordinates; a town is as close as they go.
+		if (line !== undefined) line = redactCoordinates(line);
 		if (line !== undefined) lines.push(line.length > MESSAGE_LIMIT ? `${line.slice(0, MESSAGE_LIMIT)} [...]` : line);
 	}
 	// Keep the most recent part if a long stretch went unreviewed.

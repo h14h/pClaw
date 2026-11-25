@@ -13,6 +13,8 @@ Record what they said and decided, not what pclaw suggested. "pclaw recommended 
 
 Never write down a password, key, token, or any other secret, even one they shared outright. A note can say where a secret is kept, never what it is.
 
+A shared location is only worth a note when it says something lasting, like a trip, and then only the town and date: "Travelling in Glenwood Springs, CO, 2026-11-25". Never a street, an address, or coordinates.
+
 Don't copy details that can be checked on the machine: ports, IPs, file paths, versions, what's installed. They go stale, and pclaw checks the machine before relying on them anyway. Note what the thing is for and where its details live, e.g. "Minecraft server on mp1 for friends; setup and whitelist steps in ~/minecraft-server.txt".
 
 Skip small talk, one-off questions they won't come back to, anything already in the notes, and anything they asked not to keep. When a note is now wrong or out of date, remove it, and add the corrected version if there is one.

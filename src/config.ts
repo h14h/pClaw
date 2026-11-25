@@ -15,6 +15,8 @@ export const paths = {
 	/** SQLite database holding distilled session episodes and FTS5 recall index. 0600. */
 	indexDb: join(home, "pclaw-index.sqlite"),
 	notes: join(home, "notes.md"),
+	/** The last location each person shared in chat, with when it stops counting. 0600, never in notes. */
+	location: join(home, "location.json"),
 	/** Notes the nightly cleanup retired or replaced, with when and why. Never shown to models. */
 	notesArchive: join(home, "notes-archive.md"),
 	/** When the nightly notes cleanup last ran. */

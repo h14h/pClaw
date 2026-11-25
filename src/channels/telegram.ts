@@ -17,6 +17,21 @@ import type { Job } from "../extensions/jobs.ts";
 import { Reactions } from "../extensions/reactions.ts";
 import { Workers } from "../extensions/workers.ts";
 import { type Heard, memoLabel, type SpeechBackend, type SpeechFallback, speechFallbackFromConfig, transcribe } from "../speech.ts";
+import {
+	coords,
+	currentLocationLine,
+	distanceMeters,
+	expiryFor,
+	type Geocoder,
+	LocationStore,
+	liveUntilFrom,
+	lookUp,
+	nominatimGeocoder,
+	placeText,
+	redactCoordinates,
+	type SharedLocation,
+	sharedLocationNote,
+} from "../location.ts";
 import { stamp } from "../time.ts";
 import { isDelegateAck, ReplyThreads } from "./reply-threads.ts";
 import {
@@ -43,7 +58,12 @@ const RESYNC_ON_ATTACH = 10;
 /** The reaction a voice memo wears while it's being heard, until pclaw reacts or answers. */
 const TRANSCRIBING = "✍";
 const POLL_TIMEOUT_SECONDS = 30;
-const ALLOWED_UPDATES = ["message", "message_reaction"] as const;
+/** A pin waits this long for the question that usually follows it ("movies near me?"), so both are one turn. */
+const LOCATION_HOLD_MS = 6_000;
+/** A live location re-geocodes once it has moved this far from where its place was looked up. */
+const LIVE_REGEOCODE_METERS = 250;
+/** `edited_message` carries live-location updates. */
+const ALLOWED_UPDATES = ["message", "edited_message", "message_reaction"] as const;
 
 export type TelegramUser = {
 	id: number;
@@ -92,6 +112,21 @@ export type TelegramDocument = {
 	file_size?: number;
 };
 
+export type TelegramLocation = {
+	latitude: number;
+	longitude: number;
+	horizontal_accuracy?: number;
+	/** Seconds after the message's `date` during which a live location updates; only set while it's live. */
+	live_period?: number;
+	heading?: number;
+};
+
+export type TelegramVenue = {
+	location: TelegramLocation;
+	title: string;
+	address: string;
+};
+
 export type TelegramTextQuote = {
 	text: string;
 	position?: number;
@@ -112,6 +147,10 @@ export type TelegramMessage = {
 	voice?: TelegramVoice;
 	audio?: TelegramAudio;
 	document?: TelegramDocument;
+	location?: TelegramLocation;
+	venue?: TelegramVenue;
+	/** Set on `edited_message` updates, e.g. each live-location move. */
+	edit_date?: number;
 };
 
 export type TelegramReactionType =
@@ -131,6 +170,7 @@ export type TelegramMessageReactionUpdated = {
 export type TelegramUpdate = {
 	update_id: number;
 	message?: TelegramMessage;
+	edited_message?: TelegramMessage;
 	message_reaction?: TelegramMessageReactionUpdated;
 };
 
@@ -531,13 +571,15 @@ function senderName(user: TelegramUser | undefined): string {
 
 /**
  * Extract `[replying to ...]` / `[quoting ...]` context from `reply_to_message` and `quote`. A replied-to photo or file
- * keeps its label even when it had a caption, and `savedAt` (where pclaw saved it) is named when given.
+ * keeps its label even when it had a caption, and `savedAt` (where pclaw saved it) is named when given. A replied-to
+ * location or place is described by `locationText` (its geocoded place and coordinates), or by its coordinates.
  */
 export function extractReplyContext(
 	message: TelegramMessage,
 	botId: number | undefined,
 	timeZone: string,
 	savedAt?: string,
+	locationText?: string,
 ): string[] {
 	const reply = message.reply_to_message;
 	const quoteText = message.quote?.text?.trim();
@@ -559,6 +601,8 @@ export function extractReplyContext(
 		: reply.photo !== undefined && reply.photo.length > 0 ? "photo"
 		: reply.document !== undefined ? `file "${reply.document.file_name ?? "document"}"`
 		: reply.voice !== undefined || reply.audio !== undefined ? "voice message"
+		: reply.venue !== undefined ? "shared place"
+		: reply.location !== undefined ? "shared location"
 		: "message";
 	const saved = savedAt === undefined ? "" : ` (saved at ${savedAt})`;
 
@@ -567,7 +611,15 @@ export function extractReplyContext(
 	}
 
 	if (reply === undefined) return [];
-	const body = (reply.text ?? reply.caption ?? "").trim();
+	const point = reply.venue?.location ?? reply.location;
+	const located =
+		locationText ??
+		(point === undefined
+			? undefined
+			: reply.venue !== undefined
+				? `${reply.venue.title}, ${reply.venue.address} (${coords(point.latitude, point.longitude)})`
+				: `(${coords(point.latitude, point.longitude)})`);
+	const body = (reply.text ?? reply.caption ?? located ?? "").trim();
 	if (body !== "") return [`[replying to ${whose} ${what}${when}${saved}: "${clip(body)}"]`];
 	if (what !== "message") return [`[replying to ${whose} ${what}${when}${saved}]`];
 	return [];
@@ -627,10 +679,12 @@ export function createMediaGroupBuffer(options: {
 	};
 }
 
+const sharesLocation = (msg: TelegramMessage) => msg.location !== undefined || msg.venue !== undefined;
+
 function isCaptionlessMediaBatch(messages: readonly TelegramMessage[]): boolean {
 	if (messages.length === 0) return false;
 	return messages.every((msg) => {
-		const hasMedia = msg.document !== undefined || (msg.photo !== undefined && msg.photo.length > 0);
+		const hasMedia = msg.document !== undefined || (msg.photo !== undefined && msg.photo.length > 0) || sharesLocation(msg);
 		const hasAudio = msg.voice !== undefined || msg.audio !== undefined;
 		const hasText = (msg.text ?? msg.caption ?? "").trim() !== "";
 		return hasMedia && !hasAudio && !hasText;
@@ -639,14 +693,18 @@ function isCaptionlessMediaBatch(messages: readonly TelegramMessage[]): boolean 
 
 /**
  * Briefly hold a captionless document/photo (~2s default) so if the same user sends their instruction text
- * right after the file, both merge into one turn instead of kicking off a bare-file worker prematurely.
+ * right after the file, both merge into one turn instead of kicking off a bare-file worker prematurely. A shared
+ * location waits longer (`locationDelayMs`, ~6s), since the question it's for ("movies near me?") is usually typed after.
  */
 export function createCaptionlessFileBuffer(options: {
 	delayMs?: number;
+	locationDelayMs?: number;
 	onFlush: (messages: TelegramMessage[]) => void | Promise<void>;
 	onError?: (error: unknown) => void;
 }) {
 	const delayMs = options.delayMs ?? CAPTIONLESS_FILE_DEBOUNCE_MS;
+	const locationDelayMs = options.locationDelayMs ?? LOCATION_HOLD_MS;
+	const holdFor = (messages: readonly TelegramMessage[]) => (messages.some(sharesLocation) ? Math.max(delayMs, locationDelayMs) : delayMs);
 	const pending = new Map<string, { messages: TelegramMessage[]; timer: NodeJS.Timeout }>();
 	const inFlight = new Set<Promise<void>>();
 
@@ -686,7 +744,7 @@ export function createCaptionlessFileBuffer(options: {
 				if (isCaptionlessMediaBatch(messages)) {
 					existing.messages = merged;
 					clearTimeout(existing.timer);
-					existing.timer = setTimeout(() => flushKey(key), delayMs);
+					existing.timer = setTimeout(() => flushKey(key), holdFor(merged));
 					return;
 				}
 				// User sent follow-up text (or captioned media): merge and flush right away.
@@ -696,7 +754,7 @@ export function createCaptionlessFileBuffer(options: {
 				return;
 			}
 			if (isCaptionlessMediaBatch(messages)) {
-				const timer = setTimeout(() => flushKey(key), delayMs);
+				const timer = setTimeout(() => flushKey(key), holdFor(messages));
 				pending.set(key, { messages: [...messages], timer });
 				return;
 			}
@@ -881,6 +939,33 @@ async function replyMedia(
 	}
 }
 
+/**
+ * The location a Telegram message shares (a pin, a venue, or a live location), looked up into a place when a
+ * geocoder is given. Geocoding failures leave just the coordinates; this never throws.
+ */
+export async function sharedLocationFrom(message: TelegramMessage, geocoder: Geocoder | undefined): Promise<SharedLocation | undefined> {
+	const point = message.venue?.location ?? message.location;
+	if (point === undefined || !Number.isFinite(point.latitude) || !Number.isFinite(point.longitude)) return undefined;
+	const kind: SharedLocation["kind"] = message.venue !== undefined ? "place" : point.live_period !== undefined ? "live" : "pin";
+	const sharedAt = message.date * 1000;
+	const updatedAt = (message.edit_date ?? message.date) * 1000;
+	const liveUntil = kind === "live" ? liveUntilFrom(sharedAt, point.live_period!) : undefined;
+	const found = await lookUp(geocoder, point.latitude, point.longitude);
+	return {
+		kind,
+		lat: point.latitude,
+		lon: point.longitude,
+		...(found === undefined ? {} : { place: found.label, placeLat: point.latitude, placeLon: point.longitude }),
+		...(found?.town === undefined ? {} : { town: found.town }),
+		...(message.venue === undefined ? {} : { title: message.venue.title, address: message.venue.address }),
+		messageId: message.message_id,
+		sharedAt,
+		updatedAt,
+		...(liveUntil === undefined ? {} : { liveUntil }),
+		expiresAt: expiryFor(kind, updatedAt, liveUntil),
+	};
+}
+
 export type BuildInputOptions = {
 	/** `setMessageReaction` and `sendMessage` drive voice-memo feedback (✍, the transcript quote); without them it's skipped. */
 	api: Pick<TelegramApi, "getFile" | "downloadFile" | "sendChatAction"> & Partial<Pick<TelegramApi, "setMessageReaction" | "sendMessage">>;
@@ -893,6 +978,8 @@ export type BuildInputOptions = {
 	breaker?: HostCircuitBreaker;
 	isGroup?: boolean;
 	extraContext?: string[];
+	/** Turns shared locations into places. Without one, a shared location is described by its coordinates. */
+	geocoder?: Geocoder;
 	/** Optional remote staging hook (e.g. `sandbox.putFile` for SSH VM users); returns the sandbox path. */
 	stageFile?: (localPath: string, filename: string) => Promise<string>;
 	transcribeFn?: typeof transcribe;
@@ -911,8 +998,10 @@ export type BuildInputOptions = {
 export async function buildTelegramUserInput(
 	messages: readonly TelegramMessage[],
 	options: BuildInputOptions,
-): Promise<{ content: UserInput; plainText: string; hasVoice: boolean; heardVoiceRefs: string[] }> {
+): Promise<{ content: UserInput; plainText: string; hasVoice: boolean; heardVoiceRefs: string[]; sharedLocations: SharedLocation[] }> {
 	const primary = messages[0]!;
+	/** Locations shared in these messages, oldest first, for the per-person current location. */
+	const sharedLocations: SharedLocation[] = [];
 	/** Voice memos heard and quoted back, still wearing ✍ until pclaw reacts or answers. */
 	const heardVoiceRefs: string[] = [];
 	const parts: (TextContent | ImageContent)[] = [];
@@ -930,7 +1019,10 @@ export async function buildTelegramUserInput(
 	for (const message of messages) {
 		if (extractReplyContext(message, options.botId, options.timeZone).length === 0) continue;
 		const media = await replyMedia(message, inboxDir, options);
-		replyLines.push(...extractReplyContext(message, options.botId, options.timeZone, media.savedAt));
+		const replied = message.reply_to_message === undefined ? undefined : await sharedLocationFrom(message.reply_to_message, options.geocoder);
+		const repliedPlace = replied === undefined ? undefined : placeText(replied);
+		const locationText = replied === undefined ? undefined : `${repliedPlace === undefined ? "" : `${repliedPlace} `}(${coords(replied.lat, replied.lon)})`;
+		replyLines.push(...extractReplyContext(message, options.botId, options.timeZone, media.savedAt, locationText));
 		if (media.image !== undefined) parts.push(media.image);
 		break;
 	}
@@ -938,6 +1030,13 @@ export async function buildTelegramUserInput(
 	for (const message of messages) {
 		const body = (message.text ?? message.caption ?? "").trim();
 		if (body !== "") textLines.push(body);
+
+		// 0. A shared location, place, or live location -> a note with the place and its coordinates.
+		const shared = await sharedLocationFrom(message, options.geocoder);
+		if (shared !== undefined) {
+			sharedLocations.push(shared);
+			notes.push(sharedLocationNote(shared, options.timeZone));
+		}
 
 		// 1. Photos: pick largest PhotoSize (photo[-1]), <= 10 MB -> ImageContent, plus a saved (and staged) file for workers.
 		if (message.photo !== undefined && message.photo.length > 0) {
@@ -1107,9 +1206,10 @@ export async function buildTelegramUserInput(
 		.filter((line): line is string => line !== undefined && line !== "")
 		.join("\n");
 
-	const plainText = [...textLines, ...notes].filter(Boolean).join("\n");
+	// plainText goes to the decision model and its log, so it never carries precise coordinates.
+	const plainText = redactCoordinates([...textLines, ...notes].filter(Boolean).join("\n"));
 	const content: UserInput = parts.length === 0 ? combinedText : [{ type: "text", text: combinedText }, ...parts];
-	return { content, plainText, hasVoice, heardVoiceRefs };
+	return { content, plainText, hasVoice, heardVoiceRefs, sharedLocations };
 }
 
 export type StartTelegramOptions = {
@@ -1122,6 +1222,13 @@ export type StartTelegramOptions = {
 	voiceDir?: string;
 	transcribeFn?: typeof transcribe;
 	onOwnerPaired?: (ownerId: string) => void;
+	/** Reverse geocoder for shared locations; defaults to OpenStreetMap Nominatim. `null` turns lookups off. */
+	geocoder?: Geocoder | null;
+	/** How long a shared location waits for the question that follows it. */
+	locationDelayMs?: number;
+	/** Where current locations are kept, instead of each person's `location.json`. */
+	locationFile?: string;
+	now?: () => number;
 };
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -1175,6 +1282,17 @@ export async function startTelegram(
 	const allowedUsers = new Set([...config.telegramAllowedUsers, ...agent.users.allowedExternalIds("telegram")]);
 	const allowedGroups = new Set(config.telegramAllowedGroups);
 	const { jobs } = agent;
+	const now = options.now ?? Date.now;
+	const geocoder = options.geocoder === null ? undefined : (options.geocoder ?? nominatimGeocoder());
+	const locationStores = new Map<string, LocationStore>();
+	/** Where a person's current location is kept: their own `location.json`, keyed by who shared it. */
+	const locationFor = (from: TelegramUser) => {
+		const user = agent.users.resolveExternal("telegram", String(from.id));
+		const file = options.locationFile ?? (user === undefined ? paths.location : agent.users.pathsFor(user.id).location);
+		let store = locationStores.get(file);
+		if (store === undefined) locationStores.set(file, (store = new LocationStore(file)));
+		return { store, key: `telegram:${from.id}` };
+	};
 	const me = await api.getMe();
 	console.log(`[pclaw] on Telegram as ${me.username !== undefined ? `@${me.username}` : me.id}`);
 	await api.deleteMyCommands().catch((error: unknown) =>
@@ -1497,10 +1615,31 @@ export async function startTelegram(
 				: {}),
 			...(options.transcribeFn === undefined ? {} : { transcribeFn: options.transcribeFn }),
 			onVoiceResult: (result) => jobs.decisions.record({ type: "voice", ...result }),
+			...(geocoder === undefined ? {} : { geocoder }),
 		});
 
 		// Ignore empty messages with no attachments or text (e.g. service messages like pinned/join notices).
 		if (built.plainText === "" && typeof built.content === "string") return;
+
+		// A location shared in a DM becomes where they are for a while; later messages carry it as a one-line hint so
+		// "near me" means there, not the home city in their notes. Group chats never keep or show one.
+		let locationHint: string | undefined;
+		if (!auth.isGroup && primary.from !== undefined) {
+			const { store, key } = locationFor(primary.from);
+			const latest = built.sharedLocations.at(-1);
+			try {
+				if (latest !== undefined) {
+					// A live location's edits can land while its first message is held; never roll those back.
+					const stored = store.raw(key);
+					if (!(stored?.messageId === latest.messageId && stored.updatedAt > latest.updatedAt)) store.set(key, latest);
+				} else {
+					const current = store.current(key, now());
+					if (current !== undefined) locationHint = currentLocationLine(current, now(), userTimeZone);
+				}
+			} catch (error) {
+				console.warn(`[pclaw] couldn't keep a shared location: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
 
 		const repliedText = jumpTarget === undefined ? undefined : (swiped?.text ?? swiped?.caption)?.trim();
 		const [guidance, crossClient] = await Promise.all([
@@ -1514,7 +1653,7 @@ export async function startTelegram(
 			}),
 			agent.crossClientHint(conversation.id, context),
 		]);
-		const tailHints = [crossClient, guidance].filter((item): item is string => item !== undefined).join("\n");
+		const tailHints = [locationHint, crossClient, guidance].filter((item): item is string => item !== undefined).join("\n");
 
 		const content: UserInput =
 			tailHints === ""
@@ -1569,8 +1708,55 @@ export async function startTelegram(
 		);
 	}
 
+	/**
+	 * A live location moving: Telegram sends each move as an `edited_message`. It only updates where they are, quietly:
+	 * no turn, no reply. A share that stops (an edit without `live_period`) stays current for a short grace period.
+	 */
+	async function handleLocationEdit(message: TelegramMessage): Promise<void> {
+		const point = message.location;
+		if (point === undefined || message.venue !== undefined || message.from === undefined) return;
+		const auth = authorizeTelegramMessage(message, { ownerId, allowedUsers, allowedGroups, disablePairing: true });
+		if (!auth.allowed || auth.isGroup) return;
+		const { store, key } = locationFor(message.from);
+		const stored = store.raw(key);
+		const at = (message.edit_date ?? message.date) * 1000;
+		const same = stored?.messageId === message.message_id;
+		if (stored !== undefined && stored.updatedAt > at) return;
+		// Another share's leftover edit only takes over while it's still live.
+		if (!same && point.live_period === undefined) return;
+		const sharedAt = message.date * 1000;
+		const liveUntil = point.live_period === undefined ? at : liveUntilFrom(sharedAt, point.live_period);
+		const keep = same ? stored : undefined;
+		const moved =
+			keep?.placeLat === undefined ||
+			keep.placeLon === undefined ||
+			distanceMeters(keep.placeLat, keep.placeLon, point.latitude, point.longitude) > LIVE_REGEOCODE_METERS;
+		const found = moved ? await lookUp(geocoder, point.latitude, point.longitude) : undefined;
+		const place =
+			found !== undefined
+				? { place: found.label, placeLat: point.latitude, placeLon: point.longitude }
+				: !moved && keep?.place !== undefined
+					? { place: keep.place, placeLat: keep.placeLat!, placeLon: keep.placeLon! }
+					: {};
+		const town = found?.town ?? keep?.town;
+		store.set(key, {
+			kind: "live",
+			lat: point.latitude,
+			lon: point.longitude,
+			...place,
+			...(town === undefined ? {} : { town }),
+			messageId: message.message_id,
+			sharedAt,
+			updatedAt: at,
+			...(liveUntil === undefined ? {} : { liveUntil }),
+			expiresAt: expiryFor("live", at, liveUntil),
+		});
+	}
+	let locationEdits = Promise.resolve();
+
 	const captionlessBuffer = createCaptionlessFileBuffer({
 		delayMs: options.captionlessDebounceMs ?? CAPTIONLESS_FILE_DEBOUNCE_MS,
+		...(options.locationDelayMs === undefined ? {} : { locationDelayMs: options.locationDelayMs }),
 		onFlush: (batch) => handleMessageBatch(batch),
 		onError: (error) => console.error("[pclaw] couldn't handle a Telegram message batch", error),
 	});
@@ -1624,6 +1810,14 @@ export async function startTelegram(
 						} else {
 							captionlessBuffer.enqueue([update.message]);
 						}
+					} else if (update.edited_message !== undefined) {
+						// Serialized and off the poll loop: a slow geocoder never holds up the next update.
+						const edited = update.edited_message;
+						locationEdits = locationEdits
+							.then(() => handleLocationEdit(edited))
+							.catch((error: unknown) =>
+								console.error(`[pclaw] couldn't update a live location: ${error instanceof Error ? error.message : String(error)}`),
+							);
 					} else if (update.message_reaction !== undefined) {
 						await handleReactionUpdate(update.message_reaction).catch((error: unknown) =>
 							console.error("[pclaw] couldn't handle a Telegram reaction", error),
@@ -1653,6 +1847,7 @@ export async function startTelegram(
 			captionlessBuffer.stop();
 			clearInterval(keepTyping);
 			await pollLoop;
+			await locationEdits;
 			for (const delivery of deliveries.values()) await delivery.stop();
 		},
 	};

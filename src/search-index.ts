@@ -13,6 +13,7 @@ import {
 	UserEntry,
 } from "@earendil-works/pi-durable";
 import { STRIP_GUIDANCE } from "./decisions.ts";
+import { redactCoordinates, STRIP_LOCATION } from "./location.ts";
 import { Routes } from "./routes.ts";
 import type { UserRegistry } from "./users.ts";
 
@@ -114,11 +115,13 @@ export function extractSearchDoc(entry: EntryRecord): {
 } | undefined {
 	const message = entry.model?.[0];
 	if (message === undefined || message.role === "system" || message.role === "toolResult") return undefined;
-	const raw = messageText(message)
-		.replace(STRIP_GUIDANCE, "")
-		.replace(STRIP_CROSS_CLIENT, "")
-		.replace(/^\[[^\]\n]*\]\n?/, "")
-		.trim();
+	const raw = redactCoordinates(
+		messageText(message)
+			.replace(STRIP_GUIDANCE, "")
+			.replace(STRIP_CROSS_CLIENT, "")
+			.replace(STRIP_LOCATION, "")
+			.replace(/^\[[^\]\n]*\]\n?/, ""),
+	).trim();
 	if (raw === "" || raw.startsWith("NO_REPLY")) return undefined;
 
 	if (UserEntry.is(entry) && message.role === "user") {
