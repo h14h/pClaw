@@ -133,7 +133,7 @@ Real images make pages much better when they show something words can't: the pla
      # agent-browser --session "$S" close
      grug-page preview-stop
      ```
-5. **Report back**: Your final response is only `Built slug: <slug>`, `TL;DR: <headline verdict or number, one line>`, and `Decision needed: <one line>` if the user must act. No breakdown, lists, or sources: the page holds them, and the front agent shares just the link and TL;DR.
+5. **Report back**: Your final response is only `Built slug: <slug>`, `TL;DR: <headline verdict or number, under 20 words>`, and `Decision needed: <under 20 words>` if the user must act. No breakdown, lists, or sources: the page holds them, and the front agent shares just the link and TL;DR.
 
 ## Progress updates (keep internal steps invisible)
 

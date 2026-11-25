@@ -167,7 +167,7 @@ export const REMOTE_PAGES_GUIDANCE = [
 	'- One page per topic: run `grug-page list` before creating a new slug. On follow-ups or when a page on the same topic already exists, edit the existing `~/work/pages/<slug>/index.mdx` in place (updating `updated: "YYYY-MM-DD"`) instead of creating a duplicate slug.',
 	"- Follow the full `grug-page` workflow: write a concise, zero-repetition `~/work/pages/<slug>/index.mdx` draft -> `grug-page polish <slug>` -> `grug-page build <slug>` -> `grug-page preview <slug> --daemon` + `agent-browser` visual check (desktop & mobile, light & dark, zero console/CSP errors), then close the browser (`agent-browser close`, or `agent-browser --session \"$S\" close` if a named session was used) and run `grug-page preview-stop`.",
 	"- Page about real places, products, or data? Add 1–4 real images (photos, charts, maps, logos; never decorative) with `grug-page image <slug> <direct-image-url> --alt ... --credit ... --href ...`; the `grug-page` skill says how to find direct image URLs.",
-	"- Page built? Your final response is only: `Built slug: <slug>`, then `TL;DR: <headline verdict or number, one line>`, then `Decision needed: <one line>` only if the user must act. No breakdown, lists, or sources: the page holds them, and pclaw shares just the link and TL;DR.",
+	"- Page built? Your final response is only: `Built slug: <slug>`, then `TL;DR: <headline verdict or number, under 20 words>`, then `Decision needed: <under 20 words>` only if the user must act. No breakdown, lists, or sources: the page holds them, and pclaw shares just the link and TL;DR.",
 ].join("\n");
 
 /**
