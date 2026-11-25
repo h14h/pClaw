@@ -529,13 +529,13 @@ export async function openAgent(
 				if (tool !== undefined) removedTools.push(tool);
 			}
 		}
-		const publishPageTool = toolsByName.get("publish_page");
-		if (publishPageTool !== undefined) {
+		const pageTools = ["publish_page", "page_links"].flatMap((name) => toolsByName.get(name) ?? []);
+		if (pageTools.length > 0) {
 			const resolved = sandboxes.forAddress(address);
 			const canPublishRemotePage = Boolean(
 				resolved.allowPages && resolved.user?.pagesCode?.trim() && resolved.sandbox.syncPages !== undefined,
 			);
-			if (!canPublishRemotePage) removedTools.push(publishPageTool);
+			if (!canPublishRemotePage) removedTools.push(...pageTools);
 		}
 		const addedExtensions = channel === undefined ? undefined : channelExtMap.get(channel);
 		return {

@@ -1088,17 +1088,43 @@ test("startTelegram voice memos: ✍ while heard, a silent quote, ✍ cleared af
 
 test("pagePreviewUrl picks the published page a message links to, never a source link", () => {
 	const base = "https://grug.h14h.com";
-	const page = "https://grug.h14h.com/fntc77k1/glenwood-springs-winter/";
+	const page = "https://grug.h14h.com/hen12345/glenwood-springs-winter/";
 	assert.equal(pagePreviewUrl(`Soak + caves carry trip.\n${page}`, base), page);
-	assert.equal(pagePreviewUrl("Soak + caves.\nhttps://grug.h14h.com/fntc77k1/glenwood-springs-winter", `${base}/`), page);
+	assert.equal(pagePreviewUrl("Soak + caves.\nhttps://grug.h14h.com/hen12345/glenwood-springs-winter", `${base}/`), page);
 	assert.equal(pagePreviewUrl(`[Guide](${page}) via https://www.hotspringspool.com/`, base), page);
 	assert.equal(pagePreviewUrl(`Sources https://example.com/a and ${page}`, base), page);
 	// The shelf counts when it's the only page link; a page beats the shelf
-	assert.equal(pagePreviewUrl("All pages: https://grug.h14h.com/fntc77k1/", base), "https://grug.h14h.com/fntc77k1/");
-	assert.equal(pagePreviewUrl(`Shelf https://grug.h14h.com/fntc77k1/ and ${page}`, base), page);
+	assert.equal(pagePreviewUrl("All pages: https://grug.h14h.com/hen12345/", base), "https://grug.h14h.com/hen12345/");
+	assert.equal(pagePreviewUrl(`Shelf https://grug.h14h.com/hen12345/ and ${page}`, base), page);
 	assert.equal(pagePreviewUrl("Pool opens 9am: https://hotspringspool.com/", base), undefined);
-	assert.equal(pagePreviewUrl("https://grug.h14h.com.evil.test/fntc77k1/x/", base), undefined);
+	assert.equal(pagePreviewUrl("https://grug.h14h.com.evil.test/hen12345/x/", base), undefined);
 	assert.equal(pagePreviewUrl(page, undefined), undefined);
+});
+
+test("pagePreviewUrl previews private /p/ share links with the large card", async () => {
+	const base = "https://grug.h14h.com";
+	const share = "https://grug.h14h.com/p/q7Smp29RH6rL/";
+	assert.equal(pagePreviewUrl(`Soak + caves carry trip.\n${share}`, base), share);
+	assert.equal(pagePreviewUrl("Soak.\nhttps://grug.h14h.com/p/q7Smp29RH6rL", base), share);
+	assert.equal(pagePreviewUrl(`[Guide](${share}) via https://www.hotspringspool.com/`, base), share);
+	assert.equal(pagePreviewUrl(`Shelf https://grug.h14h.com/hen12345/ and ${share}`, base), share);
+	// Not a token: too short, too long, or not under the pages host
+	assert.equal(pagePreviewUrl("https://grug.h14h.com/p/short/", base), undefined);
+	assert.equal(pagePreviewUrl("https://grug.h14h.com/p/q7Smp29RH6rLx/", base), undefined);
+	assert.equal(pagePreviewUrl("https://grug.h14h.com.evil.test/p/q7Smp29RH6rL/", base), undefined);
+
+	const sent: Record<string, unknown>[] = [];
+	const api = createTelegramApi({
+		token: "test-token",
+		apiBase: "https://tg.test",
+		fetchFn: async (_url, init) => {
+			sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+			return new Response(JSON.stringify({ ok: true, result: { message_id: sent.length, date: 1, chat: { id: 1, type: "private" } } }));
+		},
+	});
+	const text = `Sox lot worth ~$40M/yr.\n${share}`;
+	await api.sendFormattedMessage(501, text, { previewUrl: pagePreviewUrl(text, base)! });
+	assert.deepEqual(sent[0]?.link_preview_options, { url: share, prefer_large_media: true });
 });
 
 test("sendFormattedMessage previews only the named page, on the chunk that carries it", async () => {
@@ -1111,7 +1137,7 @@ test("sendFormattedMessage previews only the named page, on the chunk that carri
 			return new Response(JSON.stringify({ ok: true, result: { message_id: sent.length, date: 1, chat: { id: 1, type: "private" } } }));
 		},
 	});
-	const page = "https://grug.h14h.com/fntc77k1/glenwood-springs-winter/";
+	const page = "https://grug.h14h.com/hen12345/glenwood-springs-winter/";
 	await api.sendFormattedMessage(501, `Soak + caves carry trip.\n${page}`, { previewUrl: page });
 	assert.deepEqual(sent[0]?.link_preview_options, { url: page, prefer_large_media: true });
 

@@ -80,16 +80,18 @@ const tableHeadingScript = `const grugTableHeading = (() => {\n${tableHeadingSou
         <div class="mx-auto flex max-w-3xl items-center justify-between gap-4 px-5 py-3.5 sm:px-8">
           <a
             href={homeHref}
+            data-owner-nav="home"
             aria-label="Homepage"
             class="inline-flex shrink-0 items-center gap-2.5 py-1 text-base/6 font-medium tracking-tight text-stone-900 hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:text-sm/5 dark:text-stone-100 dark:hover:text-accent-dark dark:focus-visible:outline-accent-dark"
           >
             <GrugMark class="size-6 shrink-0" />
             <span>grug pages</span>
           </a>
-          <nav aria-label="Site navigation" class="flex shrink-0 items-center gap-5 text-base/6 sm:text-sm/5">
+          <nav aria-label="Site navigation" class="flex min-h-10 shrink-0 items-center gap-5 text-base/6 sm:min-h-9 sm:text-sm/5">
             {!isHome && (
               <a
                 href={homeHref}
+                data-owner-nav="all"
                 class="px-1 py-2 text-stone-600 hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent dark:text-stone-400 dark:hover:text-stone-100 dark:focus-visible:outline-accent-dark"
               >
                 All pages
@@ -133,6 +135,30 @@ const tableHeadingScript = `const grugTableHeading = (() => {\n${tableHeadingSou
       </main>
     </div>
 
+    {isHome && (
+      <script is:inline define:vars={{ shelfHref: homeHref }}>
+        // The owner opened their shelf: remember it, so their shared links can still lead back here.
+        try {
+          localStorage.setItem("grug-shelf", shelfHref);
+        } catch {}
+      </script>
+    )}
+    <script is:inline>
+      // Share links (/p/<token>/) arrive with owner links unlinked and hidden. Only a browser that has opened a
+      // shelf gets them back, pointing at that shelf; visitors never see them.
+      (() => {
+        if (!document.documentElement.hasAttribute("data-grug-shared")) return;
+        let shelf = null;
+        try {
+          shelf = localStorage.getItem("grug-shelf");
+        } catch {}
+        if (!shelf || !/^\/[a-z0-9]{6,24}\/$/.test(shelf)) return;
+        for (const link of document.querySelectorAll("a[data-owner-nav]")) {
+          link.setAttribute("href", shelf);
+          link.removeAttribute("hidden");
+        }
+      })();
+    </script>
     <script is:inline set:html={tableHeadingScript} />
     <script is:inline>
       (() => {

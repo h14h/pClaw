@@ -220,14 +220,15 @@ export type TelegramReplyParameters = { message_id: number; allow_sending_withou
 export type TelegramLinkPreviewOptions = { is_disabled: true } | { url: string; prefer_large_media?: boolean };
 
 /**
- * The published page a message links to, if any: `<pagesUrl>/<code>/<slug>/` (or the `<pagesUrl>/<code>/` shelf when
- * that's all it links). Only these get a link preview, so the card is always the page and never a source link.
+ * The published page a message links to, if any: a share link `<pagesUrl>/p/<token>/`, an owner link
+ * `<pagesUrl>/<code>/<slug>/`, or the `<pagesUrl>/<code>/` shelf when that's all it links. Only these get a link
+ * preview, so the card is always the page and never a source link.
  */
 export function pagePreviewUrl(text: string, pagesUrl: string | undefined): string | undefined {
 	const base = pagesUrl?.trim().replace(/\/+$/, "");
 	if (base === undefined || base === "") return undefined;
 	const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	const pattern = new RegExp(`${escaped}/[a-z0-9]+/(?:[a-z0-9-]+/?)?`, "g");
+	const pattern = new RegExp(`${escaped}/(?:p/[0-9A-Za-z]{12}(?![0-9A-Za-z])/?|[a-z0-9]{6,24}/(?:[a-z0-9-]+/?)?)`, "g");
 	const found = text.match(pattern) ?? [];
 	const withSlash = (url: string) => (url.endsWith("/") ? url : `${url}/`);
 	const page = found.find((url) => url.slice(base.length).split("/").filter(Boolean).length === 2);

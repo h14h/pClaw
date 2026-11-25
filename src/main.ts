@@ -189,7 +189,9 @@ async function start(): Promise<void> {
 			? undefined
 			: await startPagesServer({ pagesDir, port: config.pagesPort, host: "127.0.0.1" });
 	if (pagesServer !== undefined) {
-		console.log(`[pclaw] pages server listening on http://127.0.0.1:${pagesServer.port} (dir ${pagesDir})`);
+		console.log(
+			`[pclaw] pages server listening on http://127.0.0.1:${pagesServer.port} (dir ${pagesDir}, ${pagesServer.backfilled} new share links)`,
+		);
 	}
 	const sessionResetEnabled = config.sessionReset?.enabled === true;
 	const compactThreshold = sessionResetEnabled

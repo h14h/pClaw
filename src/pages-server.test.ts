@@ -18,6 +18,7 @@ import { PAGE_REPLY_RULE } from "./extensions/pages.ts";
 import type { WorkerOptions } from "./extensions/workers.ts";
 import { MUSE, musePreamble } from "./muse.ts";
 import { startPagesServer } from "./pages-server.ts";
+import { SHARE_TOKEN, ShareLinks } from "./share-links.ts";
 import { createPromptResolver, filterWorkerPrompt } from "./prompts.ts";
 import { createSshSandbox, SandboxManager, validateStagedPages } from "./sandbox.ts";
 import { UserRegistry } from "./users.ts";
@@ -448,7 +449,23 @@ HOME="${fakeHome}" bash -c "$cmd"
 		},
 		(req) => {
 			seenRequests.push({ who: currentWho, req });
-			return fauxAssistantMessage("live: https://grug.h14h.com/hen12345/coffee-guide/");
+			return fauxAssistantMessage("live: https://grug.h14h.com/p/token/");
+		},
+		(req) => {
+			seenRequests.push({ who: currentWho, req });
+			return fauxAssistantMessage(fauxToolCall("page_links", { slug: "coffee-guide", rotate: true }), { stopReason: "toolUse" });
+		},
+		(req) => {
+			seenRequests.push({ who: currentWho, req });
+			return fauxAssistantMessage("killed");
+		},
+		(req) => {
+			seenRequests.push({ who: currentWho, req });
+			return fauxAssistantMessage(fauxToolCall("page_links", {}), { stopReason: "toolUse" });
+		},
+		(req) => {
+			seenRequests.push({ who: currentWho, req });
+			return fauxAssistantMessage("your pages");
 		},
 		(req) => {
 			seenRequests.push({ who: currentWho, req });
@@ -518,10 +535,35 @@ HOME="${fakeHome}" bash -c "$cmd"
 			totalBytes: number;
 		};
 		assert.equal(parsed.slug, "coffee-guide");
-		assert.equal(parsed.url, "https://grug.h14h.com/hen12345/coffee-guide/");
+		// The link to send is the page's private share link, which never names the owner's code
+		const links = new ShareLinks(pagesDir);
+		const firstToken = links.get("hen12345", "coffee-guide")!;
+		assert.match(firstToken, SHARE_TOKEN);
+		assert.equal(parsed.url, `https://grug.h14h.com/p/${firstToken}/`);
+		assert.ok(!parsed.url.includes("hen12345"));
 		assert.equal(parsed.homeUrl, "https://grug.h14h.com/hen12345/");
 		assert.equal(parsed.fileCount, 2);
 		assert.ok(parsed.totalBytes > 0);
+		assert.ok(henryToolNames.includes("page_links"));
+		assert.match(henrySystem, /`\/p\/` share link/);
+
+		// "Kill that link": page_links rotates the token; the old one no longer resolves
+		await (await henryConv.submit({ type: "input", content: "kill that link" }, context)).wait(context);
+		const rotateResult = seenRequests.filter((r) => r.who === "henry")[3]!.req.messages.findLast((m) => m.role === "toolResult")!;
+		const rotated = JSON.parse((rotateResult.content[0] as { text: string }).text) as { slug: string; url: string; rotated: boolean };
+		const secondToken = links.get("hen12345", "coffee-guide")!;
+		assert.notEqual(secondToken, firstToken);
+		assert.deepEqual(rotated, { slug: "coffee-guide", url: `https://grug.h14h.com/p/${secondToken}/`, rotated: true });
+		assert.equal(links.lookup(firstToken), undefined);
+		assert.deepEqual(links.lookup(secondToken), { code: "hen12345", slug: "coffee-guide" });
+
+		// "My pages": the shelf plus every page's share link
+		await (await henryConv.submit({ type: "input", content: "my pages?" }, context)).wait(context);
+		const listResult = seenRequests.filter((r) => r.who === "henry")[5]!.req.messages.findLast((m) => m.role === "toolResult")!;
+		assert.deepEqual(JSON.parse((listResult.content[0] as { text: string }).text), {
+			homeUrl: "https://grug.h14h.com/hen12345/",
+			pages: [{ slug: "coffee-guide", url: `https://grug.h14h.com/p/${secondToken}/` }],
+		});
 
 		// 2. Guest DM (SSH without pagesCode): no publish_page tool, allowPages: false in system prompt
 		currentWho = "guest";
@@ -532,6 +574,7 @@ HOME="${fakeHome}" bash -c "$cmd"
 		const guestSystem = JSON.stringify(guestSystemMsg.sections ?? guestSystemMsg);
 		const guestToolNames = (guestSystemMsg.toolsAdded ?? guestReq.tools ?? []).map((t) => t.name);
 		assert.ok(!guestToolNames.includes("publish_page"));
+		assert.ok(!guestToolNames.includes("page_links"));
 		assert.doesNotMatch(guestSystem, /publish_page/);
 
 		// 3. Telegram group chat: no publish_page tool, allowPages: false
@@ -543,7 +586,10 @@ HOME="${fakeHome}" bash -c "$cmd"
 		const groupSystem = JSON.stringify(groupSystemMsg.sections ?? groupSystemMsg);
 		const groupToolNames = (groupSystemMsg.toolsAdded ?? groupReq.tools ?? []).map((t) => t.name);
 		assert.ok(!groupToolNames.includes("publish_page"));
-		assert.doesNotMatch(groupSystem, /publish_page/);
+		assert.ok(!groupToolNames.includes("page_links"));
+		assert.doesNotMatch(groupSystem, /publish_page|page_links/);
+		// The group still hears never to post anyone's shelf there
+		assert.match(groupSystem, /Never post anyone's all-pages link in group chat/);
 	} finally {
 		await agent.harness.close(context);
 		agent.searchIndex.close();

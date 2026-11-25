@@ -5,14 +5,22 @@
  * serve the exact same CSP, security headers, MIME types, dotfile blocking, and
  * realpath confinement as `grug-page preview`.
  */
-import { realpathSync, mkdirSync, statSync } from "node:fs";
+import { createReadStream, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { join, resolve, sep } from "node:path";
-import { createStaticHandler, SECURITY_HEADERS } from "../sites/grug-pages/lib/static-handler.mjs";
+import { extname, join, resolve, sep } from "node:path";
+import { createStaticHandler, mimeTypeFor, resolveSafeFile, SECURITY_HEADERS } from "../sites/grug-pages/lib/static-handler.mjs";
 import { PAGES_CODE } from "./config.ts";
+import { ShareLinks } from "./share-links.ts";
 
 const ROBOTS_TXT = "User-agent: *\nDisallow: /\n";
 const USER_CODE_ROUTE = /^\/([a-z0-9]{6,24})(\/.*)?$/;
+const SHARE_ROUTE = /^\/p\/([^/]+)(\/.*)?$/;
+/** Files rewritten on the way out of a share link, so the owner's code never leaves the server. */
+const TEXT_TYPES = new Set([".html", ".htm", ".css", ".js", ".mjs", ".svg", ".json", ".txt", ".xml"]);
+/** Template code and fonts every page shares; a shared page may load any of them. Images must be the page's own. */
+const TEMPLATE_TYPES = new Set([".css", ".js", ".mjs", ".woff", ".woff2"]);
+const ICONS = new Set(["favicon.svg", "favicon-32x32.png", "apple-touch-icon.png"]);
+const ASTRO_ASSET = /^_astro\/[A-Za-z0-9_-][A-Za-z0-9._-]*$/;
 
 function isWithinRoot(targetReal: string, rootReal: string): boolean {
 	if (targetReal === rootReal) return true;
@@ -69,10 +77,155 @@ function resolveUserDir(pagesDir: string, userCode: string): string | undefined 
 }
 
 /**
+ * Rewrite text served under a share link: the page's own address becomes `/p/<token>/`, its card `/p/<token>/og.png`,
+ * and every other `/<code>/` reference moves under the token, so nothing names the owner's shelf.
+ */
+export function rewriteForShare(text: string, target: { code: string; slug: string }, token: string): string {
+	const { code, slug } = target;
+	const to = `/p/${token}`;
+	return text
+		.split(`/${code}/og/${slug}.png`)
+		.join(`${to}/og.png`)
+		.split(`/${code}/${slug}/`)
+		.join(`${to}/`)
+		.split(`/${code}/`)
+		.join(`${to}/`)
+		.split(`/${code}`)
+		.join(to)
+		.split(code)
+		.join(token);
+}
+
+/**
+ * The shared view of a page: rewritten like any text, marked `data-grug-shared`, and with the owner's navigation
+ * (links the layouts mark `data-owner-nav`) defused. "All pages" links lose their href and hide; the header mark
+ * stays but stops being a link. The page's own script puts them back for the owner (see BaseLayout.astro).
+ */
+export function shareHtml(html: string, target: { code: string; slug: string }, token: string): string {
+	return rewriteForShare(html, target, token)
+		.replace(/<html\b/i, "<html data-grug-shared")
+		.replace(/<a\b[^>]*\bdata-owner-nav\b[^>]*>/gi, (tag) => {
+			const withoutHref = tag.replace(/\s+href\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "");
+			const isHome = /\bdata-owner-nav\s*=\s*["']?home\b/i.test(tag);
+			return isHome || /\shidden\b/i.test(withoutHref) ? withoutHref : withoutHref.replace(/^<a\b/i, "<a hidden");
+		});
+}
+
+/** Asset paths (relative to the share prefix) that a shared page's HTML names. */
+function referencedAssets(html: string, token: string): Set<string> {
+	const found = new Set<string>();
+	for (const match of html.matchAll(new RegExp(`/p/${token}/([A-Za-z0-9._\\-/]+)`, "g"))) found.add(match[1]!);
+	return found;
+}
+
+function sendBody(
+	res: ServerResponse,
+	method: string,
+	body: Buffer,
+	contentType: string,
+	cacheControl: string,
+): void {
+	res.writeHead(200, {
+		...SECURITY_HEADERS,
+		"Content-Type": contentType,
+		"Content-Length": String(body.byteLength),
+		"Cache-Control": cacheControl,
+	});
+	if (method === "HEAD") {
+		res.end();
+		return;
+	}
+	res.end(body);
+}
+
+/**
+ * `/p/<token>/` serves one page and only the files it needs: template CSS/JS/fonts, its own images, its card, and the
+ * icons. Everything else under a token, and any token that isn't live, is a 404.
+ */
+function serveShared(
+	res: ServerResponse,
+	method: string,
+	pagesDir: string,
+	links: ShareLinks,
+	token: string,
+	rest: string | undefined,
+): void {
+	const target = links.lookup(token);
+	const userDir = target === undefined ? undefined : resolveUserDir(pagesDir, target.code);
+	if (target === undefined || userDir === undefined) {
+		writeText(res, method, 404, "Not Found\n");
+		return;
+	}
+	const page = resolveSafeFile(userDir, `/${target.slug}/`, `/${target.slug}/`);
+	if (page.status !== "file") {
+		writeText(res, method, 404, "Not Found\n");
+		return;
+	}
+	if (rest === undefined) {
+		res.writeHead(308, { ...SECURITY_HEADERS, Location: `/p/${token}/`, "Cache-Control": "no-store" });
+		res.end();
+		return;
+	}
+	let html: string;
+	try {
+		html = shareHtml(readFileSync(page.filePath, "utf8"), target, token);
+	} catch {
+		writeText(res, method, 404, "Not Found\n");
+		return;
+	}
+	if (rest === "/") {
+		sendBody(res, method, Buffer.from(html, "utf8"), "text/html; charset=utf-8", "no-cache");
+		return;
+	}
+
+	const asset = rest.slice(1);
+	let relPath: string | undefined;
+	if (asset === "og.png") relPath = `og/${target.slug}.png`;
+	else if (ICONS.has(asset)) relPath = asset;
+	else if (ASTRO_ASSET.test(asset) && (TEMPLATE_TYPES.has(extname(asset).toLowerCase()) || referencedAssets(html, token).has(asset))) {
+		relPath = asset;
+	}
+	const file = relPath === undefined ? undefined : resolveSafeFile(userDir, `/${relPath}`, `/${relPath}`);
+	if (file?.status !== "file") {
+		writeText(res, method, 404, "Not Found\n");
+		return;
+	}
+	const cacheControl = file.isImmutable ? "public, max-age=31536000, immutable" : "no-cache";
+	const contentType = mimeTypeFor(file.filePath);
+	if (TEXT_TYPES.has(extname(file.filePath).toLowerCase())) {
+		let text: string;
+		try {
+			text = readFileSync(file.filePath, "utf8");
+		} catch {
+			writeText(res, method, 404, "Not Found\n");
+			return;
+		}
+		sendBody(res, method, Buffer.from(rewriteForShare(text, target, token), "utf8"), contentType, cacheControl);
+		return;
+	}
+	res.writeHead(200, {
+		...SECURITY_HEADERS,
+		"Content-Type": contentType,
+		"Content-Length": String(file.stat.size),
+		"Cache-Control": cacheControl,
+	});
+	if (method === "HEAD") {
+		res.end();
+		return;
+	}
+	const stream = createReadStream(file.filePath);
+	stream.on("error", () => res.destroy());
+	stream.pipe(res);
+}
+
+/**
  * Create the static-only HTTP handler rooted at `pagesDir` (`<pagesDir>/<userCode>/...`).
  * Unknown routes, root `/`, and non-existent `<userCode>` paths all return `404` with security headers.
  */
-export function createPagesHandler(pagesDir: string): (req: IncomingMessage, res: ServerResponse) => void {
+export function createPagesHandler(
+	pagesDir: string,
+	links = new ShareLinks(pagesDir),
+): (req: IncomingMessage, res: ServerResponse) => void {
 	return function handlePagesRequest(req: IncomingMessage, res: ServerResponse): void {
 		const method = req.method ?? "GET";
 		if (method !== "GET" && method !== "HEAD") {
@@ -95,6 +248,12 @@ export function createPagesHandler(pagesDir: string): (req: IncomingMessage, res
 
 		if (pathname === "/") {
 			writeText(res, method, 404, "Not Found\n");
+			return;
+		}
+
+		const share = SHARE_ROUTE.exec(pathname);
+		if (share) {
+			serveShared(res, method, pagesDir, links, share[1]!, share[2]);
 			return;
 		}
 
@@ -140,6 +299,8 @@ export function createPagesHandler(pagesDir: string): (req: IncomingMessage, res
 export type PagesServerHandle = {
 	server: Server;
 	port: number;
+	/** Share links minted at startup for pages that had none. */
+	backfilled: number;
 	stop(): Promise<void>;
 };
 
@@ -151,7 +312,9 @@ export async function startPagesServer(options: {
 }): Promise<PagesServerHandle> {
 	const host = options.host ?? "127.0.0.1";
 	mkdirSync(options.pagesDir, { recursive: true });
-	const server = createServer(createPagesHandler(options.pagesDir));
+	const links = new ShareLinks(options.pagesDir);
+	const backfilled = links.backfill();
+	const server = createServer(createPagesHandler(options.pagesDir, links));
 
 	await new Promise<void>((resolveListen, rejectListen) => {
 		server.once("error", rejectListen);
@@ -167,6 +330,7 @@ export async function startPagesServer(options: {
 	return {
 		server,
 		port: boundPort,
+		backfilled,
 		stop: () =>
 			new Promise<void>((resolveClose) => {
 				server.close(() => resolveClose());
