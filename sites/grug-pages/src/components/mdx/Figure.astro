@@ -13,9 +13,11 @@ interface Props {
   caption?: string;
   credit?: string;
   href?: string;
+  /** "paper" puts a light surface behind transparent graphics with dark ink, in both themes. */
+  background?: "paper";
 }
 
-const { src, alt, caption, credit, href } = Astro.props;
+const { src, alt, caption, credit, href, background } = Astro.props;
 
 const images = import.meta.glob<{ default: ImageMetadata }>(
   "/src/content/pages/*/img/*.{jpg,jpeg,png,webp,gif,avif}",
@@ -32,14 +34,33 @@ if (!alt || !alt.trim()) {
   throw new Error(`<Figure src="${src}"> needs alt text describing what the image shows.`);
 }
 
+// Portraits are capped by height (65svh, at most 34rem tall) and sit left-aligned, so the whole image and its caption
+// fit on screen. Landscapes fill the column.
+const ratio = image.width / image.height;
+const portrait = ratio < 1;
+const r = Number(ratio.toFixed(4));
+// The text column: 44rem from 48rem up, 32px gutters from 40rem, 20px gutters below.
+const column = ["(min-width: 48rem) 44rem", "(min-width: 40rem) calc(100vw - 4rem)", "calc(100vw - 2.5rem)"];
+const fallback = portrait
+  ? column.map((slot) => {
+      const [, media, size] = /^(\([^)]*\) )?(.*)$/.exec(slot)!;
+      return `${media ?? ""}min(${size}, ${(34 * r).toFixed(2)}rem, ${(65 * r).toFixed(2)}vh)`;
+    })
+  : column;
+// `auto` lets supporting browsers pick for the rendered width (lazy images only); the rest is the fallback.
+const sizes = ["auto", ...fallback].join(", ");
+
 const widths = [480, 800, 1200, 1600].filter((w) => w < image.width);
 widths.push(Math.min(image.width, 1600));
-const sizes = "(min-width: 48rem) 44rem, calc(100vw - 2.5rem)";
-const imgClass =
-  "block h-auto w-full rounded-lg bg-stone-100 outline -outline-offset-1 outline-stone-950/8 dark:bg-stone-900 dark:outline-white/10";
+
+const surface = background === "paper" ? "bg-stone-50" : "bg-stone-100 dark:bg-stone-900";
+const imgClass = `block h-auto w-full rounded-[min(1vw,12px)] ${surface} outline -outline-offset-1 outline-stone-950/8 dark:outline-white/10`;
+const figureStyle = portrait
+  ? `--figure-ratio: ${r}; width: min(100%, calc(min(65svh, 34rem) * var(--figure-ratio)));`
+  : undefined;
 ---
 
-<figure class="not-prose my-8">
+<figure class="not-prose my-8" style={figureStyle} data-portrait={portrait ? "true" : undefined}>
   {image.format === "gif" ? (
     <img src={image.src} width={image.width} height={image.height} alt={alt} loading="lazy" decoding="async" class={imgClass} />
   ) : (
@@ -57,19 +78,21 @@ const imgClass =
   {(caption || credit) && (
     <figcaption class="mt-2.5 text-base/6 text-pretty text-stone-600 sm:text-sm/6 dark:text-stone-400">
       {caption && <span>{caption}</span>}
-      {caption && credit && <span aria-hidden="true" class="px-1.5 text-stone-400 dark:text-stone-500">·</span>}
+      {caption && credit && <span aria-hidden="true" class="px-1.5 text-stone-400 pointer-coarse:hidden dark:text-stone-500">·</span>}
       {credit && (
-        href ? (
-          <a
-            href={href}
-            rel="noopener noreferrer"
-            class="text-stone-500 underline decoration-stone-950/20 underline-offset-3 hover:text-accent hover:decoration-accent dark:text-stone-400 dark:decoration-white/20 dark:hover:text-accent-dark dark:hover:decoration-accent-dark"
-          >
-            {credit}
-          </a>
-        ) : (
-          <span class="text-stone-500 dark:text-stone-400">{credit}</span>
-        )
+        <span class="pointer-coarse:block">
+          {href ? (
+            <a
+              href={href}
+              rel="noopener noreferrer"
+              class="rounded-sm text-stone-500 underline decoration-stone-950/20 underline-offset-3 hover:text-accent hover:decoration-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent pointer-coarse:inline-flex pointer-coarse:min-h-12 pointer-coarse:min-w-12 pointer-coarse:items-center dark:text-stone-400 dark:decoration-white/20 dark:hover:text-accent-dark dark:hover:decoration-accent-dark dark:focus-visible:outline-accent-dark"
+            >
+              {credit}
+            </a>
+          ) : (
+            <span class="text-stone-500 dark:text-stone-400">{credit}</span>
+          )}
+        </span>
       )}
     </figcaption>
   )}

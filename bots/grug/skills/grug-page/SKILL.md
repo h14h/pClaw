@@ -73,7 +73,7 @@ import { Callout, StatGrid, Stat, Details, Sources, Tabs, Figure } from "@compon
 - `<StatGrid columns={3}><Stat label="Pick" value="Jonsbo N3" note="$150 at Amazon" />...</StatGrid>` — compact at-a-glance metrics (`columns`: `2`, `3`, or `4`).
 - `<Tabs client:load labels={["Option A", "Option B"]}><div>...</div><div>...</div></Tabs>` — interactive tabbed views (also accepts `tabs={[{ label, content }]}`). Always include `client:load` on Svelte islands (`Tabs` and any custom `components/*.svelte`).
 - `<Details summary="Methodology and assumptions" open={false}>...</Details>` — collapsible secondary detail.
-- `<Figure src="img/3f9a1c2b7d4e.jpg" alt="..." caption="..." credit="..." href="..." />` — a real image saved with `grug-page image` (see Images below). Never hand-write `src`; paste the line the command prints.
+- `<Figure src="img/3f9a1c2b7d4e.jpg" alt="..." caption="..." credit="..." href="..." [background="paper"] />` — a real image saved with `grug-page image` (see Images below). Never hand-write `src`; paste the line the command prints.
 - `<Sources checked="2026-11-24">` wrapping a numbered Markdown list of links — always include at the bottom.
 - Standard Markdown tables work out of the box (automatically wrapped for mobile horizontal scroll with `tabular-nums`).
 - **Never use a standalone `Rank` or `#` column as Column 1** — put the identifying name (Provider, Option, Site, Scenario) in Column 1 (e.g. `1. GFiber Webpass`) so future tables are naturally compact and self-identifying.
@@ -90,10 +90,12 @@ Real images make pages much better when they show something words can't: the pla
   - official press kits / media pages of the venue, company, or agency.
 - **Save it into the page** (downloads to `~/work/pages/<slug>/img/`, served from this site so the CSP stays strict and readers aren't tracked):
   ```bash
-  grug-page image <slug> "<direct-image-url>" --alt "What the image shows" --credit "Source name" --href "<page you found it on>" [--caption "One short line"]
+  grug-page image <slug> "<direct-image-url>" --alt "What the image shows" --credit "Creator / source" --href "<original source page>" [--caption "One short useful fact"] [--background paper]
   ```
   It refuses non-images, SVG, files over 5 MB, and private addresses, downsizes huge files, and prints the `<Figure ... />` line to paste. Add `Figure` to the page's `@components/mdx` import.
-- Always give real alt text (what's in the image) and credit the source with `--href` to the page it came from. If the command fails, try another source or leave the image out; never link remote images.
+- **Check the image itself before using it.** Open actual image. Confirm place, season, product version, or data period. Use only if it helps reader decide. Alt says what reader needs to see. Chart or map: put takeaway in nearby text if labels too small on phone. Caption adds one short useful fact; omit if surrounding text already does that job. Credit creator and link original source page, with license where required.
+- Transparent image with dark labels or lines (maps, logos, diagrams)? Add `--background paper` so it sits on a light surface in dark mode too.
+- If the command fails, try another source or leave the image out; never link remote images.
 
 ## Sourcing and content rules
 

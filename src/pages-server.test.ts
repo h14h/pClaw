@@ -1036,3 +1036,37 @@ test("grug-page image fetcher: public raster images only, sniffed from bytes, ca
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 	}
 });
+
+test("grug-pages Figure: portraits fit on screen, credits are 48px touch targets, slot matches gutters, paper surface opt-in", () => {
+	const figure = readFileSync(new URL("../sites/grug-pages/src/components/mdx/Figure.astro", import.meta.url), "utf8");
+	const cli = readFileSync(new URL("../sites/grug-pages/bin/grug-page.mjs", import.meta.url), "utf8");
+	const skill = readFileSync(new URL("../bots/grug/skills/grug-page/SKILL.md", import.meta.url), "utf8");
+
+	// Portrait height cap, left-aligned, image stays width:100%/height:auto, sizes=auto with a responsive fallback
+	assert.match(figure, /--figure-ratio: \$\{r\}; width: min\(100%, calc\(min\(65svh, 34rem\) \* var\(--figure-ratio\)\)\);/);
+	assert.match(figure, /block h-auto w-full/);
+	assert.match(figure, /\["auto", \.\.\.fallback\]\.join\(", "\)/);
+	// Slot matches the 20px / 32px gutters and the 44rem column
+	assert.match(figure, /"\(min-width: 48rem\) 44rem", "\(min-width: 40rem\) calc\(100vw - 4rem\)", "calc\(100vw - 2\.5rem\)"/);
+
+	// Credit: own row and 48px target on coarse pointers, dot hidden there, inline for fine pointers, visible focus ring
+	assert.match(figure, /<span class="pointer-coarse:block">/);
+	assert.match(figure, /pointer-coarse:inline-flex pointer-coarse:min-h-12 pointer-coarse:min-w-12 pointer-coarse:items-center/);
+	assert.match(figure, /pointer-coarse:hidden dark:text-stone-500">·/);
+	assert.match(figure, /focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent/);
+	assert.match(figure, /dark:focus-visible:outline-accent-dark/);
+
+	// Fluid radius, inset outline kept, opt-in paper surface in both themes
+	assert.match(figure, /rounded-\[min\(1vw,12px\)\]/);
+	assert.match(figure, /outline -outline-offset-1/);
+	assert.match(figure, /background === "paper" \? "bg-stone-50" : "bg-stone-100 dark:bg-stone-900"/);
+	assert.match(cli, /\(alt\|caption\|credit\|href\|background\)/);
+	assert.match(cli, /--background only takes "paper"/);
+	assert.match(cli, /background="\$\{opts\.background\}"/);
+
+	// The worker checks the image itself, in the CLI output and the skill
+	assert.match(cli, /Check before use: open actual image\. Confirm place, season, product version, or data period\./);
+	assert.match(skill, /Open actual image\. Confirm place, season, product version, or data period\. Use only if it helps reader decide\./);
+	assert.match(skill, /Chart or map: put takeaway in nearby text if labels too small on phone\./);
+	assert.match(skill, /Add `--background paper`/);
+});

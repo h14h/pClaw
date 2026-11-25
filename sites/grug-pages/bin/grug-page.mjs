@@ -915,6 +915,11 @@ function cmdList(cfg) {
 }
 
 const IMAGE_MAX_EDGE = 2000;
+const IMAGE_CHECK =
+  "Check before use: open actual image. Confirm place, season, product version, or data period. Use only if it helps reader decide. " +
+  "Alt: what reader needs to see. Chart or map: put takeaway in nearby text if labels too small on phone. " +
+  "Caption: one short useful fact; skip if text already says it. Credit creator, link original source page, add license where required. " +
+  'Transparent image with dark labels? Re-run with --background paper.';
 
 /** A JSX string attribute value: no double quotes (MDX can't escape them) and no line breaks. */
 function jsxAttr(value) {
@@ -934,7 +939,7 @@ async function cmdImage(cfg, args) {
   const opts = {};
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
-    const m = /^--(alt|caption|credit|href)(?:=(.*))?$/.exec(arg);
+    const m = /^--(alt|caption|credit|href|background)(?:=(.*))?$/.exec(arg);
     if (m) {
       opts[m[1]] = m[2] !== undefined ? m[2] : args[++i];
       if (opts[m[1]] === undefined) fail(`--${m[1]} needs a value`);
@@ -946,12 +951,15 @@ async function cmdImage(cfg, args) {
   }
   const [slug, url] = positional;
   if (!slug || !url || positional.length > 2) {
-    fail('Usage: grug-page image <slug> <direct-image-url> --alt "what it shows" [--credit "Source"] [--href <source page>] [--caption "..."]');
+    fail('Usage: grug-page image <slug> <direct-image-url> --alt "what it shows" [--credit "Source"] [--href <source page>] [--caption "..."] [--background paper]');
   }
   validateSlug(slug);
   const pageDir = join(cfg.pagesDir, slug);
   if (!existsSync(join(pageDir, "index.mdx")) && !existsSync(join(pageDir, "index.md"))) {
     fail(`No page "${slug}" yet. Run grug-page init ${slug} first.`);
+  }
+  if (opts.background !== undefined && opts.background !== "paper") {
+    fail('--background only takes "paper" (a light surface for transparent graphics with dark ink)');
   }
   if (!opts.alt || !opts.alt.trim()) fail('--alt is required: say what the image shows, e.g. --alt "Hanging Lake under snow"');
 
@@ -1014,12 +1022,14 @@ async function cmdImage(cfg, args) {
     ...(opts.caption ? [`caption="${jsxAttr(opts.caption)}"`] : []),
     `credit="${jsxAttr(credit)}"`,
     `href="${jsxAttr(href)}"`,
+    ...(opts.background ? [`background="${opts.background}"`] : []),
   ];
   const dims = width && height ? `${width}×${height}, ` : "";
   process.stdout.write(
     `SAVED ${slug}/img/${file} (${dims}${(bytes.length / 1024).toFixed(0)} KB ${type.ext})${note}\n` +
       `Add Figure to the page's import line (import { ..., Figure } from "@components/mdx";), then place:\n` +
-      `<Figure ${attrs.join(" ")} />\n`,
+      `<Figure ${attrs.join(" ")} />\n` +
+      `${IMAGE_CHECK}\n`,
   );
 }
 
@@ -1033,7 +1043,7 @@ Commands:
   preview [slug] [--port 0] [--daemon] Serve dist/ locally with production CSP
   preview-stop                        Stop daemon preview server
   list                                List pages in ~/work/pages/
-  image <slug> <url> --alt "..." [--credit "..."] [--href <page>] [--caption "..."]
+  image <slug> <url> --alt "..." [--credit "..."] [--href <page>] [--caption "..."] [--background paper]
                                       Save a direct web image into the page and print its <Figure>
 `);
 }
