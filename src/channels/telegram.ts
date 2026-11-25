@@ -176,6 +176,24 @@ export type OutboundFileInput =
 /** `allow_sending_without_reply` so a reply to a deleted message still goes out instead of failing with a 400. */
 export type TelegramReplyParameters = { message_id: number; allow_sending_without_reply?: boolean };
 
+/** Bot API LinkPreviewOptions: either no preview, or a preview of one chosen URL. */
+export type TelegramLinkPreviewOptions = { is_disabled: true } | { url: string; prefer_large_media?: boolean };
+
+/**
+ * The published page a message links to, if any: `<pagesUrl>/<code>/<slug>/` (or the `<pagesUrl>/<code>/` shelf when
+ * that's all it links). Only these get a link preview, so the card is always the page and never a source link.
+ */
+export function pagePreviewUrl(text: string, pagesUrl: string | undefined): string | undefined {
+	const base = pagesUrl?.trim().replace(/\/+$/, "");
+	if (base === undefined || base === "") return undefined;
+	const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const pattern = new RegExp(`${escaped}/[a-z0-9]+/(?:[a-z0-9-]+/?)?`, "g");
+	const found = text.match(pattern) ?? [];
+	const withSlash = (url: string) => (url.endsWith("/") ? url : `${url}/`);
+	const page = found.find((url) => url.slice(base.length).split("/").filter(Boolean).length === 2);
+	return page !== undefined ? withSlash(page) : found[0] === undefined ? undefined : withSlash(found[0]);
+}
+
 const replyParameters = (messageId: number): TelegramReplyParameters => ({ message_id: messageId, allow_sending_without_reply: true });
 
 export type SendMediaOptions = {
@@ -195,7 +213,7 @@ export type TelegramApi = {
 			chat_id: number | string;
 			text: string;
 			parse_mode?: "HTML";
-			link_preview_options?: { is_disabled: boolean };
+			link_preview_options?: TelegramLinkPreviewOptions;
 			reply_parameters?: TelegramReplyParameters;
 			disable_notification?: boolean;
 		},
@@ -204,7 +222,7 @@ export type TelegramApi = {
 	sendFormattedMessage(
 		chatId: number | string,
 		markdown: string,
-		options?: { replyToMessageId?: number; disableNotification?: boolean; disableLinkPreview?: boolean },
+		options?: { replyToMessageId?: number; disableNotification?: boolean; previewUrl?: string },
 		signal?: AbortSignal,
 	): Promise<TelegramMessage[]>;
 	sendChatAction(chatId: number | string, action: "typing" | "upload_document" | "upload_photo", signal?: AbortSignal): Promise<boolean>;
@@ -249,7 +267,7 @@ export function createTelegramApi(options: {
 			chat_id: number | string;
 			text: string;
 			parse_mode?: "HTML";
-			link_preview_options?: { is_disabled: boolean };
+			link_preview_options?: TelegramLinkPreviewOptions;
 			reply_parameters?: TelegramReplyParameters;
 			disable_notification?: boolean;
 		},
@@ -261,15 +279,19 @@ export function createTelegramApi(options: {
 	async function sendFormattedMessage(
 		chatId: number | string,
 		markdown: string,
-		sendOptions?: { replyToMessageId?: number; disableNotification?: boolean; disableLinkPreview?: boolean },
+		sendOptions?: { replyToMessageId?: number; disableNotification?: boolean; previewUrl?: string },
 		signal?: AbortSignal,
 	): Promise<TelegramMessage[]> {
 		const html = markdownToTelegramHtml(markdown);
 		const chunks = splitTelegramHtml(html, TELEGRAM_MAX_MESSAGE);
 		if (chunks.length === 0) return [];
-		const linkPreview = { is_disabled: sendOptions?.disableLinkPreview ?? true };
+		// Previews stay off unless a page URL is named; then only the chunk carrying it previews, and only that page.
+		const previewUrl = sendOptions?.previewUrl;
+		const previewChunk = previewUrl === undefined ? -1 : chunks.findIndex((chunk) => chunk.includes(previewUrl.replace(/\/$/, "")));
 		const sent: TelegramMessage[] = [];
 		for (const [index, chunk] of chunks.entries()) {
+			const linkPreview: TelegramLinkPreviewOptions =
+				index === previewChunk && previewUrl !== undefined ? { url: previewUrl, prefer_large_media: true } : { is_disabled: true };
 			const reply = index === 0 && sendOptions?.replyToMessageId !== undefined ? { reply_parameters: replyParameters(sendOptions.replyToMessageId) } : {};
 			const silent = sendOptions?.disableNotification === true ? { disable_notification: true } : {};
 			try {
@@ -1224,7 +1246,6 @@ export async function startTelegram(
 			const quoted = threads.target(address, replyTo, { forceQuote: state.userSpokeAfterAck || silent === true });
 			const sent = await api.sendFormattedMessage(parsed.chatId, message, {
 				disableNotification: silent === true,
-				disableLinkPreview: true,
 				...(quoted === undefined ? {} : { replyToMessageId: Number(quoted) }),
 			});
 			const lastId = sent.at(-1)?.message_id;
@@ -1282,9 +1303,10 @@ export async function startTelegram(
 				const isAck = parsed.kind === "dm" && (await isDelegateAck(conversation, entry, context));
 				const workingAsks = await agent.activeWorkerAsks(conversation.id, context);
 				const replyTo = threads.quote(addr, meta?.replyTo, { isAck, workingAsks });
+				const previewUrl = pagePreviewUrl(text, config.pagesUrl);
 				const sent = await api.sendFormattedMessage(parsed.chatId, text, {
 					disableNotification: mode === "silent",
-					disableLinkPreview: true,
+					...(previewUrl === undefined ? {} : { previewUrl }),
 					...(replyTo === undefined ? {} : { replyToMessageId: Number(replyTo) }),
 				});
 				// An ack dissolves once the answer lands, so it doesn't move the chat on.

@@ -30,6 +30,7 @@ import {
 	createMediaGroupBuffer,
 	createTelegramApi,
 	extractReplyContext,
+	pagePreviewUrl,
 	startTelegram,
 	type TelegramMessage,
 	type TelegramUpdate,
@@ -1082,5 +1083,55 @@ test("startTelegram voice memos: ✍ while heard, a silent quote, ✍ cleared af
 		}
 	} finally {
 		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("pagePreviewUrl picks the published page a message links to, never a source link", () => {
+	const base = "https://grug.h14h.com";
+	const page = "https://grug.h14h.com/fntc77k1/glenwood-springs-winter/";
+	assert.equal(pagePreviewUrl(`Soak + caves carry trip.\n${page}`, base), page);
+	assert.equal(pagePreviewUrl("Soak + caves.\nhttps://grug.h14h.com/fntc77k1/glenwood-springs-winter", `${base}/`), page);
+	assert.equal(pagePreviewUrl(`[Guide](${page}) via https://www.hotspringspool.com/`, base), page);
+	assert.equal(pagePreviewUrl(`Sources https://example.com/a and ${page}`, base), page);
+	// The shelf counts when it's the only page link; a page beats the shelf
+	assert.equal(pagePreviewUrl("All pages: https://grug.h14h.com/fntc77k1/", base), "https://grug.h14h.com/fntc77k1/");
+	assert.equal(pagePreviewUrl(`Shelf https://grug.h14h.com/fntc77k1/ and ${page}`, base), page);
+	assert.equal(pagePreviewUrl("Pool opens 9am: https://hotspringspool.com/", base), undefined);
+	assert.equal(pagePreviewUrl("https://grug.h14h.com.evil.test/fntc77k1/x/", base), undefined);
+	assert.equal(pagePreviewUrl(page, undefined), undefined);
+});
+
+test("sendFormattedMessage previews only the named page, on the chunk that carries it", async () => {
+	const sent: Record<string, unknown>[] = [];
+	const api = createTelegramApi({
+		token: "test-token",
+		apiBase: "https://tg.test",
+		fetchFn: async (_url, init) => {
+			sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+			return new Response(JSON.stringify({ ok: true, result: { message_id: sent.length, date: 1, chat: { id: 1, type: "private" } } }));
+		},
+	});
+	const page = "https://grug.h14h.com/fntc77k1/glenwood-springs-winter/";
+	await api.sendFormattedMessage(501, `Soak + caves carry trip.\n${page}`, { previewUrl: page });
+	assert.deepEqual(sent[0]?.link_preview_options, { url: page, prefer_large_media: true });
+
+	await api.sendFormattedMessage(501, "No page here: https://hotspringspool.com/");
+	assert.deepEqual(sent[1]?.link_preview_options, { is_disabled: true });
+
+	// A long message splits; only the chunk with the page link previews it
+	sent.length = 0;
+	const long = `${"Soak in the pools all day. ".repeat(300)}\n\n${"Caves on Friday. ".repeat(200)}\n\n${page}`;
+	await api.sendFormattedMessage(501, long, { previewUrl: page });
+	assert.ok(sent.length >= 2);
+	assert.deepEqual(sent.at(-1)?.link_preview_options, { url: page, prefer_large_media: true });
+	for (const body of sent.slice(0, -1)) assert.deepEqual(body.link_preview_options, { is_disabled: true });
+});
+
+test("splitTelegramHtml keeps every word of one long plain-text run", () => {
+	for (const text of ["Soak in the pools all day. ".repeat(300).trim(), "word ".repeat(2000).trim(), `${"a b ".repeat(1500)}\n\n${"c ".repeat(3000)}`.trim()]) {
+		const chunks = splitTelegramHtml(text);
+		assert.ok(chunks.length >= 2);
+		for (const chunk of chunks) assert.ok(chunk.length <= TELEGRAM_MAX_MESSAGE);
+		assert.equal(chunks.join(" ").split(/\s+/).filter(Boolean).length, text.split(/\s+/).filter(Boolean).length);
 	}
 });

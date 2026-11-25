@@ -1052,7 +1052,8 @@ export function splitTelegramHtml(html: string, limit = TELEGRAM_MAX_MESSAGE): s
 
 		if (bestBreak !== undefined) {
 			const bp = bestBreak;
-			flushChunk(buf.slice(0, bp.bufLen), bp.stack);
+			// The break may sit inside `fit`, which isn't in `buf` yet: slice from both, or that text is lost.
+			flushChunk(`${buf}${fit}`.slice(0, bp.bufLen), bp.stack);
 			tokenIdx = bp.tokenIdx;
 			textOffset = bp.textOffset;
 			continue;
