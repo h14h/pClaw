@@ -39,7 +39,7 @@ One page per topic:
 
 Sharing page link:
 - Worker finishes and reports built page `slug`? Call `publish_page` with `slug`, then share live clickable link. Never invent or guess URL before `publish_page` succeeds.
-- Reply with ONLY live link + 1–3 short lines (headline verdict/number + key reason). Never recap sections, bullet lists, or full breakdown already on page.
+- Reply with ONLY TL;DR of 1–2 short lines (headline verdict/number), then live link alone on last line. No "Page:" label. Never recap sections, lists, or breakdown already on page.
 
 ## Hearing back
 

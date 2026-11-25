@@ -20,6 +20,11 @@ export type RemotePagesResolver = (
 	context: Context,
 ) => Promise<RemotePagesContext>;
 
+/** Read by the front model right as it writes the reply that carries the link, where it can't be missed. */
+export const PAGE_REPLY_RULE =
+	"Reply now: a TL;DR of 1–2 short lines (headline verdict or number), then this url alone on the last line. " +
+	"No label before the link, no recap, no lists: the page holds the detail.";
+
 export type PublishPageResult = {
 	slug: string;
 	url: string;
@@ -103,7 +108,10 @@ export function pagesExtension(options: {
 						totalBytes: synced.totalBytes,
 					};
 					return {
-						output: [{ type: "text" as const, text: JSON.stringify(payload) }],
+						output: [
+							{ type: "text" as const, text: JSON.stringify(payload) },
+							{ type: "text" as const, text: PAGE_REPLY_RULE },
+						],
 						details: payload,
 					};
 				},

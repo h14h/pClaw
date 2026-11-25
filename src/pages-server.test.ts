@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
@@ -13,12 +14,14 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { openAgent } from "./agent.ts";
 import { type Config, defaults, isPagesEnabled, validatePagesCode } from "./config.ts";
 import { Notes } from "./extensions/notes.ts";
+import { PAGE_REPLY_RULE } from "./extensions/pages.ts";
 import type { WorkerOptions } from "./extensions/workers.ts";
 import { MUSE, musePreamble } from "./muse.ts";
 import { startPagesServer } from "./pages-server.ts";
 import { createPromptResolver, filterWorkerPrompt } from "./prompts.ts";
 import { createSshSandbox, SandboxManager, validateStagedPages } from "./sandbox.ts";
 import { UserRegistry } from "./users.ts";
+import { fetchImage, isPrivateAddress, sniffImageType } from "../sites/grug-pages/lib/fetch-image.mjs";
 import { HEADING_ONE_LINE_MAX, planTableHeading, splitKeepingHyphenated } from "../sites/grug-pages/lib/table-heading.mjs";
 
 const context = BACKGROUND_CONTEXT;
@@ -502,11 +505,12 @@ HOME="${fakeHome}" bash -c "$cmd"
 		const henryReq2 = seenRequests.filter((r) => r.who === "henry")[1]!.req;
 		const toolResultMsg = henryReq2.messages.find((m) => m.role === "toolResult");
 		assert.ok(toolResultMsg, "expected toolResult message");
-		const toolText = toolResultMsg.content
+		const toolTexts = toolResultMsg.content
 			.filter((c): c is { type: "text"; text: string } => c.type === "text")
-			.map((c) => c.text)
-			.join("");
-		const parsed = JSON.parse(toolText) as {
+			.map((c) => c.text);
+		// The reply rule rides along with the result, so the model reads it right as it writes the link reply
+		assert.equal(toolTexts[1], PAGE_REPLY_RULE);
+		const parsed = JSON.parse(toolTexts[0]!) as {
 			slug: string;
 			url: string;
 			homeUrl: string;
@@ -830,12 +834,12 @@ if (mode === "timeout-stage2" && stage === "ultracave") {
 	assert.match(grugFrontOn, /Direct chat \(no page\)/);
 	assert.match(grugFrontOn, /3\+ option comparison/);
 	assert.match(grugFrontOn, /One page per topic/);
-	assert.match(grugFrontOn, /ONLY live link \+ 1–3 short lines/);
+	assert.match(grugFrontOn, /ONLY TL;DR of 1–2 short lines \(headline verdict\/number\), then live link alone on last line/);
 	const grugFrontOff = grugResolver.frontPrompt({ allowT3: false, allowPages: false, channel: "telegram" });
 	assert.doesNotMatch(grugFrontOff, /One page per topic|ONLY live link|publish_page|tell worker build page/);
 
 	const grugTgOn = grugResolver.readFormatting("telegram", { allowT3: false, allowPages: true })!;
-	assert.match(grugTgOn, /ONLY live clickable link \+ 1–3 short lines/);
+	assert.match(grugTgOn, /ONLY TL;DR of 1–2 short lines \+ live link alone on last line/);
 	assert.match(grugTgOn, /Edit existing `slug` in place/);
 	const grugTgOff = grugResolver.readFormatting("telegram", { allowT3: false, allowPages: false })!;
 	assert.doesNotMatch(grugTgOff, /publish_page|ONLY live clickable link|Edit existing `slug`/);
@@ -844,6 +848,8 @@ if (mode === "timeout-stage2" && stage === "ultracave") {
 	const remoteWithPages = filterWorkerPrompt(rawWorkerMd, { remote: true, allowPages: true });
 	assert.match(remoteWithPages, /Do NOT build a page for quick single-fact lookups/);
 	assert.match(remoteWithPages, /One page per topic: run `grug-page list`/);
+	// Page jobs report only slug + one-line TL;DR, so there is nothing long for the front model to relay
+	assert.match(remoteWithPages, /Your final response is only: `Built slug: <slug>`, then `TL;DR: /);
 	assert.doesNotMatch(remoteWithPages, /ultracave|caveman/i);
 });
 
@@ -980,4 +986,53 @@ test("grug-pages theme button has a 48px hit area without moving the header", ()
 	assert.match(button, /group-focus-visible:outline-2/);
 	assert.equal((button.match(/class="size-4 shrink-0/g) ?? []).length, 2);
 	assert.doesNotMatch(button, /pointer-fine:hidden/);
+});
+
+test("grug-page image fetcher: public raster images only, sniffed from bytes, capped, and never private addresses", async () => {
+	for (const ip of ["127.0.0.1", "10.1.2.3", "100.101.102.103", "169.254.169.254", "172.20.0.1", "192.168.1.1", "0.0.0.0", "::1", "fd7a:115c:a1e0::1", "fe80::1", "::ffff:127.0.0.1"]) {
+		assert.equal(isPrivateAddress(ip), true, ip);
+	}
+	for (const ip of ["161.210.92.234", "8.8.8.8", "2606:4700::1111"]) assert.equal(isPrivateAddress(ip), false, ip);
+
+	const png = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+	assert.deepEqual(sniffImageType(png), { ext: "png", mime: "image/png" });
+	assert.equal(sniffImageType(Buffer.from([0xff, 0xd8, 0xff, 0xe0]))?.ext, "jpg");
+	assert.equal(sniffImageType(Buffer.from("GIF89a....", "latin1"))?.ext, "gif");
+	assert.equal(sniffImageType(Buffer.from("RIFF\0\0\0\0WEBPVP8 ", "latin1"))?.ext, "webp");
+	assert.equal(sniffImageType(Buffer.from("\0\0\0\x1cftypavif", "latin1"))?.ext, "avif");
+	assert.equal(sniffImageType(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>')), undefined);
+	assert.equal(sniffImageType(Buffer.from("<!doctype html><html>")), undefined);
+
+	// URL and address checks, before any connection
+	await assert.rejects(fetchImage("file:///etc/passwd"), /only http\(s\)/);
+	await assert.rejects(fetchImage("ftp://example.com/a.png"), /only http\(s\)/);
+	await assert.rejects(fetchImage("http://127.0.0.1:9/a.png"), /private address/);
+	await assert.rejects(fetchImage("http://[::1]:9/a.png"), /private address/);
+	await assert.rejects(fetchImage("http://localhost:9/a.png"), /private address/);
+	await assert.rejects(fetchImage("http://169.254.169.254/latest/meta-data"), /private address/);
+
+	// A local server stands in for the web (allowPrivate only in tests)
+	const big = Buffer.alloc(64 * 1024, 1);
+	const server = createServer((req, res) => {
+		if (req.url === "/ok.png") return res.writeHead(200, { "content-type": "image/png" }).end(png);
+		if (req.url === "/svg") return res.writeHead(200, { "content-type": "image/svg+xml" }).end("<svg xmlns='http://www.w3.org/2000/svg'/>");
+		if (req.url === "/big.jpg") return res.writeHead(200, { "content-type": "image/jpeg" }).end(Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), big]));
+		if (req.url === "/hop") return res.writeHead(302, { location: "/ok.png" }).end();
+		if (req.url === "/slow") return; // never answers
+		res.writeHead(404).end();
+	});
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+	try {
+		const ok = await fetchImage(`${base}/hop`, { allowPrivate: true });
+		assert.equal(ok.type.ext, "png");
+		assert.equal(ok.finalUrl, `${base}/ok.png`);
+		await assert.rejects(fetchImage(`${base}/svg`, { allowPrivate: true }), /SVG and HTML pages are refused/);
+		await assert.rejects(fetchImage(`${base}/big.jpg`, { allowPrivate: true, maxBytes: 16 * 1024 }), /cap/);
+		await assert.rejects(fetchImage(`${base}/slow`, { allowPrivate: true, timeoutMs: 300 }), /timed out/);
+		await assert.rejects(fetchImage(`${base}/missing.png`, { allowPrivate: true }), /HTTP 404/);
+	} finally {
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	}
 });

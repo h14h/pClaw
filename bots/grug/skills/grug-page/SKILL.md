@@ -66,24 +66,41 @@ Required fields: `title`, `date` (`YYYY-MM-DD`), `summary`. Optional: `subtitle`
 Import from `@components/mdx`:
 
 ```mdx
-import { Callout, StatGrid, Stat, Details, Sources, Tabs } from "@components/mdx";
+import { Callout, StatGrid, Stat, Details, Sources, Tabs, Figure } from "@components/mdx";
 ```
 
 - `<Callout type="note" | "tip" | "warn" title="Optional heading">...</Callout>` — key takeaway or caveat (max 2-3 per page; use `warn` for unverified facts or risks).
 - `<StatGrid columns={3}><Stat label="Pick" value="Jonsbo N3" note="$150 at Amazon" />...</StatGrid>` — compact at-a-glance metrics (`columns`: `2`, `3`, or `4`).
 - `<Tabs client:load labels={["Option A", "Option B"]}><div>...</div><div>...</div></Tabs>` — interactive tabbed views (also accepts `tabs={[{ label, content }]}`). Always include `client:load` on Svelte islands (`Tabs` and any custom `components/*.svelte`).
 - `<Details summary="Methodology and assumptions" open={false}>...</Details>` — collapsible secondary detail.
+- `<Figure src="img/3f9a1c2b7d4e.jpg" alt="..." caption="..." credit="..." href="..." />` — a real image saved with `grug-page image` (see Images below). Never hand-write `src`; paste the line the command prints.
 - `<Sources checked="2026-11-24">` wrapping a numbered Markdown list of links — always include at the bottom.
 - Standard Markdown tables work out of the box (automatically wrapped for mobile horizontal scroll with `tabular-nums`).
 - **Never use a standalone `Rank` or `#` column as Column 1** — put the identifying name (Provider, Option, Site, Scenario) in Column 1 (e.g. `1. GFiber Webpass`) so future tables are naturally compact and self-identifying.
 - **Keep column headings short (1–2 words)**, like `Rate Field`, `All districts`, `City share`, `First year`. Put site prefixes (`A:`/`B:`), units, and bases such as "21.5%" in a sentence right above or below the table, never in the heading. Long headings wrap and widen the table on phones.
+
+## Images
+
+Real images make pages much better when they show something words can't: the place, the product, the chart, the map, the logo. Use them; just never as filler.
+
+- **When:** a photo of the actual place/product/thing, a source's chart or map, an official logo for options being compared. 1–4 per page, each next to the section it illustrates. Skip stock photos, mood images, AI art, and anything decorative.
+- **Find a direct image URL** (the file itself, ending in or serving `.jpg`/`.png`/`.webp`/`.gif`/`.avif`, not the page around it):
+  - the `og:image` of a source article you read (`agent-browser open <url>` then `agent-browser eval "document.querySelector('meta[property=\"og:image\"]')?.content"`);
+  - Wikimedia Commons: open the file page and use the "Original file" link (`upload.wikimedia.org/...`). Originals over 5 MB get refused; use a standard-size copy instead (1280 or 1920 wide): `https://upload.wikimedia.org/wikipedia/commons/thumb/<a>/<ab>/<File>/1920px-<File>`;
+  - official press kits / media pages of the venue, company, or agency.
+- **Save it into the page** (downloads to `~/work/pages/<slug>/img/`, served from this site so the CSP stays strict and readers aren't tracked):
+  ```bash
+  grug-page image <slug> "<direct-image-url>" --alt "What the image shows" --credit "Source name" --href "<page you found it on>" [--caption "One short line"]
+  ```
+  It refuses non-images, SVG, files over 5 MB, and private addresses, downsizes huge files, and prints the `<Figure ... />` line to paste. Add `Figure` to the page's `@components/mdx` import.
+- Always give real alt text (what's in the image) and credit the source with `--href` to the page it came from. If the command fails, try another source or leave the image out; never link remote images.
 
 ## Sourcing and content rules
 
 - Every fact, price, spec, date, and URL must come from a source you actually read during this job.
 - State check dates for prices, availability, and anything that changes.
 - Mark anything unconfirmed explicitly with `<Callout type="warn" title="Not verified">`.
-- Never load external scripts, stylesheets, fonts, iframes, or remote image URLs (`grug-page build` rejects them and production CSP blocks them). Download any needed image locally into `assets/` and verify it is a real image first.
+- Never load external scripts, stylesheets, fonts, iframes, or remote image URLs (`grug-page build` rejects them and production CSP blocks them). Save images with `grug-page image` instead.
 - Never make network calls from Svelte islands (`connect-src 'none'` in production CSP).
 - Never put secrets, tokens, or unrelated private details on a page.
 
@@ -116,7 +133,7 @@ import { Callout, StatGrid, Stat, Details, Sources, Tabs } from "@components/mdx
      # agent-browser --session "$S" close
      grug-page preview-stop
      ```
-5. **Report back**: Tell the front agent the built `<slug>` and a concise summary of what the page covers so it can call `publish_page` and deliver the live link to the user.
+5. **Report back**: Your final response is only `Built slug: <slug>`, `TL;DR: <headline verdict or number, one line>`, and `Decision needed: <one line>` if the user must act. No breakdown, lists, or sources: the page holds them, and the front agent shares just the link and TL;DR.
 
 ## Progress updates (keep internal steps invisible)
 

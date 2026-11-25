@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   copyFileSync,
   cpSync,
@@ -17,7 +18,9 @@ import {
 import { createServer } from "node:http";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { fetchImage } from "../lib/fetch-image.mjs";
 import { createStaticHandler } from "../lib/static-handler.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -384,7 +387,7 @@ summary: "Short one-sentence summary of what this page answers."
 tags: []
 ---
 
-import { Callout, StatGrid, Stat, Details, Sources } from "@components/mdx";
+import { Callout, StatGrid, Stat, Details, Sources, Figure } from "@components/mdx";
 
 ## Summary
 
@@ -911,6 +914,115 @@ function cmdList(cfg) {
   }
 }
 
+const IMAGE_MAX_EDGE = 2000;
+
+/** A JSX string attribute value: no double quotes (MDX can't escape them) and no line breaks. */
+function jsxAttr(value) {
+  return String(value).replace(/\s+/g, " ").trim().replace(/"([^"]*)"/g, "\u201c$1\u201d").replace(/"/g, "\u2019");
+}
+
+function loadSharp() {
+  try {
+    return createRequire(join(TEMPLATE_ROOT, "package.json"))("sharp");
+  } catch {
+    return null;
+  }
+}
+
+async function cmdImage(cfg, args) {
+  const positional = [];
+  const opts = {};
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    const m = /^--(alt|caption|credit|href)(?:=(.*))?$/.exec(arg);
+    if (m) {
+      opts[m[1]] = m[2] !== undefined ? m[2] : args[++i];
+      if (opts[m[1]] === undefined) fail(`--${m[1]} needs a value`);
+    } else if (!arg.startsWith("-")) {
+      positional.push(arg);
+    } else {
+      fail(`Unknown argument for image: ${arg}`);
+    }
+  }
+  const [slug, url] = positional;
+  if (!slug || !url || positional.length > 2) {
+    fail('Usage: grug-page image <slug> <direct-image-url> --alt "what it shows" [--credit "Source"] [--href <source page>] [--caption "..."]');
+  }
+  validateSlug(slug);
+  const pageDir = join(cfg.pagesDir, slug);
+  if (!existsSync(join(pageDir, "index.mdx")) && !existsSync(join(pageDir, "index.md"))) {
+    fail(`No page "${slug}" yet. Run grug-page init ${slug} first.`);
+  }
+  if (!opts.alt || !opts.alt.trim()) fail('--alt is required: say what the image shows, e.g. --alt "Hanging Lake under snow"');
+
+  let fetched;
+  try {
+    fetched = await fetchImage(url);
+  } catch (err) {
+    const reason = err?.message || String(err);
+    const hint = /cap/.test(reason) ? " Try a smaller copy of the same image (e.g. Wikimedia's /thumb/.../1920px-<file> URL)." : "";
+    fail(`could not fetch image: ${reason}${hint}`);
+  }
+  let { bytes, type } = fetched;
+  let width = null;
+  let height = null;
+  let note = "";
+  const sharp = loadSharp();
+  if (sharp) {
+    try {
+      const meta = await sharp(bytes, { animated: type.ext === "gif" }).metadata();
+      width = meta.width ?? null;
+      height = meta.pageHeight ?? meta.height ?? null;
+      // Re-encode every still image: caps the long edge, applies EXIF rotation, and strips metadata (GPS, camera)
+      // so what lands on the page (and its copy in dist/) is small and clean. GIFs stay as they are to keep animation.
+      if (type.ext !== "gif") {
+        const before = `${width}×${height}`;
+        let pipeline = sharp(bytes).rotate().resize({ width: IMAGE_MAX_EDGE, height: IMAGE_MAX_EDGE, fit: "inside", withoutEnlargement: true });
+        if (type.ext === "jpg") pipeline = pipeline.jpeg({ quality: 85, mozjpeg: true });
+        else if (type.ext === "png") pipeline = pipeline.png({ compressionLevel: 9 });
+        else if (type.ext === "webp") pipeline = pipeline.webp({ quality: 85 });
+        else if (type.ext === "avif") pipeline = pipeline.avif({ quality: 60 });
+        const out = await pipeline.toBuffer({ resolveWithObject: true });
+        bytes = out.data;
+        width = out.info.width;
+        height = out.info.height;
+        note = `${width}×${height}` === before ? " (re-encoded, metadata stripped)" : ` (downscaled from ${before}, metadata stripped)`;
+      }
+    } catch (err) {
+      fail(`the file isn't a readable image: ${err?.message || String(err)}`);
+    }
+  }
+
+  const imgDir = join(pageDir, "img");
+  mkdirSync(imgDir, { recursive: true });
+  const file = `${createHash("sha256").update(bytes).digest("hex").slice(0, 12)}.${type.ext}`;
+  const target = join(imgDir, file);
+  if (!existsSync(target)) writeFileSync(target, bytes);
+
+  const href = opts.href || fetched.finalUrl;
+  let credit = opts.credit;
+  if (!credit) {
+    try {
+      credit = new URL(href).hostname.replace(/^www\./, "");
+    } catch {
+      credit = "Source";
+    }
+  }
+  const attrs = [
+    `src="img/${file}"`,
+    `alt="${jsxAttr(opts.alt)}"`,
+    ...(opts.caption ? [`caption="${jsxAttr(opts.caption)}"`] : []),
+    `credit="${jsxAttr(credit)}"`,
+    `href="${jsxAttr(href)}"`,
+  ];
+  const dims = width && height ? `${width}×${height}, ` : "";
+  process.stdout.write(
+    `SAVED ${slug}/img/${file} (${dims}${(bytes.length / 1024).toFixed(0)} KB ${type.ext})${note}\n` +
+      `Add Figure to the page's import line (import { ..., Figure } from "@components/mdx";), then place:\n` +
+      `<Figure ${attrs.join(" ")} />\n`,
+  );
+}
+
 function printHelp() {
   process.stdout.write(`Usage: grug-page <command> [options]
 
@@ -921,6 +1033,8 @@ Commands:
   preview [slug] [--port 0] [--daemon] Serve dist/ locally with production CSP
   preview-stop                        Stop daemon preview server
   list                                List pages in ~/work/pages/
+  image <slug> <url> --alt "..." [--credit "..."] [--href <page>] [--caption "..."]
+                                      Save a direct web image into the page and print its <Figure>
 `);
 }
 
@@ -953,6 +1067,9 @@ async function main() {
       break;
     case "list":
       cmdList(cfg);
+      break;
+    case "image":
+      await cmdImage(cfg, rest);
       break;
     default:
       fail(`Unknown command "${cmd}". Run "grug-page --help" for usage.`);

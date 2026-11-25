@@ -149,7 +149,7 @@ export function filterFormattingPrompt(text: string, flags: PromptFeatureFlags =
 	if (flags.allowPages === false) {
 		out = out
 			.replace(/ and offer the full writeup as a page\./g, " and offer to send the full writeup as a file.")
-			.replace(/ Worker built page and gave `slug`\? Call `publish_page`, never guess URL first; send ONLY live clickable link \+ 1–3 short lines \(headline verdict\/number \+ key reason\), never recap sections, bullet lists, or full breakdown already on page\. Follow-up updates same topic\? Edit existing `slug` in place and re-run `publish_page`\./g, "")
+			.replace(/ Worker built page and gave `slug`\? Call `publish_page`, never guess URL first; send ONLY TL;DR of 1–2 short lines \+ live link alone on last line, never recap page\. Follow-up updates same topic\? Edit existing `slug` in place and re-run `publish_page`\./g, "")
 			.replace(/ Worker built page and gave `slug`\? Call `publish_page`, share live clickable link in Telegram, never guess URL first\./g, "");
 	}
 	return out.trim();
@@ -166,7 +166,8 @@ export const REMOTE_PAGES_GUIDANCE = [
 	"- Prefer an Astro page (`read_skill` for `grug-page`) for multi-option comparisons (3+ options with tradeoffs), multi-claim fact-checks, deep explainers, guides/itineraries, or interactive calculators/tools instead of writing/sending a `.md` file. Do NOT build a page for quick single-fact lookups, price/availability checks, yes/no checks, or short answers. Only write a `.md` file if the user explicitly asks for raw markdown or plain text.",
 	'- One page per topic: run `grug-page list` before creating a new slug. On follow-ups or when a page on the same topic already exists, edit the existing `~/work/pages/<slug>/index.mdx` in place (updating `updated: "YYYY-MM-DD"`) instead of creating a duplicate slug.',
 	"- Follow the full `grug-page` workflow: write a concise, zero-repetition `~/work/pages/<slug>/index.mdx` draft -> `grug-page polish <slug>` -> `grug-page build <slug>` -> `grug-page preview <slug> --daemon` + `agent-browser` visual check (desktop & mobile, light & dark, zero console/CSP errors), then close the browser (`agent-browser close`, or `agent-browser --session \"$S\" close` if a named session was used) and run `grug-page preview-stop`.",
-	"- Report the built `slug` and a brief summary in your final response so pclaw can publish it and share the live link.",
+	"- Page about real places, products, or data? Add 1–4 real images (photos, charts, maps, logos; never decorative) with `grug-page image <slug> <direct-image-url> --alt ... --credit ... --href ...`; the `grug-page` skill says how to find direct image URLs.",
+	"- Page built? Your final response is only: `Built slug: <slug>`, then `TL;DR: <headline verdict or number, one line>`, then `Decision needed: <one line>` only if the user must act. No breakdown, lists, or sources: the page holds them, and pclaw shares just the link and TL;DR.",
 ].join("\n");
 
 /**
