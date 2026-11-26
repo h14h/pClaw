@@ -1,48 +1,70 @@
-// Photo viewer for <Figure>s. Inlined once per page by BaseLayout.astro, right after lib/lightbox.mjs (whose
-// functions it uses), as a classic script: no imports, no external files, CSP-safe.
+// Photo viewer for <Figure>s. Inlined once per report page by ReportLayout.astro, right after lib/lightbox.mjs
+// (whose functions it uses), as a classic script: no imports, no external files, CSP-safe.
 //
 // Every zoomable Figure is a link (a[data-zoom]) to its largest image, so without JS the browser's own viewer
-// opens it. With JS the click opens a full-screen <dialog>: fit to screen (panoramas and tall shots open large,
-// to drag), pinch / double-tap / ctrl+wheel / +- zoom, drag to pan within bounds, and, for a carousel's slides,
-// swipe / arrows / buttons between them. Closing returns to the page where it was, with focus on the image.
+// opens it. With JS the click opens a full-screen <dialog>: the photo fit to screen (panoramas and tall shots open
+// large, to drag), Fit/Fill, zoom in/out/reset buttons, pinch, double-tap, ctrl+wheel and +/- keys, drag to pan
+// within bounds, and, for a carousel's slides, swipe / arrows / buttons between them. Closing returns to the page
+// where it was, with focus on the photo.
 (() => {
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   const ICON = {
     close: '<path d="M6 6l12 12M18 6L6 18" />',
     prev: '<path d="M15 5l-7 7 7 7" />',
     next: '<path d="M9 5l7 7-7 7" />',
+    in: '<path d="M12 6v12M6 12h12" />',
+    out: '<path d="M6 12h12" />',
+    reset: '<path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4h4" />',
+    fit: '<path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5" />',
+    fill: '<path d="M4 9l5-5M20 9l-5-5M4 15l5 5M20 15l-5 5" />',
   };
   const icon = (name) =>
     `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICON[name]}</svg>`;
+  const button = (name, label, extra = "") =>
+    `<button type="button" class="lightbox-button ${extra}" aria-label="${label}" data-lb-${name}>${icon(name === "fitfill" ? "fit" : name)}</button>`;
 
   let ui = null;
   let items = [];
   let index = 0;
+  let showing = -1;
+  let showToken = 0;
   let origin = null;
   let carousel = null;
   let scroll = [0, 0];
   let image = { w: 1, h: 1 };
   let stage = { w: 1, h: 1 };
   let opening = { mode: "fit", scale: 1, x: 0, y: 0 };
+  let fit = opening;
+  let fill = opening;
   let limits = { min: 1, max: 1 };
   let view = opening;
   let candidates = [];
   let shownWidth = 0;
+  let pendingWidth = 0;
   let loadToken = 0;
-  let hinted = false;
+  let userPanned = false;
+  let tapOpenedAt = -Infinity;
+
+  const dpr = () => window.devicePixelRatio || 1;
+  const near = (a, b) => Math.abs(a - b) <= Math.max(a, b) * 0.01;
 
   function build() {
     if (ui) return ui;
     const dialog = document.createElement("dialog");
     dialog.className = "lightbox";
-    // The dialog itself takes focus on open (its label, the photo's alt, is read first); Tab then reaches Close.
+    // The dialog itself takes focus on open (its label, the photo's alt, is read first); Tab then walks the controls.
     dialog.tabIndex = -1;
     dialog.innerHTML =
       '<div class="lightbox-stage" data-lb-stage><img class="lightbox-img" alt="" draggable="false" decoding="async" data-lb-img></div>' +
-      '<div class="lightbox-top"><p class="lightbox-counter" aria-hidden="true" data-lb-counter></p>' +
-      `<button type="button" class="lightbox-button lightbox-close" aria-label="Close" data-lb-close>${icon("close")}</button></div>` +
-      `<button type="button" class="lightbox-button lightbox-prev" aria-label="Previous photo" data-lb-prev>${icon("prev")}</button>` +
-      `<button type="button" class="lightbox-button lightbox-next" aria-label="Next photo" data-lb-next>${icon("next")}</button>` +
+      '<div class="lightbox-top"><p class="lightbox-counter" aria-hidden="true" data-lb-counter></p><div class="lightbox-tools">' +
+      button("out", "Zoom out") +
+      button("in", "Zoom in") +
+      button("reset", "Reset zoom") +
+      button("fitfill", "Show whole photo") +
+      button("close", "Close") +
+      "</div></div>" +
+      button("prev", "Previous photo", "lightbox-side lightbox-prev") +
+      button("next", "Next photo", "lightbox-side lightbox-next") +
       '<p class="lightbox-hint" aria-hidden="true" data-lb-hint></p>' +
       '<div class="lightbox-caption" data-lb-caption></div>' +
       '<p class="sr-only" aria-live="polite" aria-atomic="true" data-lb-live></p>';
@@ -53,6 +75,10 @@
       stage: $("stage"),
       img: $("img"),
       counter: $("counter"),
+      zoomOut: $("out"),
+      zoomIn: $("in"),
+      reset: $("reset"),
+      fitfill: $("fitfill"),
       close: $("close"),
       prev: $("prev"),
       next: $("next"),
@@ -71,54 +97,106 @@
     stage = { w: rect.width, h: rect.height };
   }
 
+  const zoomed = () => view.scale > Math.max(opening.scale, fit.scale) * 1.01;
+  const atRest = () => !zoomed();
+  const setDisabled = (el, off) => el.setAttribute("aria-disabled", String(off));
+
   function render(animate = false) {
     const motion = animate && !reducedMotion.matches;
-    ui.img.style.transition = motion ? "transform 220ms cubic-bezier(0.2, 0, 0, 1)" : "none";
-    ui.img.style.transform = `translate3d(${view.x}px, ${view.y}px, 0) scale(${view.scale})`;
-    ui.dialog.toggleAttribute("data-zoomed", view.scale > opening.scale * 1.01);
+    // Sized in layout (not a transform scale) and placed on whole device pixels: one resample, no tile seams.
+    const ratio = dpr();
+    const snap = (v) => Math.round(v * ratio) / ratio;
+    ui.img.style.transition = motion ? "width 220ms cubic-bezier(0.2, 0, 0, 1), height 220ms cubic-bezier(0.2, 0, 0, 1), transform 220ms cubic-bezier(0.2, 0, 0, 1)" : "none";
+    ui.img.style.width = `${snap(image.w * view.scale)}px`;
+    ui.img.style.height = `${snap(image.h * view.scale)}px`;
+    ui.img.style.transform = `translate3d(${snap(view.x)}px, ${snap(view.y)}px, 0)`;
+    const isZoomed = zoomed();
+    ui.dialog.toggleAttribute("data-zoomed", isZoomed);
     ui.dialog.toggleAttribute("data-pannable", canPan(stage, image, view));
+    setDisabled(ui.zoomIn, view.scale >= limits.max * 0.995);
+    setDisabled(ui.zoomOut, view.scale <= limits.min * 1.005);
+    setDisabled(ui.reset, near(view.scale, opening.scale) && Math.abs(view.x - opening.x) < 1 && Math.abs(view.y - opening.y) < 1);
+    const whole = near(view.scale, fit.scale);
+    const same = near(fit.scale, fill.scale);
+    ui.fitfill.hidden = same;
+    ui.fitfill.setAttribute("aria-label", whole ? "Fill screen" : "Show whole photo");
+    ui.fitfill.innerHTML = icon(whole ? "fill" : "fit");
+    // The caption steps aside while zoomed; anything focused in it moves to a control that stays visible.
+    if (isZoomed && ui.caption.contains(document.activeElement)) ui.close.focus();
     upgrade();
   }
 
-  // Swap in a sharper file once the view needs more pixels than the one showing.
+  function setView(next, animate) {
+    view = next;
+    render(animate);
+  }
+
+  // Swap in a sharper file once the view needs more pixels than the one showing. One decode in flight at a time;
+  // the preview stays until the sharper file has decoded.
   function upgrade() {
     if (candidates.length === 0) return;
-    const needed = image.w * view.scale * (window.devicePixelRatio || 1);
-    const pick = pickSource(candidates, needed);
-    if (pick.w <= shownWidth) return;
-    const token = ++loadToken;
+    const pick = pickSource(candidates, image.w * view.scale * dpr());
+    if (pick.w <= shownWidth || pick.w <= pendingWidth) return;
+    pendingWidth = pick.w;
+    const token = loadToken;
     const pre = new Image();
     pre.src = pick.url;
     pre
       .decode()
       .then(() => {
         if (token !== loadToken || !ui.dialog.open) return;
-        ui.img.src = pick.url;
-        shownWidth = pick.w;
+        if (pick.w > shownWidth) {
+          ui.img.src = pick.url;
+          shownWidth = pick.w;
+        }
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (token === loadToken && pendingWidth === pick.w) pendingWidth = 0;
+      });
   }
 
-  function fill(link) {
-    const figure = link.closest("figure");
-    const thumb = link.querySelector("img");
-    const alt = thumb?.getAttribute("alt") ?? "";
-    image = { w: Number(link.dataset.zoomW) || thumb?.naturalWidth || 1, h: Number(link.dataset.zoomH) || thumb?.naturalHeight || 1 };
-    candidates = (link.dataset.zoomSrcset || "")
+  function sourcesOf(link) {
+    return (link.dataset.zoomSrcset || "")
       .split(",")
       .map((part) => part.trim().split(/\s+/))
       .filter(([url, size]) => url && /^\d+w$/.test(size ?? ""))
       .map(([url, size]) => ({ url, w: parseInt(size, 10) }))
       .sort((a, b) => a.w - b.w);
-    // The page's own (already loaded) image shows at once; a sharper file replaces it when it has decoded.
+  }
+
+  // A preview that is already on screen in the page (or the smallest file), so a slide never shows blank.
+  function previewOf(link) {
+    const thumb = link.querySelector("img");
+    if (thumb && thumb.complete && thumb.naturalWidth > 0) return thumb.currentSrc || thumb.src;
+    return sourcesOf(link)[0]?.url ?? link.href;
+  }
+
+  const altOf = (link) => link.querySelector("img")?.getAttribute("alt") ?? "";
+
+  // Neighbouring slides fetch their previews while this one is viewed.
+  function warm(i) {
+    const link = items[i];
+    if (!link) return;
+    const thumb = link.querySelector("img");
+    if (thumb) thumb.loading = "eager";
+    const pre = new Image();
+    pre.src = previewOf(link);
+  }
+
+  function present(link) {
+    const figure = link.closest("figure");
+    const thumb = link.querySelector("img");
+    const alt = altOf(link);
+    image = { w: Number(link.dataset.zoomW) || thumb?.naturalWidth || 1, h: Number(link.dataset.zoomH) || thumb?.naturalHeight || 1 };
+    candidates = sourcesOf(link);
     loadToken += 1;
-    ui.img.src = thumb?.currentSrc || thumb?.src || link.href;
     shownWidth = 0;
+    pendingWidth = 0;
+    ui.img.src = previewOf(link);
     ui.img.alt = alt;
     // Transparent graphics with dark ink keep their light surface on the dark viewer.
     ui.img.classList.toggle("lightbox-paper", link.dataset.zoomSurface === "paper");
-    ui.img.style.width = `${image.w}px`;
-    ui.img.style.height = `${image.h}px`;
     ui.dialog.setAttribute("aria-label", alt || "Photo");
 
     ui.caption.replaceChildren();
@@ -126,6 +204,7 @@
     const credit = figure?.querySelector("[data-credit]");
     if (caption) {
       const text = document.createElement("span");
+      text.className = "lightbox-caption-text";
       text.textContent = caption;
       ui.caption.append(text);
     }
@@ -145,50 +224,76 @@
   function layout() {
     measure();
     opening = openingView(stage, image);
-    limits = scaleLimits(opening, window.devicePixelRatio || 1);
+    fit = fitView(stage, image);
+    fill = fillView(stage, image);
+    limits = scaleLimits(stage, image, { dpr: dpr(), largest: candidates.at(-1)?.w ?? image.w });
     view = { scale: opening.scale, x: opening.x, y: opening.y };
     render(false);
-    if (opening.mode !== "fit" && !hinted) {
-      hinted = true;
-      ui.hint.textContent = opening.mode === "pan-x" ? "Drag to pan" : "Drag to scroll";
-      ui.dialog.setAttribute("data-hint", "");
-      setTimeout(() => ui.dialog.removeAttribute("data-hint"), 2600);
-    }
+    hint();
   }
 
+  // Each panorama (or tall shot) says how to move around it, until the reader has panned once.
+  function hint() {
+    const show = opening.mode !== "fit" && !userPanned;
+    ui.hint.textContent = opening.mode === "pan-y" ? "Drag to scroll" : "Drag to pan";
+    ui.dialog.toggleAttribute("data-hint", show);
+  }
+
+  function panned() {
+    if (userPanned) return;
+    userPanned = true;
+    hint();
+  }
+
+  // Show slide i. A preview not yet loaded is decoded first, so the old slide stays (whole: photo and counter)
+  // until the new one can replace it; the photo never goes blank or mismatches its caption.
   function show(i, announce) {
+    const token = ++showToken;
     index = i;
-    fill(items[i]);
-    const many = items.length > 1;
-    ui.counter.textContent = many ? `${i + 1} / ${items.length}` : "";
-    ui.prev.hidden = !many;
-    ui.next.hidden = !many;
-    ui.prev.setAttribute("aria-disabled", String(i === 0));
-    ui.next.setAttribute("aria-disabled", String(i === items.length - 1));
-    layout();
-    if (announce) ui.live.textContent = `Photo ${i + 1} of ${items.length}`;
+    const link = items[i];
+    const apply = () => {
+      if (token !== showToken || !ui.dialog.open) return;
+      showing = i;
+      present(link);
+      const many = items.length > 1;
+      ui.counter.textContent = many ? `${i + 1} / ${items.length}` : "";
+      ui.counter.hidden = !many;
+      ui.prev.hidden = !many;
+      ui.next.hidden = !many;
+      setDisabled(ui.prev, i === 0);
+      setDisabled(ui.next, i === items.length - 1);
+      layout();
+      if (announce) ui.live.textContent = `${i + 1} of ${items.length}: ${altOf(link)}`;
+      warm(i + 1);
+      warm(i - 1);
+    };
+    const thumb = link.querySelector("img");
+    if (thumb && thumb.complete && thumb.naturalWidth > 0) return apply();
+    const pre = new Image();
+    pre.src = previewOf(link);
+    Promise.race([pre.decode().catch(() => {}), new Promise((done) => setTimeout(done, 1500))]).then(apply);
   }
 
   function step(delta) {
     const next = index + delta;
-    if (next < 0 || next >= items.length) {
-      view = clampView(stage, image, view);
-      render(true);
-      return;
-    }
+    if (next < 0 || next >= items.length) return;
     show(next, true);
   }
 
   // ---- Opening and closing
 
-  function open(link) {
+  function open(link, { tap = false } = {}) {
     build();
+    if (ui.dialog.open) return;
+    if (tap) tapOpenedAt = performance.now();
     origin = link;
     carousel = link.closest("grug-carousel");
     items = carousel ? Array.from(carousel.querySelectorAll("a[data-zoom]")) : [link];
     index = Math.max(0, items.indexOf(link));
     scroll = [window.scrollX, window.scrollY];
     ui.live.textContent = "";
+    // Labelled before it opens, so the first thing announced is the photo.
+    ui.dialog.setAttribute("aria-label", altOf(link) || "Photo");
     ui.dialog.showModal();
     ui.dialog.focus();
     show(index, false);
@@ -196,43 +301,60 @@
 
   function onClosed() {
     loadToken += 1;
-    const target = items[index] ?? origin;
+    showToken += 1;
+    const target = items[showing] ?? origin;
     if (carousel && target !== origin && typeof carousel.goTo === "function") carousel.goTo(items.indexOf(target));
     target?.focus({ preventScroll: true });
     window.scrollTo(scroll[0], scroll[1]);
     ui.img.removeAttribute("src");
     items = [];
+    showing = -1;
     carousel = null;
   }
 
   // ---- Input
 
-  function wire({ dialog, stage: stageEl, close, prev, next }) {
+  function wire({ dialog, stage: stageEl, close, prev, next, zoomIn, zoomOut, reset, fitfill }) {
+    const centreZoom = (factor) => setView(zoomAt(stage, image, view, view.scale * factor, stage.w / 2, stage.h / 2, limits), true);
+    const enabled = (el, run) => el.addEventListener("click", () => el.getAttribute("aria-disabled") !== "true" && run());
     close.addEventListener("click", () => dialog.close());
-    prev.addEventListener("click", () => prev.getAttribute("aria-disabled") !== "true" && step(-1));
-    next.addEventListener("click", () => next.getAttribute("aria-disabled") !== "true" && step(1));
+    enabled(prev, () => step(-1));
+    enabled(next, () => step(1));
+    enabled(zoomIn, () => centreZoom(1.5));
+    enabled(zoomOut, () => centreZoom(1 / 1.5));
+    enabled(reset, () => setView({ scale: opening.scale, x: opening.x, y: opening.y }, true));
+    fitfill.addEventListener("click", () => setView(near(view.scale, fit.scale) ? fill : fit, true));
     dialog.addEventListener("close", onClosed);
     window.addEventListener("resize", () => dialog.open && layout());
 
+    // Tab and Shift+Tab cycle through the controls that are on screen.
+    const focusables = () =>
+      Array.from(dialog.querySelectorAll("button, a[href]")).filter(
+        (el) => !el.closest("[hidden]") && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden",
+      );
+
     dialog.addEventListener("keydown", (event) => {
+      if (event.key === "Tab") {
+        const list = focusables();
+        if (list.length === 0) return;
+        const at = list.indexOf(document.activeElement);
+        const to = event.shiftKey ? (at <= 0 ? list.length - 1 : at - 1) : at === -1 || at === list.length - 1 ? 0 : at + 1;
+        event.preventDefault();
+        list[to].focus();
+        return;
+      }
       if (event.altKey || event.ctrlKey || event.metaKey) return;
-      const zoomBy = (factor) => {
-        view = zoomAt(stage, image, view, view.scale * factor, stage.w / 2, stage.h / 2, limits);
-        render(true);
-      };
       const overflowX = image.w * view.scale > stage.w + 0.5;
       const overflowY = image.h * view.scale > stage.h + 0.5;
       const move = (dx, dy) => {
-        view = panBy(stage, image, view, dx, dy);
-        render(true);
+        panned();
+        setView(panBy(stage, image, view, dx, dy), true);
       };
       const key = event.key;
-      if (key === "+" || key === "=") zoomBy(1.5);
-      else if (key === "-" || key === "_") zoomBy(1 / 1.5);
-      else if (key === "0") {
-        view = { scale: opening.scale, x: opening.x, y: opening.y };
-        render(true);
-      } else if (key === "ArrowLeft") overflowX ? move(stage.w * 0.2, 0) : step(-1);
+      if (key === "+" || key === "=") centreZoom(1.5);
+      else if (key === "-" || key === "_") centreZoom(1 / 1.5);
+      else if (key === "0") setView({ scale: opening.scale, x: opening.x, y: opening.y }, true);
+      else if (key === "ArrowLeft") overflowX ? move(stage.w * 0.2, 0) : step(-1);
       else if (key === "ArrowRight") overflowX ? move(-stage.w * 0.2, 0) : step(1);
       else if (key === "ArrowUp" && overflowY) move(0, stage.h * 0.2);
       else if (key === "ArrowDown" && overflowY) move(0, -stage.h * 0.2);
@@ -246,14 +368,12 @@
       (event) => {
         event.preventDefault();
         const rect = stageEl.getBoundingClientRect();
-        const px = event.clientX - rect.left;
-        const py = event.clientY - rect.top;
         if (event.ctrlKey) {
-          view = zoomAt(stage, image, view, view.scale * Math.exp(-event.deltaY * 0.01), px, py, limits);
+          setView(zoomAt(stage, image, view, view.scale * Math.exp(-event.deltaY * 0.01), event.clientX - rect.left, event.clientY - rect.top, limits));
         } else if (canPan(stage, image, view)) {
-          view = panBy(stage, image, view, -event.deltaX, -event.deltaY);
-        } else return;
-        render(false);
+          panned();
+          setView(panBy(stage, image, view, -event.deltaX, -event.deltaY));
+        }
       },
       { passive: false },
     );
@@ -266,74 +386,79 @@
     });
     dialog.addEventListener("gesturechange", (event) => {
       event.preventDefault();
-      if (!gestureView) return;
-      view = zoomAt(stage, image, gestureView, gestureView.scale * event.scale, stage.w / 2, stage.h / 2, limits);
-      render(false);
+      if (gestureView) setView(zoomAt(stage, image, gestureView, gestureView.scale * event.scale, stage.w / 2, stage.h / 2, limits));
     });
     dialog.addEventListener("gestureend", (event) => event.preventDefault());
 
-    // Touch, pen and mouse on the stage: one pointer pans (or swipes when the image fits), two pinch.
+    // Touch, pen and mouse on the stage. A drag locks to pan, slide-nav or dismiss once it passes the slop and keeps
+    // that meaning until release; two fingers pinch, and a finger left after a pinch only pans.
     const pointers = new Map();
     let gesture = null;
+    let afterPinch = false;
     let lastTap = null;
     const at = (event) => {
       const rect = stageEl.getBoundingClientRect();
-      return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+      return { x: event.clientX - rect.left, y: event.clientY - rect.top, type: event.pointerType };
     };
-    const begin = () => {
-      const points = [...pointers.values()];
-      if (points.length >= 2) {
-        const [a, b] = points;
-        gesture = { kind: "pinch", start: view, distance: Math.hypot(a.x - b.x, a.y - b.y) || 1, mid: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } };
-      } else if (points.length === 1) {
-        const [p] = points;
-        gesture = { kind: "pending", start: view, origin: { x: p.x, y: p.y }, time: performance.now(), moved: false, type: p.type };
-      } else gesture = null;
-      ui.img.style.willChange = gesture ? "transform" : "";
+    const startOne = (point, kind) => {
+      gesture = { kind, start: view, origin: { x: point.x, y: point.y }, time: performance.now(), moved: kind !== "pending", type: point.type };
+    };
+    const feedback = (dx, dy) => {
+      const ratio = dpr();
+      ui.img.style.transition = "none";
+      ui.img.style.transform = `translate3d(${Math.round((view.x + dx) * ratio) / ratio}px, ${Math.round((view.y + dy) * ratio) / ratio}px, 0)`;
+      dialog.style.setProperty("--lightbox-fade", dy > 0 ? String(Math.max(0.35, 1 - dy / 400)) : "1");
     };
     stageEl.addEventListener("pointerdown", (event) => {
       if (event.button !== 0) return;
       stageEl.setPointerCapture(event.pointerId);
-      pointers.set(event.pointerId, { ...at(event), type: event.pointerType });
-      begin();
+      pointers.set(event.pointerId, at(event));
+      if (pointers.size >= 2) {
+        const [a, b] = [...pointers.values()];
+        lastTap = null;
+        afterPinch = true;
+        gesture = { kind: "pinch", start: view, distance: Math.hypot(a.x - b.x, a.y - b.y) || 1, mid: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } };
+      } else {
+        startOne(at(event), "pending");
+      }
     });
     stageEl.addEventListener("pointermove", (event) => {
       if (!pointers.has(event.pointerId) || !gesture) return;
-      pointers.set(event.pointerId, { ...at(event), type: event.pointerType });
+      pointers.set(event.pointerId, at(event));
       const points = [...pointers.values()];
-      if (gesture.kind === "pinch" && points.length >= 2) {
+      if (gesture.kind === "pinch") {
+        if (points.length < 2) return;
         const [a, b] = points;
-        const distance = Math.hypot(a.x - b.x, a.y - b.y);
         const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-        const zoomed = zoomAt(stage, image, gesture.start, (gesture.start.scale * distance) / gesture.distance, gesture.mid.x, gesture.mid.y, limits);
-        view = panBy(stage, image, zoomed, mid.x - gesture.mid.x, mid.y - gesture.mid.y);
-        render(false);
+        const scale = (gesture.start.scale * Math.hypot(a.x - b.x, a.y - b.y)) / gesture.distance;
+        const zoomedView = zoomAt(stage, image, gesture.start, scale, gesture.mid.x, gesture.mid.y, limits);
+        setView(panBy(stage, image, zoomedView, mid.x - gesture.mid.x, mid.y - gesture.mid.y));
         return;
       }
       const p = points[0];
       const dx = p.x - gesture.origin.x;
       const dy = p.y - gesture.origin.y;
-      if (!gesture.moved && Math.hypot(dx, dy) > 8) {
+      if (gesture.kind === "pending") {
+        if (Math.hypot(dx, dy) <= 8) return;
+        lastTap = null;
         gesture.moved = true;
-        // Decide once, from the first movement: a mostly-downward touch drag on an image that fits the height (a
-        // fitted photo or an unzoomed panorama) is a swipe to close; otherwise drag pans if it can, or swipes.
-        const fitsHeight = image.h * view.scale <= stage.h + 0.5;
-        const atOpening = view.scale <= opening.scale * 1.01;
-        const downward = gesture.type === "touch" && dy > 0 && Math.abs(dy) > Math.abs(dx);
-        gesture.kind = !canPan(stage, image, view) || (downward && fitsHeight && atOpening) ? "swipe" : "pan";
+        gesture.kind = lockGesture({
+          dx,
+          dy,
+          overflowX: image.w * view.scale > stage.w + 0.5,
+          overflowY: image.h * view.scale > stage.h + 0.5,
+          touch: gesture.type === "touch",
+          atRest: atRest(),
+          slides: items.length,
+          afterPinch,
+        });
+        ui.img.style.willChange = "transform";
       }
       if (gesture.kind === "pan") {
-        view = panBy(stage, image, gesture.start, dx, dy);
-        render(false);
-      } else if (gesture.moved) {
-        // Fitted image: follow the finger sideways (next/previous) or down (close), without committing yet.
-        const down = gesture.type === "touch" && dy > 0 && Math.abs(dy) > Math.abs(dx);
-        const ox = down ? 0 : dx;
-        const oy = down ? dy : 0;
-        ui.img.style.transition = "none";
-        ui.img.style.transform = `translate3d(${view.x + ox}px, ${view.y + oy}px, 0) scale(${view.scale})`;
-        ui.dialog.style.setProperty("--lightbox-fade", down ? String(Math.max(0.35, 1 - dy / 400)) : "1");
-      }
+        panned();
+        setView(panBy(stage, image, gesture.start, dx, dy));
+      } else if (gesture.kind === "nav") feedback(dx, 0);
+      else if (gesture.kind === "dismiss") feedback(0, Math.max(0, dy));
     });
     const end = (event) => {
       if (!pointers.has(event.pointerId)) return;
@@ -341,65 +466,64 @@
       pointers.delete(event.pointerId);
       const finished = gesture;
       if (pointers.size > 0) {
-        begin();
+        // A finger left after a pinch pans (if there is anywhere to pan) until it lifts too.
+        startOne([...pointers.values()][0], afterPinch ? "pan" : "pending");
         return;
       }
       gesture = null;
+      afterPinch = false;
       ui.img.style.willChange = "";
-      ui.dialog.style.removeProperty("--lightbox-fade");
-      if (!finished || event.type === "pointercancel") {
-        render(true);
+      dialog.style.removeProperty("--lightbox-fade");
+      if (!finished || event.type === "pointercancel" || finished.kind === "pinch") return render(true);
+      if (finished.kind === "pending") {
+        if (performance.now() - finished.time < 350) tap(point);
         return;
       }
-      if (finished.kind === "pinch") return render(false);
-      const dx = point.x - finished.origin.x;
-      const dy = point.y - finished.origin.y;
-      if (!finished.moved && performance.now() - finished.time < 350) return tap(point);
-      if (finished.kind === "swipe") {
-        const action = classifySwipe(dx, dy);
-        if (action === "close" && finished.type === "touch") return ui.dialog.close();
-        if (action === "next" && index < items.length - 1) return show(index + 1, true);
-        if (action === "prev" && index > 0) return show(index - 1, true);
-        render(true);
-      }
+      const action = releaseGesture(finished.kind, point.x - finished.origin.x, point.y - finished.origin.y);
+      if (action === "close") return dialog.close();
+      if (action === "next" && index < items.length - 1) return show(index + 1, true);
+      if (action === "prev" && index > 0) return show(index - 1, true);
+      render(true);
     };
     stageEl.addEventListener("pointerup", end);
     stageEl.addEventListener("pointercancel", end);
 
-    // A tap outside the photo closes (at the opening view); two quick taps toggle zoom at that point.
+    // A tap outside the photo closes (at rest); two quick taps toggle zoom at that point.
+    let closePending = false;
+    const closeIfPending = () => {
+      if (!closePending) return;
+      closePending = false;
+      dialog.close();
+    };
+    // Close on the tap's own click (still aimed at the stage), so no follow-up mouse event reaches the page.
+    stageEl.addEventListener("click", closeIfPending);
     function tap(point) {
       const now = performance.now();
       if (lastTap && now - lastTap.time < 320 && Math.hypot(point.x - lastTap.x, point.y - lastTap.y) < 40) {
         lastTap = null;
-        view = toggleZoom(stage, image, view, opening, point.x, point.y, limits);
-        render(true);
+        closePending = false;
+        setView(toggleZoom(stage, image, view, opening, point.x, point.y, limits), true);
         return;
       }
       lastTap = { ...point, time: now };
       const inside =
         point.x >= view.x && point.x <= view.x + image.w * view.scale && point.y >= view.y && point.y <= view.y + image.h * view.scale;
-      if (!inside && view.scale <= opening.scale * 1.01) {
-        // Close on the tap's own click (still aimed at the stage), so no follow-up mouse event reaches the page.
+      if (!inside && atRest()) {
         closePending = true;
         setTimeout(closeIfPending, 400);
       }
     }
-    let closePending = false;
-    function closeIfPending() {
-      if (!closePending) return;
-      closePending = false;
-      ui.dialog.close();
-    }
-    stageEl.addEventListener("click", closeIfPending);
   }
 
-  // ---- Page hooks: click (Enter) and Space on any zoomable Figure
+  // ---- Page hooks: click (Enter) and Space on any zoomable Figure; carousels open it on a touch tap themselves
 
   document.addEventListener("click", (event) => {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     const link = event.target instanceof Element ? event.target.closest("a[data-zoom]") : null;
     if (!link || typeof HTMLDialogElement !== "function") return;
     event.preventDefault();
+    // The click that may follow a carousel's touch tap is the same press: the viewer is already open.
+    if (performance.now() - tapOpenedAt < 700) return;
     open(link);
   });
   document.addEventListener("keydown", (event) => {
@@ -407,4 +531,5 @@
     event.preventDefault();
     open(event.target);
   });
+  window.grugViewer = { open };
 })();

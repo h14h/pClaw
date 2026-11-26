@@ -1007,7 +1007,12 @@ function cmdList(cfg) {
   }
 }
 
-const IMAGE_MAX_EDGE = 2000;
+// Saved images keep at most this short edge (so a 4:1 panorama can still be 4800px wide), and never a long edge
+// past IMAGE_MAX_LONG_EDGE.
+const IMAGE_MAX_SHORT_EDGE = 1200;
+const IMAGE_MAX_LONG_EDGE = 6000;
+// A panorama (2:1 or wider, or as tall) whose short edge is under this looks soft in the photo viewer's pan view.
+const PANORAMA_MIN_SHORT_EDGE = 700;
 const IMAGE_CHECK =
   "Check before use: open actual image. Confirm place, season, product version, or data period. Use only if it helps reader decide. " +
   "Alt: what reader needs to see. Chart or map: put takeaway in nearby text if labels too small on phone. " +
@@ -1074,11 +1079,15 @@ async function cmdImage(cfg, args) {
       const meta = await sharp(bytes, { animated: type.ext === "gif" }).metadata();
       width = meta.width ?? null;
       height = meta.pageHeight ?? meta.height ?? null;
-      // Re-encode every still image: caps the long edge, applies EXIF rotation, and strips metadata (GPS, camera)
+      // Re-encode every still image: caps the size (short edge 1200px, long edge 6000px), applies EXIF rotation, and strips metadata (GPS, camera)
       // so what lands on the page (and its copy in dist/) is small and clean. GIFs stay as they are to keep animation.
       if (type.ext !== "gif") {
         const before = `${width}×${height}`;
-        let pipeline = sharp(bytes).rotate().resize({ width: IMAGE_MAX_EDGE, height: IMAGE_MAX_EDGE, fit: "inside", withoutEnlargement: true });
+        const shrink = Math.min(1, IMAGE_MAX_SHORT_EDGE / Math.min(width, height), IMAGE_MAX_LONG_EDGE / Math.max(width, height));
+        let pipeline = sharp(bytes)
+          .rotate()
+          // A square box of the new long edge, so EXIF rotation can't swap which side gets limited.
+          .resize({ width: Math.round(Math.max(width, height) * shrink), height: Math.round(Math.max(width, height) * shrink), fit: "inside", withoutEnlargement: true });
         if (type.ext === "jpg") pipeline = pipeline.jpeg({ quality: 85, mozjpeg: true });
         else if (type.ext === "png") pipeline = pipeline.png({ compressionLevel: 9 });
         else if (type.ext === "webp") pipeline = pipeline.webp({ quality: 85 });
@@ -1098,8 +1107,21 @@ async function cmdImage(cfg, args) {
   mkdirSync(imgDir, { recursive: true });
   const file = `${createHash("sha256").update(bytes).digest("hex").slice(0, 12)}.${type.ext}`;
   const target = join(imgDir, file);
-  if (!existsSync(target)) writeFileSync(target, bytes);
-  if (width && height) writeSize(imgDir, file, width, height);
+  if (!existsSync(target)) {
+    writeFileSync(target, bytes);
+    if (width && height) writeSize(imgDir, file, width, height);
+  } else if (sharp) {
+    // Already saved under this name: the sidecar describes the file on disk, not the bytes just fetched.
+    try {
+      const meta = await sharp(target, { animated: type.ext === "gif" }).metadata();
+      const h = meta.pageHeight ?? meta.height;
+      if (meta.width && h) {
+        width = meta.width;
+        height = h;
+        writeSize(imgDir, file, width, height);
+      }
+    } catch {}
+  }
 
   const href = opts.href || fetched.finalUrl;
   let credit = opts.credit;
@@ -1119,10 +1141,16 @@ async function cmdImage(cfg, args) {
     ...(opts.background ? [`background="${opts.background}"`] : []),
   ];
   const dims = width && height ? `${width}×${height}, ` : "";
+  const panorama = width && height && Math.max(width, height) / Math.min(width, height) >= 2;
+  const softPanorama =
+    panorama && Math.min(width, height) < PANORAMA_MIN_SHORT_EDGE
+      ? `WARN: panorama's short edge is ${Math.min(width, height)}px (under ${PANORAMA_MIN_SHORT_EDGE}px), so it looks soft full screen. Fetch a larger original or variant of the same image from the same source (Wikimedia: the original file, or a /thumb/ copy 3840px wide) and save that instead.\n`
+      : "";
   process.stdout.write(
     `SAVED ${slug}/img/${file} (${dims}${(bytes.length / 1024).toFixed(0)} KB ${type.ext})${note}\n` +
       `Add Figure to the page's import line (import { ..., Figure } from "@components/mdx";), then place:\n` +
       `<Figure ${attrs.join(" ")} />\n` +
+      softPanorama +
       `${IMAGE_CHECK}\n`,
   );
 }

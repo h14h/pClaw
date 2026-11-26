@@ -890,6 +890,18 @@
     opacity: 1;
   }
 
+  /* Touch has no hover: the badge always shows, so readers know a tap opens the photo. */
+  @media (pointer: coarse) {
+    .figure-zoom-icon {
+      opacity: 1;
+    }
+  }
+
+  /* Peeking carousel slides keep quiet. */
+  .carousel[data-js] .carousel-slide:not([data-current]) .figure-zoom-icon {
+    opacity: 0;
+  }
+
   /* A credit that wraps keeps one outline around all its lines. Touch keeps the Figure's 48px inline-flex target. */
   .figure-credit {
     display: inline-block;
@@ -923,10 +935,15 @@
   outline-offset: -2px;
 }
 
-/* Photo viewer (lib/lightbox-client.js). A full-screen dark <dialog>, the same in both themes: photos read best on
-   near-black. The stage takes all gestures (touch-action: none), so iOS never zooms the page instead. */
+/* Photo viewer (lib/lightbox-client.js). A full-screen, fully opaque near-black <dialog>, the same in both themes:
+   photos read best on near-black, and nothing of the page shows through. The stage takes all gestures
+   (touch-action: none), so iOS never zooms the page instead. Controls sit on their own dark plates so they read
+   over bright sky or a paper graphic. */
 .lightbox {
   --lightbox-fade: 1;
+  --lightbox-plate: rgb(10 9 8 / 0.72);
+  --lightbox-inset-l: max(--spacing(2), env(safe-area-inset-left));
+  --lightbox-inset-r: max(--spacing(2), env(safe-area-inset-right));
   position: fixed;
   inset: 0;
   width: 100vw;
@@ -943,7 +960,7 @@
   color-scheme: dark;
 
   &::backdrop {
-    background: rgb(10 9 8 / 0.6);
+    background: rgb(10 9 8);
   }
 
   &:focus {
@@ -972,8 +989,7 @@
   top: 0;
   left: 0;
   max-width: none;
-  transform-origin: 0 0;
-  image-rendering: auto;
+  max-height: none;
 }
 
 .lightbox-paper {
@@ -986,23 +1002,34 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: max(--spacing(2), env(safe-area-inset-top)) --spacing(2) 0 --spacing(5);
+  gap: --spacing(2);
+  padding: max(--spacing(2), env(safe-area-inset-top)) var(--lightbox-inset-r) 0 var(--lightbox-inset-l);
   pointer-events: none;
-  background: linear-gradient(rgb(10 9 8 / 0.55), transparent);
 
   & > * {
     pointer-events: auto;
   }
 }
 
+.lightbox-tools {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+}
+
 .lightbox-counter {
+  padding: --spacing(1.5) --spacing(3);
+  border-radius: 9999px;
   font-size: var(--text-sm);
   line-height: --spacing(5);
   font-variant-numeric: tabular-nums;
-  color: #e7e5e4;
+  color: #fafaf9;
+  background: var(--lightbox-plate);
 }
 
+/* 48px targets: a 40px plate inside a 48px button. */
 .lightbox-button {
+  position: relative;
   display: grid;
   place-items: center;
   width: --spacing(12);
@@ -1010,41 +1037,55 @@
   border-radius: 9999px;
   color: #fafaf9;
   touch-action: manipulation;
+  outline: none;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: --spacing(1);
+    border-radius: inherit;
+    background: var(--lightbox-plate);
+    box-shadow: 0 0 0 1px rgb(255 255 255 / 0.14);
+    transition: background-color 120ms ease;
+  }
 
   & svg {
-    width: --spacing(6);
-    height: --spacing(6);
+    position: relative;
+    width: --spacing(5);
+    height: --spacing(5);
   }
 
-  &:hover {
-    background: rgb(255 255 255 / 0.1);
+  &:hover::before {
+    background: rgb(10 9 8 / 0.9);
   }
 
-  &:focus-visible {
-    outline: 2px solid var(--color-accent-dark);
-    outline-offset: -2px;
+  &:focus-visible::before {
+    box-shadow:
+      0 0 0 2px var(--color-accent-dark),
+      0 0 0 4px rgb(10 9 8);
   }
 
   &[aria-disabled="true"] {
-    opacity: 0.35;
     cursor: default;
+
+    & svg {
+      opacity: 0.4;
+    }
   }
 }
 
-.lightbox-prev,
-.lightbox-next {
+.lightbox-side {
   position: absolute;
   top: 50%;
   translate: 0 -50%;
-  background: rgb(10 9 8 / 0.45);
 }
 
 .lightbox-prev {
-  left: --spacing(2);
+  left: var(--lightbox-inset-l);
 }
 
 .lightbox-next {
-  right: --spacing(2);
+  right: var(--lightbox-inset-r);
 }
 
 .lightbox-caption {
@@ -1053,14 +1094,36 @@
   max-height: 40dvh;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: --spacing(8) --spacing(5) max(--spacing(4), env(safe-area-inset-bottom));
-  font-size: var(--text-sm);
-  line-height: --spacing(5);
-  color: #e7e5e4;
-  background: linear-gradient(transparent, rgb(10 9 8 / 0.78) 35%);
+  padding: --spacing(10) max(--spacing(5), env(safe-area-inset-right)) max(--spacing(4), env(safe-area-inset-bottom))
+    max(--spacing(5), env(safe-area-inset-left));
+  font-size: var(--text-base);
+  line-height: --spacing(6);
+  color: #f5f5f4;
+  background: linear-gradient(rgb(10 9 8 / 0), rgb(10 9 8 / 0.88) --spacing(8));
   text-wrap: pretty;
 
-  & > span + .lightbox-credit::before {
+  @variant sm {
+    font-size: var(--text-sm);
+    line-height: --spacing(5);
+  }
+}
+
+.lightbox-credit {
+  color: #e7e5e4;
+  text-decoration: underline;
+  text-decoration-color: rgb(255 255 255 / 0.45);
+  text-underline-offset: 3px;
+  border-radius: 2px;
+
+  &:focus-visible {
+    outline: 2px solid var(--color-accent-dark);
+    outline-offset: 2px;
+  }
+}
+
+/* Fine pointers: credit after the caption, with a dot. Touch: on its own line, a 48px target. */
+@media (pointer: fine) {
+  .lightbox-caption-text + .lightbox-credit::before {
     content: "·";
     display: inline-block;
     padding-inline: --spacing(1.5);
@@ -1069,30 +1132,26 @@
   }
 }
 
-.lightbox-credit {
-  color: #d6d3d1;
-  text-decoration: underline;
-  text-decoration-color: rgb(255 255 255 / 0.35);
-  text-underline-offset: 3px;
-
-  &:focus-visible {
-    outline: 2px solid var(--color-accent-dark);
-    outline-offset: 2px;
-    border-radius: 2px;
+@media (pointer: coarse) {
+  .lightbox-credit {
+    display: flex;
+    align-items: center;
+    width: fit-content;
+    min-height: --spacing(12);
   }
 }
 
 .lightbox-hint {
   position: absolute;
   left: 50%;
-  bottom: --spacing(28);
+  top: calc(max(--spacing(2), env(safe-area-inset-top)) + --spacing(14));
   translate: -50% 0;
   padding: --spacing(1.5) --spacing(3);
   border-radius: 9999px;
   font-size: var(--text-sm);
   line-height: --spacing(5);
   color: #fafaf9;
-  background: rgb(10 9 8 / 0.7);
+  background: var(--lightbox-plate);
   opacity: 0;
   pointer-events: none;
   transition: opacity 300ms ease;
@@ -1102,19 +1161,18 @@
   opacity: 1;
 }
 
-.lightbox[data-zoomed] .lightbox-caption,
-.lightbox[data-zoomed] .lightbox-prev,
-.lightbox[data-zoomed] .lightbox-next {
+/* Zoomed in, the caption steps aside (and out of the tab order); the controls stay. */
+.lightbox[data-zoomed] .lightbox-caption {
+  visibility: hidden;
   opacity: 0;
-  pointer-events: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .lightbox-hint {
+  .lightbox-hint,
+  .lightbox-button::before {
     transition: none;
   }
 }
-
 
 /* Print stylesheet: clean ink on white paper, hide interactive chrome */
 @media print {

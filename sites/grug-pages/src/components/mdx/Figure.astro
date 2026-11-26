@@ -55,7 +55,8 @@ const sizes = ["auto", ...fallback].join(", ");
 const widths = [480, 800, 1200, 1600].filter((w) => w < image.width);
 widths.push(Math.min(image.width, 1600));
 
-// The viewer's sources: the same widths as the page plus the full image (up to 2560px), as WebP. The largest is
+// The viewer's sources: the same widths as the page plus the full image (up to 4096px, so a panorama keeps its
+// height), as WebP. The largest is
 // also the no-JS link target, so the browser's own viewer can zoom it. URLs carry the site base, so share links
 // rewrite them like every other asset.
 let zoomHref = "";
@@ -65,7 +66,7 @@ if (zoom) {
     zoomHref = image.src;
     zoomSrcset = `${image.src} ${image.width}w`;
   } else {
-    const natural = Math.min(image.width, 2560);
+    const natural = Math.min(image.width, 4096);
     const zoomWidths = [...new Set([...widths, natural])].sort((a, b) => a - b);
     const full = await getImage({ src: image, widths: zoomWidths, format: "webp" });
     zoomSrcset = full.srcSet.attribute;
@@ -101,7 +102,8 @@ const figureStyle = portrait
       <Picture
         src={image}
         alt={alt}
-        formats={["avif", "webp"]}
+        formats={["avif"]}
+        fallbackFormat="webp"
         widths={[...new Set(widths)]}
         sizes={sizes}
         loading="lazy"

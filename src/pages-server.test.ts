@@ -1366,46 +1366,58 @@ test("grug-pages Carousel: stacked without JS, one settled slide with JS, lazy s
 	assert.match(css, /@media \(prefers-reduced-motion: no-preference\) \{\n {8}scroll-behavior: smooth;/);
 
 	assert.match(cli, /await warnPageLint\(cfg\.pagesDir, slug \? \[slug\] : slugs\);/);
-	assert.match(cli, /if \(width && height\) writeSize\(imgDir, file, width, height\);/);
+	assert.match(cli, /writeFileSync\(target, bytes\);\n\s*if \(width && height\) writeSize\(imgDir, file, width, height\);/);
+	// Saved sizes: short edge capped at 1200px (panoramas keep their height); soft panoramas warn
+	assert.match(cli, /const IMAGE_MAX_SHORT_EDGE = 1200;/);
+	assert.match(cli, /const PANORAMA_MIN_SHORT_EDGE = 700;/);
+	assert.match(cli, /Fetch a larger original or variant of the same image from the same source/);
 	assert.match(cli, /const SIZES_FILE = "\.sizes\.json";/);
 	assert.match(cli, /GRUG_PAGE_LINTED: JSON\.stringify\(covered\),/);
 	assert.match(cli, /figureTags\(body\)/);
 	assert.match(component, /if \(!linted\.includes\(`\$\{slug\}\\n\$\{label\.trim\(\)\}`\)\)/);
 	assert.match(component, /this\.goTo = \(i: number\) => \{/);
+	// Photo taps on the strip (touch/pen) open the viewer on the photo the finger landed on, once
+	assert.match(component, /if \(event\.pointerType === "mouse"\) return;\n\s*const slide = photoAt\(event\.clientX, event\.clientY\);/);
+	assert.match(component, /strip\.addEventListener\("pointercancel", \(\) => \(photoTap = null\)\);/);
+	assert.match(component, /this\.goTo\?\.\(tap\.slide\);\n\s*viewer\.open\(link, \{ tap: true \}\);/);
 	assert.ok(skill.includes(CAROUSEL_TOO_MANY));
 	assert.match(skill, /One sentence, up to 100 characters for carousel captions\. Put route advice in the section text\./);
 	assert.match(skill, /Never write page-local components for UI the template owns/);
 });
 
 test("grug-pages photo viewer: fit, panorama and tall openings, bounded zoom and pan, swipes, and markup", async () => {
-	const { canPan, clampView, classifySwipe, openingView, panBy, pickSource, scaleLimits, toggleZoom, zoomAt } = await import(
-		"../sites/grug-pages/lib/lightbox.mjs"
-	);
+	const { canPan, clampView, fillView, fitView, lockGesture, openingView, panBy, pickSource, releaseGesture, scaleLimits, toggleZoom, zoomAt } =
+		await import("../sites/grug-pages/lib/lightbox.mjs");
 	const phone = { w: 390, h: 844 };
 	const desktop = { w: 1280, h: 800 };
 	const near = (a: number, b: number) => assert.ok(Math.abs(a - b) < 0.01, `${a} ≈ ${b}`);
 
-	// A 3:2 photo fits (whole photo, centred); on a big screen it never blows up past 2×
-	const photo = { w: 1024, h: 683 };
+	// A 3:2 photo fits (whole photo, centred); on a big screen it never blows up past 2×; Fill covers the screen
+	const photo = { w: 1800, h: 1200 };
 	const fit = openingView(phone, photo);
 	assert.equal(fit.mode, "fit");
-	near(fit.scale, 390 / 1024);
+	near(fit.scale, 390 / 1800);
 	near(fit.x, 0);
-	near(fit.y, (844 - 683 * fit.scale) / 2);
-	assert.equal(openingView({ w: 4000, h: 3000 }, photo).scale, 2);
+	near(fit.y, (844 - 1200 * fit.scale) / 2);
+	assert.equal(openingView({ w: 8000, h: 6000 }, photo).scale, 2);
+	near(fillView(phone, photo).scale, 844 / 1200);
 	// A 2:3 portrait fits on desktop (not a scroll strip)
 	assert.equal(openingView(desktop, { w: 800, h: 1200 }).mode, "fit");
 
-	// The 4.3:1 Bergen panorama opens at 80% of the phone's height, centred, ready to drag sideways
-	const pano = { w: 1024, h: 237 };
+	// The 4.3:1 Bergen panorama opens at 80% of the phone's height, centred, ready to drag sideways; Fit (computed
+	// on its own) shows the whole composition, and Fill is the pan view again
+	const pano = { w: 3840, h: 889 };
 	const open = openingView(phone, pano);
 	assert.equal(open.mode, "pan-x");
-	near(open.scale, (844 * 0.8) / 237);
-	near(open.x, (390 - 1024 * open.scale) / 2);
+	near(open.scale, (844 * 0.8) / 889);
+	near(open.x, (390 - 3840 * open.scale) / 2);
 	near(open.y, (844 - 844 * 0.8) / 2);
 	assert.ok(canPan(phone, pano, open));
-	// ...but on a wide desktop screen it is just a fit
-	assert.equal(openingView({ w: 1280, h: 800 }, { w: 2000, h: 900 }).mode, "fit");
+	near(fitView(phone, pano).scale, 390 / 3840);
+	assert.ok(!canPan(phone, pano, fitView(phone, pano)));
+	near(fillView(phone, pano).scale, open.scale);
+	// ...but on a wide desktop screen a milder panorama is just a fit
+	assert.equal(openingView(desktop, { w: 2000, h: 900 }).mode, "fit");
 	// A very tall image on a landscape screen opens to scroll vertically
 	assert.equal(openingView(desktop, { w: 600, h: 2000 }).mode, "pan-y");
 
@@ -1414,30 +1426,53 @@ test("grug-pages photo viewer: fit, panorama and tall openings, bounded zoom and
 	near(left.x, 0);
 	near(left.y, open.y);
 	const right = panBy(phone, pano, open, -1e6, 0);
-	near(right.x, 390 - 1024 * open.scale);
+	near(right.x, 390 - 3840 * open.scale);
 	assert.deepEqual(clampView(phone, photo, { scale: fit.scale, x: 50, y: -50 }), { scale: fit.scale, x: 0, y: fit.y });
 
-	// Zoom keeps the point under the finger, within limits (~4 device px per image px, at least 2.5× the opening)
-	const limits = scaleLimits(fit, 3);
+	// Zoom range: down to the whole photo, up to the largest file at 2× on the device (never below the opening or
+	// fill views, and no extra zoom stacked on an already enlarged panorama)
+	const limits = scaleLimits(phone, photo, { dpr: 3, largest: 1800 });
 	near(limits.min, fit.scale);
-	near(limits.max, Math.max(fit.scale * 2.5, 4 / 3));
+	near(limits.max, Math.max(2 / 3, 844 / 1200));
+	const panoLimits = scaleLimits(phone, pano, { dpr: 3, largest: 3840 });
+	near(panoLimits.min, 390 / 3840);
+	near(panoLimits.max, open.scale);
+	const smallPano = { w: 1024, h: 237 };
+	near(scaleLimits(phone, smallPano, { dpr: 3, largest: 1024 }).max, openingView(phone, smallPano).scale);
+	near(scaleLimits(desktop, photo, { dpr: 1, largest: 1800 }).max, 2);
 	const zoomed = zoomAt(phone, photo, fit, fit.scale * 2, 195, 422, limits);
 	near(zoomed.scale, fit.scale * 2);
 	near((195 - zoomed.x) / zoomed.scale, (195 - fit.x) / fit.scale);
 	near((422 - zoomed.y) / zoomed.scale, (422 - fit.y) / fit.scale);
 	near(zoomAt(phone, photo, fit, 100, 0, 0, limits).scale, limits.max);
 	near(zoomAt(phone, photo, fit, 0.01, 0, 0, limits).scale, limits.min);
-	// Double-tap: opening → 2.5× at the tap, anything zoomed → back to the opening view
+	// Double-tap: opening → 2.5× at the tap (within limits); anything else → back to the opening view; a panorama
+	// that can't zoom further shows the whole photo instead
 	const doubled = toggleZoom(phone, photo, fit, fit, 100, 400, limits);
-	near(doubled.scale, fit.scale * 2.5);
+	near(doubled.scale, Math.min(fit.scale * 2.5, limits.max));
 	assert.deepEqual(toggleZoom(phone, photo, doubled, fit, 100, 400, limits), { scale: fit.scale, x: fit.x, y: fit.y });
+	near(toggleZoom(phone, pano, open, open, 100, 400, panoLimits).scale, 390 / 3840);
 
-	// Swipes at the opening view: sideways moves between slides, down closes, small or diagonal drags snap back
-	assert.equal(classifySwipe(-80, 10), "next");
-	assert.equal(classifySwipe(80, -10), "prev");
-	assert.equal(classifySwipe(10, 120), "close");
-	assert.equal(classifySwipe(30, 20), null);
-	assert.equal(classifySwipe(70, 70), null);
+	// Gestures lock once and keep their meaning: pan where the photo overflows, dismiss on a downward touch drag at
+	// rest, slide-nav sideways at rest with other slides, nothing otherwise (no nav on a single photo); after a pinch
+	// the remaining finger only pans
+	const base = { overflowX: false, overflowY: false, touch: true, atRest: true, slides: 4, afterPinch: false };
+	assert.equal(lockGesture({ ...base, dx: -30, dy: 4 }), "nav");
+	assert.equal(lockGesture({ ...base, dx: -30, dy: 4, slides: 1 }), "none");
+	assert.equal(lockGesture({ ...base, dx: 3, dy: 30 }), "dismiss");
+	assert.equal(lockGesture({ ...base, dx: 3, dy: 30, touch: false }), "none");
+	assert.equal(lockGesture({ ...base, dx: -30, dy: 4, overflowX: true }), "pan");
+	assert.equal(lockGesture({ ...base, dx: 3, dy: 30, overflowX: true }), "dismiss");
+	assert.equal(lockGesture({ ...base, dx: -30, dy: 4, atRest: false, overflowX: true }), "pan");
+	assert.equal(lockGesture({ ...base, dx: -30, dy: 4, afterPinch: true }), "none");
+	assert.equal(lockGesture({ ...base, dx: -30, dy: 4, afterPinch: true, overflowX: true }), "pan");
+	// ...and release only reads the locked axis
+	assert.equal(releaseGesture("nav", -80, 200), "next");
+	assert.equal(releaseGesture("nav", 80, 0), "prev");
+	assert.equal(releaseGesture("nav", 30, 0), null);
+	assert.equal(releaseGesture("dismiss", 200, 120), "close");
+	assert.equal(releaseGesture("dismiss", 0, 50), null);
+	assert.equal(releaseGesture("pan", -300, 300), null);
 
 	// Sources: the smallest file wide enough for the screen at device pixel ratio, else the largest
 	const sources = [{ w: 480 }, { w: 800 }, { w: 1024 }];
@@ -1464,17 +1499,39 @@ test("grug-pages photo viewer: fit, panorama and tall openings, bounded zoom and
 	assert.doesNotMatch(client, /\bimport\b|\bexport\b|fetch\(|https?:\/\//);
 	// Native modal dialog; Esc/X/backdrop/swipe-down close; focus and scroll come back; keyboard and wheel zoom
 	assert.match(client, /ui\.dialog\.showModal\(\);/);
-	assert.match(client, /aria-label="Close"/);
+	assert.match(client, /button\("close", "Close"\)/);
 	assert.match(client, /target\?\.focus\(\{ preventScroll: true \}\);\n\s*window\.scrollTo\(scroll\[0\], scroll\[1\]\);/);
+	// Labelled before it opens; Tab wraps over visible controls; N of M with the alt is announced
+	assert.match(client, /ui\.dialog\.setAttribute\("aria-label", altOf\(link\) \|\| "Photo"\);\n\s*ui\.dialog\.showModal\(\);/);
+	assert.match(client, /if \(event\.key === "Tab"\) \{/);
+	assert.match(client, /ui\.live\.textContent = `\$\{i \+ 1\} of \$\{items\.length\}: \$\{altOf\(link\)\}`/);
+	assert.match(client, /button\("in", "Zoom in"\)/);
+	assert.match(client, /button\("out", "Zoom out"\)/);
+	assert.match(client, /button\("reset", "Reset zoom"\)/);
+	assert.match(client, /"Fill screen" : "Show whole photo"/);
+	// One decode in flight; layout-sized image on whole device pixels (no transform scale seams)
+	assert.match(client, /if \(pick\.w <= shownWidth \|\| pick\.w <= pendingWidth\) return;/);
+	assert.match(client, /ui\.img\.style\.width = `\$\{snap\(image\.w \* view\.scale\)\}px`;/);
+	assert.doesNotMatch(client, /scale\(\$\{view\.scale\}\)/);
+	// Carousel photo taps open once
+	assert.match(client, /if \(performance\.now\(\) - tapOpenedAt < 700\) return;/);
+	assert.match(client, /window\.grugViewer = \{ open \};/);
 	assert.match(client, /carousel\.goTo\(items\.indexOf\(target\)\)/);
-	assert.match(client, /if \(key === "\+" \|\| key === "="\) zoomBy\(1\.5\);/);
-	assert.match(client, /if \(event\.ctrlKey\) \{\n\s*view = zoomAt\(/);
+	assert.match(client, /if \(key === "\+" \|\| key === "="\) centreZoom\(1\.5\);/);
+	assert.match(client, /if \(event\.ctrlKey\) \{\n\s*setView\(zoomAt\(/);
 	assert.match(client, /dialog\.addEventListener\("gesturestart"/);
 	assert.match(client, /aria-live="polite"/);
-	assert.match(client, /if \(action === "close" && finished\.type === "touch"\) return ui\.dialog\.close\(\);/);
+	assert.match(client, /const action = releaseGesture\(finished\.kind, /);
 	assert.match(client, /reducedMotion\.matches/);
 	// The stage owns every gesture so iOS never zooms the page; 48px buttons
 	assert.match(css, /\.lightbox-stage \{[^}]*touch-action: none;/);
 	assert.match(css, /\.lightbox-button \{[^}]*width: --spacing\(12\);\n {2}height: --spacing\(12\);/);
+	// Opaque viewer; stable plates; captions 16px on phones; touch credits 48px; badge visible on touch
+	assert.match(css, /background: rgb\(10 9 8 \/ var\(--lightbox-fade\)\);/);
+	assert.match(css, /--lightbox-plate: rgb\(10 9 8 \/ 0\.72\);/);
+	assert.match(css, /\.lightbox-caption \{[^}]*font-size: var\(--text-base\);/);
+	assert.match(css, /@media \(pointer: coarse\) \{\n {2}\.lightbox-credit \{\n {4}display: flex;\n {4}align-items: center;\n {4}width: fit-content;\n {4}min-height: --spacing\(12\);/);
+	assert.match(css, /@media \(pointer: coarse\) \{\n {4}\.figure-zoom-icon \{\n {6}opacity: 1;/);
+	assert.match(css, /env\(safe-area-inset-left\)/);
 	assert.match(skill, /`zoom=\{false\}` only for logos and small marks\./);
 });

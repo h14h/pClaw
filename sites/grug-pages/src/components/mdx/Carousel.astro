@@ -298,6 +298,50 @@ const circle =
       );
       near.observe(this);
 
+      // A short touch or pen tap on a photo opens the viewer from here, not from `click`: iOS drops the click of a
+      // tap made while the strip is still snapping, and a slide that hasn't settled yet is still inert, so the tap
+      // lands on the strip. The tap resolves to the photo the finger landed on, settles the strip on it, and opens
+      // the viewer once (it ignores the click that may follow). Finger movement or pointercancel (a swipe) cancels.
+      // The photo under a point; a point in the gap between two moving photos counts for the nearer one.
+      const photoAt = (x: number, y: number) => {
+        let best = -1;
+        let bestDistance = Infinity;
+        slides.forEach((slide, i) => {
+          const frame = slide.querySelector(".figure-frame")?.getBoundingClientRect();
+          if (!frame || y < frame.top || y > frame.bottom) return;
+          const distance = x < frame.left ? frame.left - x : x > frame.right ? x - frame.right : 0;
+          if (distance < bestDistance) {
+            best = i;
+            bestDistance = distance;
+          }
+        });
+        return bestDistance <= 16 ? best : -1;
+      };
+      let photoTap: { id: number; x: number; y: number; slide: number; time: number } | null = null;
+      strip.addEventListener("pointerdown", (event) => {
+        if (event.pointerType === "mouse") return;
+        const slide = photoAt(event.clientX, event.clientY);
+        photoTap = slide >= 0 && slides[slide].querySelector("a[data-zoom]")
+          ? { id: event.pointerId, x: event.clientX, y: event.clientY, slide, time: performance.now() }
+          : null;
+      });
+      strip.addEventListener("pointermove", (event) => {
+        if (photoTap && event.pointerId === photoTap.id && Math.hypot(event.clientX - photoTap.x, event.clientY - photoTap.y) > 10) photoTap = null;
+      });
+      strip.addEventListener("pointercancel", () => (photoTap = null));
+      strip.addEventListener("pointerup", (event) => {
+        const tap = photoTap;
+        photoTap = null;
+        if (!tap || event.pointerId !== tap.id || performance.now() - tap.time > 500) return;
+        // The photo the finger landed on counts, even if the strip slid on under a still finger.
+        if (Math.hypot(event.clientX - tap.x, event.clientY - tap.y) > 10) return;
+        const link = slides[tap.slide].querySelector<HTMLAnchorElement>("a[data-zoom]");
+        const viewer = (window as unknown as { grugViewer?: { open: (link: Element, options: { tap: boolean }) => void } }).grugViewer;
+        if (!link || !viewer) return;
+        this.goTo?.(tap.slide);
+        viewer.open(link, { tap: true });
+      });
+
       this.goTo = (i: number) => {
         const to = Math.max(0, Math.min(last, i));
         strip.scrollTo({ left: offset(to), behavior: "instant" });
