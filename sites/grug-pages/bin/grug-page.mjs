@@ -395,7 +395,7 @@ import { Callout, StatGrid, Stat, Details, Sources, Figure } from "@components/m
 Lead with the answer.
 
 <Sources checked="${today}">
-1. [Source title](https://example.com) — checked ${today}
+1. [Source title, Publisher](https://example.com). What it supports, in a few words.
 </Sources>
 `;
 
