@@ -706,7 +706,7 @@ test("two-layer dark-mode Grug icon assets, adaptive favicon.svg, and grug-page 
 	assert.match(grugPageSkill, /report_progress/);
 	assert.match(grugPageSkill, /desktop\/mobile\/light\/dark/);
 	assert.match(grugPageSkill, /Building a comparison page for you/);
-	assert.match(grugPageSkill, /One fact, one home/);
+	assert.match(readFileSync(new URL("../bots/grug/skills/grug-page/EDITORIAL.md", import.meta.url), "utf8"), /one fact one home|Same fact twice: keep the best home/);
 	assert.match(grugPageSkill, /400–900 words/);
 	assert.match(grugPageSkill, /1,200 words/);
 	assert.match(grugPageSkill, /grug-page list/);
@@ -933,7 +933,7 @@ test("grug-pages Iteration 3 table polish: smart sticky entity col, content-driv
 	);
 
 	// SKILL.md forbids standalone Rank/# column 1 in future tables
-	assert.match(grugPageSkill, /Never use a standalone `Rank` or `#` column as Column 1/);
+	assert.match(readFileSync(new URL("../bots/grug/skills/grug-page/EDITORIAL.md", import.meta.url), "utf8"), /The name goes in column 1 \("1\. Oslo S → Myrdal"\); no standalone Rank column\./);
 });
 
 test("grug-pages Iteration 4 tables: real row headers, unbroken header labels, seam-free sticky pair, and short-heading rule", () => {
@@ -965,7 +965,7 @@ test("grug-pages Iteration 4 tables: real row headers, unbroken header labels, s
 	assert.doesNotMatch(baseLayout, /offsetWidth/);
 	assert.match(globalCss, /td:nth-child\(2\)\):not\(\.not-prose, \.not-prose \*\)::before \{[^}]*left: -1px;[^}]*background-color: inherit;/);
 
-	assert.match(grugPageSkill, /Keep column headings short \(1–2 words\)/);
+	assert.match(readFileSync(new URL("../bots/grug/skills/grug-page/EDITORIAL.md", import.meta.url), "utf8"), /headings of 1–2 words \(under 14 characters\)/);
 });
 
 test("grug-pages table heading planner stays linear on long imported headings and keeps hyphenated words whole", () => {
@@ -1382,7 +1382,7 @@ test("grug-pages Carousel: stacked without JS, one settled slide with JS, lazy s
 	assert.match(component, /strip\.addEventListener\("pointercancel", \(\) => \(photoTap = null\)\);/);
 	assert.match(component, /this\.goTo\?\.\(tap\.slide\);\n\s*viewer\.open\(link, \{ tap: true \}\);/);
 	assert.ok(skill.includes(CAROUSEL_TOO_MANY));
-	assert.match(skill, /Carousel caption: one sentence, under 100 characters\. Put route advice in section text\./);
+	assert.match(readFileSync(new URL("../bots/grug/skills/grug-page/EDITORIAL.md", import.meta.url), "utf8"), /One sentence, under 100 characters, one job/);
 	assert.match(skill, /Never write page-local components for UI the template owns/);
 });
 
@@ -1614,7 +1614,7 @@ test("grug-pages tables: row headers and number-unit spacing at build time, comp
 	assert.match(compact, /:not\(:last-child\) \{\n {6}padding-right: --spacing\(2\);/);
 	assert.match(compact, /overflow-wrap: normal;\n {6}word-break: normal;/);
 	assert.match(compact, /\[data-scrollable="true"\] :is\(thead th, td, tbody th\):first-child \{\n {6}min-width: 8rem;/);
-	assert.match(skill, /Wrap short summary tables in `<Table compact>`/);
+	assert.match(skill, /`<Table compact>` around a Markdown table \(blank lines around the table inside\) for short summary tables that must fit phones/);
 });
 
 test("grug-pages report: answer-first opening, Contents with nested legs and Sources, skip link and focus on jumps", () => {
@@ -1690,9 +1690,10 @@ test("grug-pages report: answer-first opening, Contents with nested legs and Sou
 	// priority: the opening photo loads first
 	assert.match(figure, /const loading = priority \? "eager" : "lazy";/);
 	assert.match(figure, /const fetchpriority = priority \? "high" : undefined;/);
-	assert.match(skill, /## Screen one: answer first/);
-	assert.match(skill, /Give that one `<Figure>` `priority`/);
-	assert.match(skill, /`summary` stands alone\. It becomes share card text/);
-	assert.match(skill, /Do not list photo credits again in `<Sources>`/);
+	const editorial = readFileSync(new URL("../bots/grug/skills/grug-page/EDITORIAL.md", import.meta.url), "utf8");
+	assert.match(editorial, /\| Lead paragraph \| What it is and how it works, in 2–4 sentences\. First thing in the body\./);
+	assert.match(editorial, /The opening photo high on screen one gets `priority`\. Only one\./);
+	assert.match(editorial, /Share card text: route or subject, size, answer\. Under 160 chars\./);
+	assert.match(editorial, /Never repeat photo credits in Sources\./);
 });
 

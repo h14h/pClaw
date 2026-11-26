@@ -21,18 +21,9 @@ Do **not** build a page for single-fact lookups, quick price/availability checks
 - If a page on the same topic or target already exists (or the prompt names an existing `<slug>`), **edit that existing `~/work/pages/<slug>/index.mdx` in place** (set `updated: "YYYY-MM-DD"` in frontmatter), re-run `grug-page polish <slug>`, rebuild, and re-verify.
 - **Never** create a duplicate slug for the same topic.
 
-## Brevity and zero-repetition rules
+## Editorial rules: read EDITORIAL.md first
 
-- **One fact, one home (strict zero-repetition):** If a figure, price, or spec is in `<StatGrid>` or a comparison table, do **not** re-narrate it in prose paragraphs below. Use prose strictly for verdicts, tradeoffs, and non-obvious caveats.
-- **Brevity target:** Aim for **~400–900 words** for comparisons and explainers (max **~1,200 words** for multi-claim fact-checks).
-- **Hide secondary detail:** Push raw plan IDs, methodology notes, edge-case breakdowns, and supporting tables into `<Details summary="...">` accordions so the main flow stays crisp and scannable.
-
-## Screen one: answer first
-
-- Verdict or recommendation goes in `subtitle` and in first paragraph. Reader gets answer on first screen, no scrolling.
-- Nothing before answer: no hero photo, no `<StatGrid>`, no table above lead. Photo or stats come after.
-- `summary` stands alone. It becomes share card text: say what page is and its answer, no "this page", no "see below".
-- Opening photo still on first screen? Give that one `<Figure>` `priority` so it loads first. Only one per page; never below fold.
+How the page reads lives in one place: `EDITORIAL.md`, next to this file (`~/.config/muse/skills/grug-page/EDITORIAL.md`). Read it before drafting. It covers page anatomy (subtitle = verdict, lead first, stats with scope notes, one fact one home), claim precision, captions and credits, tables, callouts, voice, and the self-check to answer before building. This file covers commands and workflow.
 
 ## Directory layout
 
@@ -82,11 +73,10 @@ import { Callout, StatGrid, Stat, Details, Sources, Tabs, Figure, Carousel } fro
 - `<Details summary="Methodology and assumptions" open={false}>...</Details>` — collapsible secondary detail.
 - `<Figure src="img/3f9a1c2b7d4e.jpg" alt="..." caption="..." credit="..." href="..." [background="paper"] [zoom={false}] [priority] />` — a real image saved with `grug-page image` (see Images below). Never hand-write `src`; paste the line the command prints. Readers tap any Figure to open full screen: zoom, pan, panoramas big. `zoom={false}` only for logos and small marks. `priority` only for an opening photo on the first screen.
 - `<Carousel label="Leg 2 photos: Myrdal to Flåm">` wrapping 3–6 `<Figure />` lines — swipeable photo strip (see Carousels below). No `client:load`.
-- `<Sources checked="2026-11-24">` wrapping a numbered Markdown list — always include at the bottom. One line per source: `1. [Title, Publisher](url). What it supports.` Link only title and publisher; the note after the link is plain text, a few words (`Route, season, luggage, connections.`). `checked` is the date you last opened every link; re-check all, not one.
-- Standard Markdown tables work out of the box (automatically wrapped for mobile horizontal scroll with `tabular-nums`).
-- **One table, one job.** Route or summary table: short cells only (e.g. `Leg | Mode | Time`). What you see, tips, and why go in each section, not in a table cell. Wrap short summary tables in `<Table compact>` (blank lines around the Markdown table inside) so they fit phones; add `Table` to the import.
-- **Never use a standalone `Rank` or `#` column as Column 1** — put the identifying name (Provider, Option, Site, Scenario) in Column 1 (e.g. `1. GFiber Webpass`) so future tables are naturally compact and self-identifying.
-- **Keep column headings short (1–2 words)**, like `Rate Field`, `All districts`, `City share`, `First year`. Put site prefixes (`A:`/`B:`), units, and bases such as "21.5%" in a sentence right above or below the table, never in the heading. Long headings wrap and widen the table on phones.
+- `<Sources checked="2026-11-24">` wrapping a numbered Markdown list, one line per source: `1. [Title, Publisher](url). What it supports.` Always at the bottom.
+- Standard Markdown tables work out of the box (wrapped for mobile horizontal scroll, `tabular-nums`, row headers).
+- `<Table compact>` around a Markdown table (blank lines around the table inside) for short summary tables that must fit phones; add `Table` to the import.
+- What goes in each of these, and what never does: `EDITORIAL.md`.
 
 ## Images
 
@@ -112,8 +102,7 @@ Real images make pages much better when they show something words can't: the pla
 - Use up to three carousels per report. Keep them where several views explain something a single photo cannot. For other sections, choose one representative photo or omit it.
 - 3–6 genuinely different views of one place or thing. Never filler. Same view twice: cut one.
 - Every slide: verified, relevant photo saved with `grug-page image`, real alt, credit with link. Same checks as single images.
-- Carousel caption: one sentence, under 100 characters. Put route advice in section text.
-- Credit stays on image (`credit` + `href`). Do not list photo credits again in `<Sources>`; Sources is for facts.
+- Captions and credits follow `EDITORIAL.md` (Images): standalone, one sentence under 100 characters, creator + license + link on the image, never in Sources.
 - Only `<Figure />` lines inside. `label` says what slides show, for screen readers.
   ```mdx
   <Carousel label="Nærøyfjord from the boat">
@@ -130,24 +119,32 @@ Real images make pages much better when they show something words can't: the pla
 - Every fact, price, spec, date, and URL must come from a source you actually read during this job.
 - State check dates for prices, availability, and anything that changes.
 - Mark anything unconfirmed explicitly with `<Callout type="warn" title="Not verified">`.
+- Quote each claim at the scope its source states (`EDITORIAL.md`, Claim precision).
 - Never load external scripts, stylesheets, fonts, iframes, or remote image URLs (`grug-page build` rejects them and production CSP blocks them). Save images with `grug-page image` instead.
 - Never make network calls from Svelte islands (`connect-src 'none'` in production CSP).
 - Never put secrets, tokens, or unrelated private details on a page.
 
-## Required 4-step workflow
+## Required workflow
 
-1. **Check existing pages and write/edit factual draft**: Run `grug-page list` first. If a page on the topic already exists (or the prompt specifies an existing slug), edit `~/work/pages/<slug>/index.mdx` in place (updating `updated: "YYYY-MM-DD"`). Otherwise scaffold with `grug-page init <slug> --title "..."`. Keep the draft tight (~400–900w; max ~1,200w for multi-claim fact-checks), zero-repetition across `StatGrid`/tables/prose, with `<Details>` for raw IDs/methodology, `<Sources>`, and any custom Svelte 5 island in `components/`.
+1. **Check existing pages and write/edit factual draft**: Run `grug-page list` first. If a page on the topic already exists (or the prompt specifies an existing slug), edit `~/work/pages/<slug>/index.mdx` in place (updating `updated: "YYYY-MM-DD"`). Otherwise scaffold with `grug-page init <slug> --title "..."`. Draft to `EDITORIAL.md`: anatomy in order, one fact one home, ~400–900 words (max ~1,200 words for multi-claim fact-checks), `<Details>` for raw IDs/methodology, `<Sources>`, and any custom Svelte 5 island in `components/`. Answer its self-check before moving on.
 2. **Run two-stage editorial polish**:
    ```bash
    grug-page polish <slug>
    ```
    This runs fresh subagent passes (`unslop` then `ultracave`) on a staged `.polish-stage.mdx` copy while preserving `.draft.mdx` and `.unslop.mdx` backups and verifying frontmatter/imports/MDX integrity (leaving `index.mdx` untouched on any error or timeout).
-3. **Build and validate**:
+3. **Run the editorial review** (after polish, so it also catches anything polish broke):
    ```bash
+   grug-page review <slug>
+   ```
+   A fresh reviewer reads the polished page against `EDITORIAL.md`, spot-checks the riskiest claims against their cited URLs, and prints numbered `MUST FIX` and `NICE TO FIX` findings. It never edits the page.
+4. **Fix every MUST FIX yourself** in `index.mdx`, and NICE TO FIX where cheap. Fix from your sources only: never invent a fact, number, date or URL to satisfy a finding. If a claim can't be supported, cut it or mark it `<Callout type="warn" title="Not verified">`. Don't re-run polish.
+5. **Lint, build and validate**:
+   ```bash
+   grug-page lint <slug>
    grug-page build <slug>
    ```
-   Syncs `~/work/pages/` into `~/site`, runs `astro build` with the user's base path, checks for external asset leaks and size limits, and prints `BUILT <slug> -> ...`.
-4. **Visually inspect with exact-parity local preview**:
+   `lint` prints `WARN` lines for the mechanical rules in `EDITORIAL.md` (lead first, captions, credits, stat notes, summary length, table headings, Sources links and dates) and carousel fit. Fix each one or have a reason not to. `build` repeats them, syncs `~/work/pages/` into `~/site`, runs `astro build` with the user's base path, checks for external asset leaks and size limits, and prints `BUILT <slug> -> ...`.
+6. **Visually inspect with exact-parity local preview**:
    ```bash
    grug-page preview <slug> --daemon
    ```
@@ -163,8 +160,8 @@ Real images make pages much better when they show something words can't: the pla
      # agent-browser --session "$S" close
      grug-page preview-stop
      ```
-5. **Report back**: Your final response is only `Built slug: <slug>`, `TL;DR: <headline verdict or number, under 20 words>`, and `Decision needed: <under 20 words>` if the user must act. No breakdown, lists, or sources: the page holds them, and the front agent shares just the link and TL;DR.
+7. **Report back**: Your final response is only `Built slug: <slug>`, `TL;DR: <headline verdict or number, under 20 words>`, and `Decision needed: <under 20 words>` if the user must act. No breakdown, lists, or sources: the page holds them, and the front agent shares just the link and TL;DR.
 
 ## Progress updates (keep internal steps invisible)
 
-Never mention internal page-building or verification steps (`grug-page`, `polish`, `unslop`, `ultracave`, Astro, MDX, `preview`, `agent-browser`, or checking desktop/mobile/light/dark/console/CSP) in `report_progress` or any user-facing status updates. At most send one plain user-facing progress note when switching from research to building the page (e.g. `"Building a comparison page for you"`), then stay quiet through polish, build, and visual checks until returning the final slug.
+Never mention internal page-building or verification steps (`grug-page`, `polish`, `review`, `lint`, `unslop`, `ultracave`, Astro, MDX, `preview`, `agent-browser`, or checking desktop/mobile/light/dark/console/CSP) in `report_progress` or any user-facing status updates. At most send one plain user-facing progress note when switching from research to building the page (e.g. `"Building a comparison page for you"`), then stay quiet through polish, review, fixes, build, and visual checks until returning the final slug.

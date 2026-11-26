@@ -22,6 +22,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { figureTags, lintCarousels } from "../lib/carousel.mjs";
 import { fetchImage } from "../lib/fetch-image.mjs";
+import { lintPage } from "../lib/page-lint.mjs";
 import { createStaticHandler } from "../lib/static-handler.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -33,6 +34,7 @@ const MAX_DIST_BYTES = 25 * 1024 * 1024;
 const DEFAULT_SITE_URL = "https://grug.h14h.com";
 const DEFAULT_POLISH_MODEL = "muse-wonder-full-1.0";
 const DEFAULT_POLISH_TIMEOUT_MS = 180_000;
+const DEFAULT_REVIEW_TIMEOUT_MS = 180_000;
 const DEFAULT_PREVIEW_STATE = "/tmp/grug-page-preview.json";
 
 const EXTERNAL_HTML_PATTERNS = [
@@ -111,6 +113,10 @@ function loadConfig() {
       ? rawPolishTimeout
       : DEFAULT_POLISH_TIMEOUT_MS;
 
+  const rawReviewTimeout = Number(process.env.GRUG_REVIEW_TIMEOUT_MS || fileCfg.reviewTimeoutMs || DEFAULT_REVIEW_TIMEOUT_MS);
+  const reviewTimeoutMs =
+    Number.isFinite(rawReviewTimeout) && rawReviewTimeout > 0 ? rawReviewTimeout : DEFAULT_REVIEW_TIMEOUT_MS;
+
   const skillsDir = expandHome(
     process.env.GRUG_SKILLS_DIR || fileCfg.skillsDir || join(homedir(), ".config", "muse", "skills"),
   );
@@ -124,6 +130,7 @@ function loadConfig() {
     museBin,
     polishModel,
     polishTimeoutMs,
+    reviewTimeoutMs,
     skillsDir,
   };
 }
@@ -275,18 +282,18 @@ function countStats(text) {
   return { bytes, words };
 }
 
-function resolveSkillFile(cfg, name) {
+function resolveSkillFile(cfg, name, file = "SKILL.md") {
   const candidates = [
-    join(cfg.skillsDir, name, "SKILL.md"),
-    join(homedir(), ".config", "muse", "skills", name, "SKILL.md"),
-    join(homedir(), ".local", "share", "muse", "skills", name, "SKILL.md"),
-    resolve(TEMPLATE_ROOT, "..", "..", "bots", "grug", "skills", name, "SKILL.md"),
+    join(cfg.skillsDir, name, file),
+    join(homedir(), ".config", "muse", "skills", name, file),
+    join(homedir(), ".local", "share", "muse", "skills", name, file),
+    resolve(TEMPLATE_ROOT, "..", "..", "bots", "grug", "skills", name, file),
   ];
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate;
   }
   fail(
-    `Could not find ${name}/SKILL.md. Checked:\n${candidates.map((c) => `  - ${c}`).join("\n")}`,
+    `Could not find ${name}/${file}. Checked:\n${candidates.map((c) => `  - ${c}`).join("\n")}`,
   );
 }
 
@@ -344,6 +351,86 @@ function runMusePolishStage({ cfg, stageName, skillPath, targetFile, instruction
       const reason = result.signal ? `terminated by signal ${result.signal}` : `exited with code ${result.status}`;
       throw new Error(`Stage "${stageName}" ${reason}${detail ? `:\n${detail}` : ""}`);
     }
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Editorial review: a fresh one-shot subagent reads the (polished) page against EDITORIAL.md, spot-checks the
+ * riskiest claims against their cited URLs, and prints numbered MUST FIX / NICE TO FIX findings. It works on a
+ * read-only copy in a temp dir, so it can't change the page. A timeout or crash prints a REVIEW SKIPPED line and
+ * exits 0, so the page job carries on to lint and build.
+ */
+function cmdReview(cfg, args) {
+  const slug = args.find((a) => !a.startsWith("-"));
+  validateSlug(slug);
+  const indexPath = join(cfg.pagesDir, slug, "index.mdx");
+  if (!existsSync(indexPath)) fail(`Page not found: ${indexPath}`);
+  const editorial = readFileSync(resolveSkillFile(cfg, "grug-page", "EDITORIAL.md"), "utf8").trim();
+  const pageText = readFileSync(indexPath, "utf8");
+  const lint = lintPage(pageText);
+
+  const prompt = [
+    `You are the editorial reviewer for one grug page ("${slug}"). The page is page.mdx in the current directory.`,
+    "Your rubric is EDITORIAL.md, below. Review only; do not edit, create or delete any file.",
+    "--- BEGIN EDITORIAL.md ---",
+    editorial,
+    "--- END EDITORIAL.md ---",
+    "",
+    "How to review:",
+    "1. Read page.mdx once, top to bottom, as the reader would: frontmatter (title, subtitle, summary), lead, stats, table, sections, practical tips, Sources.",
+    "2. Answer EDITORIAL.md's self-check for this page. Look hardest at: the subtitle giving a verdict, facts said twice across subtitle/lead/stats/table/sections, numbers without their scope or date, captions that lean on page order, and sources whose note claims more than the source says.",
+    "3. Spot-check the 2 or 3 riskiest factual claims (prices, durations, dates, superlatives, \"from\"/\"up to\" figures) against the URL the page cites for them, using your web fetch tool. Quote what the source actually says. If you can't fetch it, say so; don't guess.",
+    lint.length ? `4. Lint already flags these; repeat one only if it matters to the reader:\n${lint.map((w) => `   - ${w}`).join("\n")}` : "4. Lint flags nothing mechanical.",
+    "",
+    "Rules: findings must be specific (quote the words, name the block) and fixable from facts already on the page or quoted from a source. Never suggest adding facts the page doesn't have. Skip layout and styling; the template owns those.",
+    "",
+    "Reply with exactly this plain-text shape and nothing else:",
+    "MUST FIX",
+    "1. <block>: \"<quoted words>\" <what is wrong>. Fix: <the change>.",
+    "(at most 8; write (none) if nothing must change)",
+    "NICE TO FIX",
+    "1. ...",
+    "(at most 6; (none) if nothing)",
+    "SPOT CHECKS",
+    "- <claim> | <url> | supported / not supported / changed: <what the source says>",
+  ].join("\n");
+
+  const tmpDir = mkdtempSync(join(tmpdir(), "grug-review-"));
+  const started = Date.now();
+  try {
+    const copy = join(tmpDir, "page.mdx");
+    writeFileSync(copy, pageText, { encoding: "utf8", mode: 0o444 });
+    const promptFile = join(tmpDir, ".prompt.md");
+    writeFileSync(promptFile, prompt, "utf8");
+    const result = spawnSync(
+      cfg.museBin,
+      [
+        "exec",
+        "--disable-sandbox",
+        "--disable-approval",
+        "--disable-request-user-input",
+        "--model",
+        cfg.polishModel,
+        "--reasoning-effort",
+        "medium",
+        "--prompt-file",
+        promptFile,
+      ],
+      { cwd: tmpDir, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", timeout: cfg.reviewTimeoutMs },
+    );
+    const seconds = Math.round((Date.now() - started) / 1000);
+    if (result.error || result.status !== 0) {
+      const why = result.error?.code === "ETIMEDOUT" ? `timed out after ${Math.round(cfg.reviewTimeoutMs / 1000)}s` : result.error ? result.error.message : `exited ${result.status}`;
+      process.stdout.write(`REVIEW SKIPPED ${slug}: ${why}. Self-check against EDITORIAL.md, then lint and build.\n`);
+      return;
+    }
+    if (readFileSync(indexPath, "utf8") !== pageText) {
+      process.stderr.write(`WARN ${slug}: index.mdx changed during review (not by the reviewer, which reads a copy).\n`);
+    }
+    const findings = (result.stdout || "").trim();
+    process.stdout.write(`REVIEW ${slug} (${seconds}s)\n${findings || "MUST FIX\n(none)"}\n`);
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -683,7 +770,8 @@ async function pageImageSizes(pageDir, body) {
 }
 
 /**
- * Non-blocking advice: carousel slide counts, carousels per page, and photos that fill too little of the frame.
+ * Non-blocking advice: the editorial rules a regex can check (lib/page-lint.mjs, the mechanical half of
+ * EDITORIAL.md), then carousel slide counts, carousels per page, and photos that fill too little of the frame.
  * Returns the warning count and the carousels whose photo fit it checked ("<slug>\n<label>"), which the build
  * passes on so <Carousel> repeats nothing the lint already said, and still speaks up about anything it couldn't check.
  */
@@ -696,7 +784,7 @@ async function warnPageLint(pagesDir, slugs) {
     const body = readFileSync(file, "utf8");
     const sizeOf = await pageImageSizes(dirname(file) === pagesDir ? join(pagesDir, slug) : dirname(file), body);
     const labels = [];
-    for (const warning of lintCarousels(body, { sizeOf, covered: labels })) {
+    for (const warning of [...lintPage(body), ...lintCarousels(body, { sizeOf, covered: labels })]) {
       process.stderr.write(`WARN ${slug}: ${warning}\n`);
       count += 1;
     }
@@ -1161,8 +1249,9 @@ function printHelp() {
 Commands:
   init <slug> [--title "..."]         Scaffold ~/work/pages/<slug>/index.mdx
   polish <slug>                       Two-stage unslop -> ultracave editing pass
+  review <slug>                       Fresh editorial review against EDITORIAL.md (prints findings, never edits)
   build [slug]                        Sync pages into ~/site and run astro build (runs lint first)
-  lint [slug]                         Check carousels: slide counts, carousels per page, photo fit
+  lint [slug]                         Editorial checks (EDITORIAL.md) and carousel slide counts and photo fit
   preview [slug] [--port 0] [--daemon] Serve dist/ locally with production CSP
   preview-stop                        Stop daemon preview server
   list                                List pages in ~/work/pages/
@@ -1185,6 +1274,9 @@ async function main() {
   switch (cmd) {
     case "init":
       cmdInit(cfg, rest);
+      break;
+    case "review":
+      cmdReview(cfg, rest);
       break;
     case "polish":
       cmdPolish(cfg, rest);
