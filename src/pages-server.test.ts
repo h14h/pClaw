@@ -24,6 +24,7 @@ import { createSshSandbox, SandboxManager, validateStagedPages } from "./sandbox
 import { UserRegistry } from "./users.ts";
 import { fetchImage, isPrivateAddress, sniffImageType } from "../sites/grug-pages/lib/fetch-image.mjs";
 import { HEADING_ONE_LINE_MAX, planTableHeading, splitKeepingHyphenated } from "../sites/grug-pages/lib/table-heading.mjs";
+import { identityColumn, keepUnitsTogether, withRowHeaders } from "../sites/grug-pages/lib/table-rows.mjs";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -1091,7 +1092,7 @@ test("grug-pages Figure: portraits fit on screen, credits are 48px touch targets
 	// Portrait height cap, left-aligned, image stays width:100%/height:auto, sizes=auto with a responsive fallback
 	assert.match(figure, /--figure-ratio: \$\{r\}; width: min\(100%, calc\(min\(65svh, 34rem\) \* var\(--figure-ratio\)\)\);/);
 	assert.match(figure, /block h-auto w-full/);
-	assert.match(figure, /\["auto", \.\.\.fallback\]\.join\(", "\)/);
+	assert.match(figure, /\(priority \? fallback : \["auto", \.\.\.fallback\]\)\.join\(", "\)/);
 	// Slot matches the 20px / 32px gutters and the 44rem column
 	assert.match(figure, /"\(min-width: 48rem\) 44rem", "\(min-width: 40rem\) calc\(100vw - 4rem\)", "calc\(100vw - 2\.5rem\)"/);
 
@@ -1381,7 +1382,7 @@ test("grug-pages Carousel: stacked without JS, one settled slide with JS, lazy s
 	assert.match(component, /strip\.addEventListener\("pointercancel", \(\) => \(photoTap = null\)\);/);
 	assert.match(component, /this\.goTo\?\.\(tap\.slide\);\n\s*viewer\.open\(link, \{ tap: true \}\);/);
 	assert.ok(skill.includes(CAROUSEL_TOO_MANY));
-	assert.match(skill, /One sentence, up to 100 characters for carousel captions\. Put route advice in the section text\./);
+	assert.match(skill, /Carousel caption: one sentence, under 100 characters\. Put route advice in section text\./);
 	assert.match(skill, /Never write page-local components for UI the template owns/);
 });
 
@@ -1493,10 +1494,13 @@ test("grug-pages photo viewer: fit, panorama and tall openings, bounded zoom and
 	assert.match(figure, /"data-zoom-srcset": zoomSrcset/);
 	assert.match(figure, /<span data-caption>/);
 	assert.match(figure, /data-credit\n\s+class="figure-credit/);
-	// One classic inline script per report page: tested math + wiring, no imports or external files
-	assert.match(layout, /<script is:inline set:html=\{lightboxScript\} \/>/);
-	assert.match(layout, /stripComments\(lightboxMath\.replace\(\/\^export \/gm, ""\)\)/);
-	assert.doesNotMatch(client, /\bimport\b|\bexport\b|fetch\(|https?:\/\//);
+	// One cacheable same-origin module, loaded by Figure (so only pages with photos get it): tested math + wiring
+	assert.match(figure, /<script>\n\s*\/\/[^\n]*\n\s*import "\.\.\/\.\.\/\.\.\/lib\/lightbox-client\.js";\n<\/script>/);
+	assert.doesNotMatch(layout, /lightbox/i);
+	assert.deepEqual([...client.matchAll(/\bimport\b[\s\S]*?from "([^"]+)"/g)].map((m) => m[1]), ["./lightbox.mjs"]);
+	assert.doesNotMatch(client, /\bexport\b|fetch\(|https?:\/\//);
+	// Before the first photo shows, the label, caption and counter follow the requested slide
+	assert.match(client, /if \(blank\(\)\) \{\n\s*ui\.dialog\.setAttribute\("aria-label", altOf\(link\) \|\| "Photo"\);\n\s*setCaption\(link\.closest\("figure"\)\);\n\s*if \(items\.length > 1\) ui\.counter\.textContent = `\$\{i \+ 1\} \/ \$\{items\.length\}`;/);
 	// Native modal dialog; Esc/X/backdrop/swipe-down close; focus and scroll come back; keyboard and wheel zoom
 	assert.match(client, /ui\.dialog\.showModal\(\);/);
 	assert.match(client, /button\("close", "Close"\)/);
@@ -1573,3 +1577,105 @@ test("grug-pages photo viewer: fit, panorama and tall openings, bounded zoom and
 	assert.match(skill, /`zoom=\{false\}` only for logos and small marks\./);
 	assert.match(skill, /Panorama \(2:1 or wider\)\? Readers open it full screen to pan, so save a big copy/);
 });
+
+test("grug-pages tables: row headers and number-unit spacing at build time, compact opt-in, swipe/scroll cue", () => {
+	const table = `<thead>\n<tr>\n<th>Leg</th>\n<th>Mode</th>\n<th align="right">Time</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>1. Oslo S → Myrdal</td>\n<td>Bergen Railway (Vy)</td>\n<td align="right">~4 h 40 min</td>\n</tr>\n<tr>\n<td><a href="#x">2. Myrdal</a></td>\n<td>Train</td>\n<td>~1 hour, 20.2 km</td>\n</tr>\n</tbody>`;
+	const rows = withRowHeaders(table);
+	assert.match(rows, /<th scope="row">1\. Oslo S → Myrdal<\/th>/);
+	assert.match(rows, /<th scope="row"><a href="#x">2\. Myrdal<\/a><\/th>/);
+	assert.match(rows, /<td align="right">~4 h 40 min<\/td>/);
+	assert.equal(rows.match(/scope="row"/g)?.length, 2);
+	// Rank column first: the name in column 2 is the row header (same rule as the browser script)
+	const ranked = withRowHeaders("<thead><tr><th>#</th><th>Name</th><th>Score</th></tr></thead><tbody><tr><td>1</td><td>Alpha</td><td>9</td></tr></tbody>");
+	assert.match(ranked, /<td>1<\/td><th scope="row">Alpha<\/th><td>9<\/td>/);
+	assert.equal(identityColumn(["Leg", "Mode", "Time"], ["1. Oslo S", "2. Myrdal"], 3), 0);
+	assert.equal(identityColumn(["Rank", "Name", "Score"], ["1", "2"], 3), 1);
+	assert.equal(withRowHeaders("<tr><td>no body</td></tr>"), "<tr><td>no body</td></tr>");
+	// Numbers keep their units; list numbers keep their first word; tags and attributes are untouched
+	assert.equal(
+		keepUnitsTogether(`<td title="4 h">1. Oslo ~4 h 40 min, 20.2 km, 1,222 m) NOK 2,698 or 2,698 NOK, 1 more</td>`),
+		`<td title="4 h">1.&nbsp;Oslo ~4&nbsp;h&nbsp;40&nbsp;min, 20.2&nbsp;km, 1,222&nbsp;m) NOK&nbsp;2,698 or 2,698&nbsp;NOK, 1 more</td>`,
+	);
+
+	const component = readFileSync(new URL("../sites/grug-pages/src/components/mdx/Table.astro", import.meta.url), "utf8");
+	const css = readFileSync(new URL("../sites/grug-pages/src/styles/global.css", import.meta.url), "utf8");
+	const index = readFileSync(new URL("../sites/grug-pages/src/components/mdx/index.ts", import.meta.url), "utf8");
+	const skill = readFileSync(new URL("../bots/grug/skills/grug-page/SKILL.md", import.meta.url), "utf8");
+	assert.match(component, /keepUnitsTogether\(withRowHeaders\(await Astro\.slots\.render\("default"\)\)\)/);
+	assert.match(component, /<table \{\.\.\.props\} set:html=\{html\} \/>/);
+	assert.match(component, /<div class="table-compact">\n\s*<slot \/>/);
+	assert.match(component, /<span class="pointer-coarse:hidden">Scroll for more columns<\/span>\n\s*<span class="hidden pointer-coarse:inline">Swipe for more columns<\/span>/);
+	assert.match(component, /table-scroll-hint [^"]*text-sm\/5/);
+	assert.match(index, /export \{ default as Table \} from "\.\/Table\.astro";/);
+	// Compact on phones: 8px cells, no minimum width, wrapping only between words; pinned column keeps a usable width
+	const compact = css.slice(css.indexOf("/* <Table compact> on phones"));
+	assert.match(compact, /^[^]*?@media \(width < 40rem\) \{\n {4}\.prose \.table-compact \.table-block \.table-scroll-inner > table \{\n {6}min-width: 0;/);
+	assert.match(compact, /:not\(:first-child\) \{\n {6}padding-left: --spacing\(2\);/);
+	assert.match(compact, /:not\(:last-child\) \{\n {6}padding-right: --spacing\(2\);/);
+	assert.match(compact, /overflow-wrap: normal;\n {6}word-break: normal;/);
+	assert.match(compact, /\[data-scrollable="true"\] :is\(thead th, td, tbody th\):first-child \{\n {6}min-width: 8rem;/);
+	assert.match(skill, /Wrap short summary tables in `<Table compact>`/);
+});
+
+test("grug-pages report: answer-first opening, Contents with nested legs and Sources, skip link and focus on jumps", () => {
+	const report = readFileSync(new URL("../sites/grug-pages/src/layouts/ReportLayout.astro", import.meta.url), "utf8");
+	const base = readFileSync(new URL("../sites/grug-pages/src/layouts/BaseLayout.astro", import.meta.url), "utf8");
+	const statGrid = readFileSync(new URL("../sites/grug-pages/src/components/mdx/StatGrid.astro", import.meta.url), "utf8");
+	const stat = readFileSync(new URL("../sites/grug-pages/src/components/mdx/Stat.astro", import.meta.url), "utf8");
+	const sources = readFileSync(new URL("../sites/grug-pages/src/components/mdx/Sources.astro", import.meta.url), "utf8");
+	const details = readFileSync(new URL("../sites/grug-pages/src/components/mdx/Details.astro", import.meta.url), "utf8");
+	const figure = readFileSync(new URL("../sites/grug-pages/src/components/mdx/Figure.astro", import.meta.url), "utf8");
+	const css = readFileSync(new URL("../sites/grug-pages/src/styles/global.css", import.meta.url), "utf8");
+	const skill = readFileSync(new URL("../bots/grug/skills/grug-page/SKILL.md", import.meta.url), "utf8");
+
+	// Opening: 20px header padding and article gap on phones; tags are one muted line, not pills
+	assert.match(report, /<header class="border-b border-stone-950\/8 pb-5 sm:pb-7/);
+	assert.match(report, /<article class="prose mt-5 sm:mt-8">/);
+	assert.match(report, /<p class="mt-1\.5 text-sm\/5 text-pretty text-stone-500 dark:text-stone-400">\n\s*<span class="sr-only">Tags: <\/span>\{tags\.join\(", "\)\}/);
+	assert.doesNotMatch(report, /rounded-md bg-stone-950\/5 px-2/);
+	// Stats: two columns from a 20rem container (2×2 for four), 12/16px gaps, 20/28px values, dividers to match
+	assert.match(statGrid, /4: "@xs:grid-cols-2 @lg:grid-cols-4"/);
+	assert.match(statGrid, /grid grid-cols-1 gap-x-3 gap-y-4 @lg:gap-x-5/);
+	assert.match(stat, /<dd class="mt-1 text-xl\/7 font-semibold/);
+	assert.match(css, /@container \(width >= 20rem\) \{\n {4}\.stat-grid \.stat-item:nth-child\(2\) \{/);
+	// Contents: H2s with their H3s nested, plus the rendered Sources; shown at 3+ destinations or 6+ entries
+	assert.match(report, /const body = await Astro\.slots\.render\("default"\);/);
+	assert.match(report, /const sourcesTitle = \/<h2 id="sources-heading"/);
+	assert.match(report, /if \(sourcesTitle\) toc\.push\(\{ slug: "sources", text: sourcesTitle, children: \[\] \}\);/);
+	assert.match(report, /const showToc = toc\.length >= 3 \|\| tocEntries >= 6;/);
+	assert.match(report, /toc\.at\(-1\)!\.children\.push/);
+	assert.match(report, /-mx-2 flex min-h-12 items-center[^"]*sm:pointer-fine:min-h-0/);
+	assert.match(report, /<Fragment set:html=\{body\} \/>/);
+	assert.match(sources, /<section\n\s*id="sources"/);
+	// Skip link first in the body, to a focusable main; jumps take focus; Back to top focuses the title
+	assert.match(base, /<body id="top"[^>]*>\n\s*<a\n\s*href="#main-content"\n\s*data-jump/);
+	assert.match(base, /<main id="main-content" tabindex="-1"/);
+	assert.match(base, /closest\("a\[data-jump\]"\)/);
+	assert.match(base, /target\.focus\(\{ preventScroll: true \}\);/);
+	assert.match(report, /<h1 id="report-title" tabindex="-1"/);
+	assert.match(report, /href="#top"\n\s*data-jump="report-title"/);
+	assert.match(css, /:where\(main, section, h1, h2, h3, h4\)\[tabindex="-1"\]:focus \{\n {4}outline: none;/);
+	// 48px touch targets that don't move the layout
+	assert.match(base, /gap-2\.5 py-1 text-base\/6 pointer-coarse:-my-2 pointer-coarse:min-h-12/);
+	assert.match(base, /px-1 py-2 text-stone-600 pointer-coarse:-my-1 pointer-coarse:inline-flex pointer-coarse:min-h-12/);
+	assert.equal(report.match(/pointer-coarse:-my-2 pointer-coarse:inline-flex pointer-coarse:min-h-12 pointer-coarse:items-center/g)?.length, 2);
+	// Theme: storage failing never skips the system theme
+	assert.match(base, /let stored = null;\n\s*try \{\n\s*stored = localStorage\.getItem\("grug-theme"\);\n\s*\} catch \{\}\n\s*const dark =/);
+	// Sources: real heading sizes, readable markers, visible focus
+	assert.match(sources, /<h2 id="sources-heading" class="text-xl\/7 font-semibold[^"]*sm:text-2xl\/8/);
+	assert.match(sources, /\[&_li::marker\]:text-stone-600 dark:\[&_li::marker\]:text-stone-400/);
+	assert.match(sources, /\[&_a:focus-visible\]:outline-2 \[&_a:focus-visible\]:outline-offset-2 \[&_a:focus-visible\]:outline-accent/);
+	// Chevrons only animate when motion is welcome
+	for (const source of [report, details]) {
+		assert.match(source, /group-open:rotate-90 motion-safe:transition-transform/);
+		assert.doesNotMatch(source, /(?<!motion-safe:)transition-transform/);
+	}
+	// priority: the opening photo loads first
+	assert.match(figure, /const loading = priority \? "eager" : "lazy";/);
+	assert.match(figure, /const fetchpriority = priority \? "high" : undefined;/);
+	assert.match(skill, /## Screen one: answer first/);
+	assert.match(skill, /Give that one `<Figure>` `priority`/);
+	assert.match(skill, /`summary` stands alone\. It becomes share card text/);
+	assert.match(skill, /Do not list photo credits again in `<Sources>`/);
+});
+

@@ -64,17 +64,26 @@ const tableHeadingScript = `const grugTableHeading = (() => {\n${tableHeadingSou
     <link rel="preload" as="font" type="font/woff2" href={geistFontUrl} crossorigin />
     <script is:inline>
       (() => {
+        // Storage can be off (private modes, blocked site data); the system theme still decides first paint.
+        let stored = null;
         try {
-          const stored = localStorage.getItem("grug-theme");
-          const dark =
-            stored === "dark" ||
-            (stored !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
-          document.documentElement.classList.toggle("dark", dark);
+          stored = localStorage.getItem("grug-theme");
         } catch {}
+        const dark =
+          stored === "dark" ||
+          (stored !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.classList.toggle("dark", dark);
       })();
     </script>
   </head>
   <body id="top" class="min-h-dvh bg-paper font-sans text-stone-900 selection:bg-accent/15 dark:bg-obsidian dark:text-stone-200 dark:selection:bg-accent-dark/20">
+    <a
+      href="#main-content"
+      data-jump
+      class="print-hide sr-only z-50 rounded-md bg-paper px-4 py-3 text-base/6 font-medium text-stone-900 shadow-sm ring-1 ring-stone-950/10 focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:outline-2 focus:outline-offset-2 focus:outline-accent dark:bg-obsidian dark:text-stone-100 dark:ring-white/15 dark:focus:outline-accent-dark"
+    >
+      Skip to content
+    </a>
     <div class="isolate">
       <header class="print-hide border-b border-stone-950/8 dark:border-white/8">
         <div class="mx-auto flex max-w-3xl items-center justify-between gap-4 px-5 py-3.5 sm:px-8">
@@ -82,7 +91,7 @@ const tableHeadingScript = `const grugTableHeading = (() => {\n${tableHeadingSou
             href={homeHref}
             data-owner-nav="home"
             aria-label="Homepage"
-            class="inline-flex shrink-0 items-center gap-2.5 py-1 text-base/6 font-medium tracking-tight text-stone-900 hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:text-sm/5 dark:text-stone-100 dark:hover:text-accent-dark dark:focus-visible:outline-accent-dark"
+            class="inline-flex shrink-0 items-center gap-2.5 py-1 text-base/6 pointer-coarse:-my-2 pointer-coarse:min-h-12 font-medium tracking-tight text-stone-900 hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:text-sm/5 dark:text-stone-100 dark:hover:text-accent-dark dark:focus-visible:outline-accent-dark"
           >
             <GrugMark class="size-6 shrink-0" />
             <span>grug pages</span>
@@ -92,7 +101,7 @@ const tableHeadingScript = `const grugTableHeading = (() => {\n${tableHeadingSou
               <a
                 href={homeHref}
                 data-owner-nav="all"
-                class="px-1 py-2 text-stone-600 hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent dark:text-stone-400 dark:hover:text-stone-100 dark:focus-visible:outline-accent-dark"
+                class="px-1 py-2 text-stone-600 pointer-coarse:-my-1 pointer-coarse:inline-flex pointer-coarse:min-h-12 pointer-coarse:items-center hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent dark:text-stone-400 dark:hover:text-stone-100 dark:focus-visible:outline-accent-dark"
               >
                 All pages
               </a>
@@ -130,7 +139,7 @@ const tableHeadingScript = `const grugTableHeading = (() => {\n${tableHeadingSou
         </div>
       </header>
 
-      <main class="mx-auto max-w-3xl px-5 pt-8 pb-16 sm:px-8 sm:pt-12 sm:pb-24">
+      <main id="main-content" tabindex="-1" class="mx-auto max-w-3xl px-5 pt-8 pb-16 outline-none sm:px-8 sm:pt-12 sm:pb-24">
         <slot />
       </main>
     </div>
@@ -158,6 +167,20 @@ const tableHeadingScript = `const grugTableHeading = (() => {\n${tableHeadingSou
           link.removeAttribute("hidden");
         }
       })();
+    </script>
+    <script is:inline>
+      // In-page jumps (skip link, Contents, Back to top) take keyboard focus along with the scroll, so Tab and screen
+      // readers carry on from where the reader landed. a[data-jump="id"] focuses that element instead of the target.
+      document.addEventListener("click", (event) => {
+        const link = event.target instanceof Element ? event.target.closest("a[data-jump]") : null;
+        if (!link || event.defaultPrevented) return;
+        const target = document.getElementById(link.dataset.jump || decodeURIComponent(link.hash.slice(1)));
+        if (!target) return;
+        setTimeout(() => {
+          if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
+          target.focus({ preventScroll: true });
+        });
+      });
     </script>
     <p id="share-copy-status" class="sr-only" aria-live="polite" aria-atomic="true"></p>
     <script is:inline>

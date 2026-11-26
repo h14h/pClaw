@@ -1,22 +1,39 @@
 ---
-const props = Astro.props;
+/**
+ * Every markdown table renders through this (see `src/pages/[...slug].astro`): a scroll region with a sticky identity
+ * column. Row headers and number-unit spacing are fixed at build time (lib/table-rows.mjs), so they work without JS.
+ *
+ * `<Table compact>` around a markdown table opts it into the compact phone layout: tighter cells, no minimum width,
+ * text wrapping only between words. For short summary tables (Leg / Mode / Time), not for long prose cells.
+ */
+import { keepUnitsTogether, withRowHeaders } from "../../../lib/table-rows.mjs";
+
+interface Props {
+  compact?: boolean;
+  [attribute: string]: unknown;
+}
+
+const { compact = false, ...props } = Astro.props;
+const html = compact ? "" : keepUnitsTogether(withRowHeaders(await Astro.slots.render("default")));
 ---
 
-<div class="table-block my-6 flow-root">
-  <p
-    class="table-scroll-hint mb-1.5 items-center justify-end gap-1 font-mono text-xs tracking-wide text-stone-500 select-none dark:text-stone-400"
-    aria-hidden="true"
-  >
-    <span>Scroll horizontally to compare</span>
-    <span aria-hidden="true">&rarr;</span>
-  </p>
-  <div class="table-wrap relative -mx-5 sm:-mx-8">
-    <div class="table-scroll -my-1 overflow-x-auto">
-      <div class="table-scroll-inner inline-block min-w-full py-1 align-middle">
-        <table {...props}>
-          <slot />
-        </table>
+{compact ? (
+  <div class="table-compact">
+    <slot />
+  </div>
+) : (
+  <div class="table-block my-6 flow-root">
+    <p class="table-scroll-hint mb-1.5 items-center justify-end gap-1 text-sm/5 text-stone-500 select-none dark:text-stone-400" aria-hidden="true">
+      <span class="pointer-coarse:hidden">Scroll for more columns</span>
+      <span class="hidden pointer-coarse:inline">Swipe for more columns</span>
+      <span aria-hidden="true">&rarr;</span>
+    </p>
+    <div class="table-wrap relative -mx-5 sm:-mx-8">
+      <div class="table-scroll -my-1 overflow-x-auto">
+        <div class="table-scroll-inner inline-block min-w-full py-1 align-middle">
+          <table {...props} set:html={html} />
+        </div>
       </div>
     </div>
   </div>
-</div>
+)}

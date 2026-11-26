@@ -27,6 +27,13 @@ Do **not** build a page for single-fact lookups, quick price/availability checks
 - **Brevity target:** Aim for **~400–900 words** for comparisons and explainers (max **~1,200 words** for multi-claim fact-checks).
 - **Hide secondary detail:** Push raw plan IDs, methodology notes, edge-case breakdowns, and supporting tables into `<Details summary="...">` accordions so the main flow stays crisp and scannable.
 
+## Screen one: answer first
+
+- Verdict or recommendation goes in `subtitle` and in first paragraph. Reader gets answer on first screen, no scrolling.
+- Nothing before answer: no hero photo, no `<StatGrid>`, no table above lead. Photo or stats come after.
+- `summary` stands alone. It becomes share card text: say what page is and its answer, no "this page", no "see below".
+- Opening photo still on first screen? Give that one `<Figure>` `priority` so it loads first. Only one per page; never below fold.
+
 ## Directory layout
 
 Pages live in `~/work/pages/<slug>/` (slug: lowercase letters, digits, hyphens; reuse the existing slug when updating a page):
@@ -59,7 +66,7 @@ tags: ["hardware", "nas"]
 ---
 ```
 
-Required fields: `title`, `date` (`YYYY-MM-DD`), `summary`. Optional: `subtitle`, `updated` (`YYYY-MM-DD`), `tags` (string array). Pages with 4 or more `##` headings automatically get a Table of Contents.
+Required fields: `title`, `date` (`YYYY-MM-DD`), `summary`. Optional: `subtitle`, `updated` (`YYYY-MM-DD`), `tags` (string array). Pages with 3 or more main sections (`##` headings plus `<Sources>`) or 6 or more `##`/`###` headings automatically get Contents, `###` nested under their `##`.
 
 ## Built-in MDX components
 
@@ -73,10 +80,11 @@ import { Callout, StatGrid, Stat, Details, Sources, Tabs, Figure, Carousel } fro
 - `<StatGrid columns={3}><Stat label="Pick" value="Jonsbo N3" note="$150 at Amazon" />...</StatGrid>` — compact at-a-glance metrics (`columns`: `2`, `3`, or `4`).
 - `<Tabs client:load labels={["Option A", "Option B"]}><div>...</div><div>...</div></Tabs>` — interactive tabbed views (also accepts `tabs={[{ label, content }]}`). Always include `client:load` on Svelte islands (`Tabs` and any custom `components/*.svelte`).
 - `<Details summary="Methodology and assumptions" open={false}>...</Details>` — collapsible secondary detail.
-- `<Figure src="img/3f9a1c2b7d4e.jpg" alt="..." caption="..." credit="..." href="..." [background="paper"] [zoom={false}] />` — a real image saved with `grug-page image` (see Images below). Never hand-write `src`; paste the line the command prints. Readers tap any Figure to open full screen: zoom, pan, panoramas big. `zoom={false}` only for logos and small marks.
+- `<Figure src="img/3f9a1c2b7d4e.jpg" alt="..." caption="..." credit="..." href="..." [background="paper"] [zoom={false}] [priority] />` — a real image saved with `grug-page image` (see Images below). Never hand-write `src`; paste the line the command prints. Readers tap any Figure to open full screen: zoom, pan, panoramas big. `zoom={false}` only for logos and small marks. `priority` only for an opening photo on the first screen.
 - `<Carousel label="Leg 2 photos: Myrdal to Flåm">` wrapping 3–6 `<Figure />` lines — swipeable photo strip (see Carousels below). No `client:load`.
 - `<Sources checked="2026-11-24">` wrapping a numbered Markdown list of links — always include at the bottom.
 - Standard Markdown tables work out of the box (automatically wrapped for mobile horizontal scroll with `tabular-nums`).
+- **One table, one job.** Route or summary table: short cells only (e.g. `Leg | Mode | Time`). What you see, tips, and why go in each section, not in a table cell. Wrap short summary tables in `<Table compact>` (blank lines around the Markdown table inside) so they fit phones; add `Table` to the import.
 - **Never use a standalone `Rank` or `#` column as Column 1** — put the identifying name (Provider, Option, Site, Scenario) in Column 1 (e.g. `1. GFiber Webpass`) so future tables are naturally compact and self-identifying.
 - **Keep column headings short (1–2 words)**, like `Rate Field`, `All districts`, `City share`, `First year`. Put site prefixes (`A:`/`B:`), units, and bases such as "21.5%" in a sentence right above or below the table, never in the heading. Long headings wrap and widen the table on phones.
 
@@ -104,7 +112,8 @@ Real images make pages much better when they show something words can't: the pla
 - Use up to three carousels per report. Keep them where several views explain something a single photo cannot. For other sections, choose one representative photo or omit it.
 - 3–6 genuinely different views of one place or thing. Never filler. Same view twice: cut one.
 - Every slide: verified, relevant photo saved with `grug-page image`, real alt, credit with link. Same checks as single images.
-- One sentence, up to 100 characters for carousel captions. Put route advice in the section text.
+- Carousel caption: one sentence, under 100 characters. Put route advice in section text.
+- Credit stays on image (`credit` + `href`). Do not list photo credits again in `<Sources>`; Sources is for facts.
 - Only `<Figure />` lines inside. `label` says what slides show, for screen readers.
   ```mdx
   <Carousel label="Nærøyfjord from the boat">

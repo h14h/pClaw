@@ -1,11 +1,26 @@
-// Photo viewer for <Figure>s. Inlined once per report page by ReportLayout.astro, right after lib/lightbox.mjs
-// (whose functions it uses), as a classic script: no imports, no external files, CSP-safe.
+// Photo viewer for <Figure>s. Figure.astro loads it as a module script, so it is one cacheable same-origin file
+// (CSP-safe, script-src 'self') that only pages with a Figure download. The zoom/pan math is lib/lightbox.mjs.
 //
 // Every zoomable Figure is a link (a[data-zoom]) to its largest image, so without JS the browser's own viewer
 // opens it. With JS the click opens a full-screen <dialog>: the photo fit to screen (panoramas and tall shots open
 // large, to drag), Fit/Fill, zoom in/out/reset buttons, pinch, double-tap, ctrl+wheel and +/- keys, drag to pan
 // within bounds, and, for a carousel's slides, swipe / arrows / buttons between them. Closing returns to the page
 // where it was, with focus on the photo.
+import {
+  canPan,
+  clampView,
+  fillView,
+  fitView,
+  lockGesture,
+  openingView,
+  panBy,
+  pickSource,
+  releaseGesture,
+  scaleLimits,
+  toggleZoom,
+  zoomAt,
+} from "./lightbox.mjs";
+
 (() => {
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   const ICON = {
@@ -362,6 +377,13 @@
     setDisabled(ui.next, i === items.length - 1);
     if (i === showing) return setLoading(false);
     const link = items[i];
+    // Nothing on screen yet (the first photo is still loading, or failed): the label, caption and counter follow the
+    // requested slide at once, so they always agree with the loading state or error being shown.
+    if (blank()) {
+      ui.dialog.setAttribute("aria-label", altOf(link) || "Photo");
+      setCaption(link.closest("figure"));
+      if (items.length > 1) ui.counter.textContent = `${i + 1} / ${items.length}`;
+    }
     const apply = () => {
       if (token !== showToken || !ui.dialog.open) return;
       setLoading(false);

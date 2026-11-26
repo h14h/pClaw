@@ -17,9 +17,11 @@ interface Props {
   background?: "paper";
   /** Tap or click opens the full-screen viewer (zoom, pan). `zoom={false}` for logos and other small marks. */
   zoom?: boolean;
+  /** The opening image, on screen at first load: fetched first (eager, high priority) instead of lazily. */
+  priority?: boolean;
 }
 
-const { src, alt, caption, credit, href, background, zoom = true } = Astro.props;
+const { src, alt, caption, credit, href, background, zoom = true, priority = false } = Astro.props;
 
 const images = import.meta.glob<{ default: ImageMetadata }>(
   "/src/content/pages/*/img/*.{jpg,jpeg,png,webp,gif,avif}",
@@ -49,8 +51,11 @@ const fallback = portrait
       return `${media ?? ""}min(${size}, ${(34 * r).toFixed(2)}rem, ${(65 * r).toFixed(2)}vh)`;
     })
   : column;
-// `auto` lets supporting browsers pick for the rendered width (lazy images only); the rest is the fallback.
-const sizes = ["auto", ...fallback].join(", ");
+// `auto` lets supporting browsers pick for the rendered width (lazy images only); the rest is the fallback. A priority
+// image is eager, so it gets the plain list (and can be fetched before layout).
+const sizes = (priority ? fallback : ["auto", ...fallback]).join(", ");
+const loading = priority ? "eager" : "lazy";
+const fetchpriority = priority ? "high" : undefined;
 
 const widths = [480, 800, 1200, 1600].filter((w) => w < image.width);
 widths.push(Math.min(image.width, 1600));
@@ -101,7 +106,7 @@ const figureStyle = portrait
 <figure class="not-prose my-8" style={figureStyle} data-portrait={portrait ? "true" : undefined}>
   <Frame {...frameAttrs}>
     {image.format === "gif" ? (
-      <img src={image.src} width={image.width} height={image.height} alt={alt} loading="lazy" decoding="async" class={imgClass} style={ratioStyle} />
+      <img src={image.src} width={image.width} height={image.height} alt={alt} loading={loading} fetchpriority={fetchpriority} decoding="async" class={imgClass} style={ratioStyle} />
     ) : (
       <Picture
         src={image}
@@ -110,7 +115,8 @@ const figureStyle = portrait
         fallbackFormat="webp"
         widths={[...new Set(widths)]}
         sizes={sizes}
-        loading="lazy"
+        loading={loading}
+        fetchpriority={fetchpriority}
         decoding="async"
         class={imgClass}
         style={ratioStyle}
@@ -147,3 +153,8 @@ const figureStyle = portrait
     </figcaption>
   )}
 </figure>
+
+<script>
+  // The photo viewer, once per page however many Figures it has (Astro bundles and dedupes it).
+  import "../../../lib/lightbox-client.js";
+</script>

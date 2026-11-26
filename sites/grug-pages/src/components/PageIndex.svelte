@@ -121,7 +121,7 @@
             <svg
               viewBox="0 0 16 16"
               aria-hidden="true"
-              class={`size-4 shrink-0 fill-stone-500 transition-transform duration-150 dark:fill-stone-400 ${mobileTagsOpen ? "rotate-180" : ""}`}
+              class={`size-4 shrink-0 fill-stone-500 motion-safe:transition-transform motion-safe:duration-150 dark:fill-stone-400 ${mobileTagsOpen ? "rotate-180" : ""}`}
             >
               <path
                 fill-rule="evenodd"

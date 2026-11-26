@@ -328,6 +328,11 @@
     }
   }
 
+  /* Where an in-page jump (skip link, Contents, Back to top) lands focus: a reading position, not a control */
+  :where(main, section, h1, h2, h3, h4)[tabindex="-1"]:focus {
+    outline: none;
+  }
+
   /* StatGrid breakpoint-aware sibling dividers */
   .stat-grid {
     --stat-divider: color-mix(in oklab, var(--color-stone-950) 8%, transparent);
@@ -342,7 +347,8 @@
     padding-top: --spacing(4);
   }
 
-  @container (width >= 24rem) {
+  /* Two columns from a 20rem container (2×2 for four stats on a phone), matching StatGrid's @xs:grid-cols-2 */
+  @container (width >= 20rem) {
     .stat-grid .stat-item:nth-child(2) {
       border-top: 0;
       padding-top: 0;
@@ -350,7 +356,7 @@
 
     .stat-grid .stat-item:nth-child(2n) {
       border-left: 1px solid var(--stat-divider);
-      padding-left: --spacing(5);
+      padding-left: --spacing(3);
     }
 
     .stat-grid .stat-item:nth-child(2n + 1) {
@@ -360,6 +366,10 @@
   }
 
   @container (width >= 32rem) {
+    .stat-grid .stat-item:nth-child(2n) {
+      padding-left: --spacing(5);
+    }
+
     .stat-grid dl[data-columns="3"] > .stat-item:nth-child(-n + 3) {
       border-top: 0;
       padding-top: 0;
@@ -692,6 +702,33 @@
     .prose .table-scroll[data-scrollable="true"] :where(table[data-sticky-entity="2"]) :where(th:nth-child(2), td:nth-child(2)):not(.not-prose, .not-prose *) {
       max-width: 8.5rem;
       overflow-wrap: break-word;
+    }
+  }
+
+  /* <Table compact> on phones: 8px between cells, no minimum table width, text wraps only between words (numbers
+     already keep their units, see lib/table-rows.mjs). Selectors outrank the sticky-column rules above. */
+  @media (width < 40rem) {
+    .prose .table-compact .table-block .table-scroll-inner > table {
+      min-width: 0;
+    }
+
+    .prose .table-compact .table-block .table-scroll :is(thead th, td, tbody th):not(:first-child) {
+      padding-left: --spacing(2);
+    }
+
+    .prose .table-compact .table-block .table-scroll :is(thead th, td, tbody th):not(:last-child) {
+      padding-right: --spacing(2);
+    }
+
+    .prose .table-compact .table-block .table-scroll :is(td, tbody th) {
+      overflow-wrap: normal;
+      word-break: normal;
+      hyphens: manual;
+    }
+
+    /* Scrolling anyway (many columns): the pinned name column keeps a readable width */
+    .prose .table-compact .table-block .table-scroll[data-scrollable="true"] :is(thead th, td, tbody th):first-child {
+      min-width: 8rem;
     }
   }
 

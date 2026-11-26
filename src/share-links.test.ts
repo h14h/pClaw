@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
+import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { after, before, test } from "node:test";
-import { shareHtml, startPagesServer } from "./pages-server.ts";
+import { pickEncoding, shareHtml, startPagesServer } from "./pages-server.ts";
 import { newShareToken, SHARE_TOKEN, ShareLinks, shareUrl } from "./share-links.ts";
 
 const CODE = "own3r4bc";
@@ -344,3 +346,78 @@ test("templates render the copy-link placeholders and the copy script (clipboard
 	assert.match(base, /<p id="share-copy-status" class="sr-only" aria-live="polite" aria-atomic="true"><\/p>/);
 	assert.match(base, /if \(!href \|\| !href\.startsWith\("\/p\/"\)\) return;/);
 });
+
+/** A raw GET (no automatic decompression): status, headers and the bytes as sent. */
+function rawGet(port: number, path: string, acceptEncoding?: string, method = "GET") {
+	return new Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: Buffer }>((resolveGet, rejectGet) => {
+		const req = request({ host: "127.0.0.1", port, path, method, headers: acceptEncoding === undefined ? {} : { "Accept-Encoding": acceptEncoding } }, (res) => {
+			const chunks: Buffer[] = [];
+			res.on("data", (chunk: Buffer) => chunks.push(chunk));
+			res.on("end", () => resolveGet({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks) }));
+		});
+		req.on("error", rejectGet);
+		req.end();
+	});
+}
+
+test("owner and share text is compressed after the share rewrite; images, fonts and small bodies are not", async () => {
+	assert.equal(pickEncoding("gzip, deflate, br"), "br");
+	assert.equal(pickEncoding("gzip"), "gzip");
+	assert.equal(pickEncoding("br;q=0, gzip;q=0.5"), "gzip");
+	assert.equal(pickEncoding("identity"), undefined);
+	assert.equal(pickEncoding(undefined), undefined);
+	assert.equal(pickEncoding("*"), "br");
+
+	const root = join(dir, "compressed");
+	buildSite(root, CODE, ["sox"]);
+	const pad = (n: number) => `/* ${"grug ".repeat(n)} */`;
+	writeFileSync(join(root, CODE, "_astro", "BaseLayout.abc123.css"), `@font-face{src:url(/${CODE}/_astro/geist.def456.woff2)}body{color:red}${pad(400)}`);
+	writeFileSync(join(root, CODE, "sox", "index.html"), pageHtml(CODE, "sox", `<p>${pad(400)}</p>`));
+	const server = await startPagesServer({ pagesDir: root, port: 0, host: "127.0.0.1" });
+	const token = new ShareLinks(root).get(CODE, "sox")!;
+	try {
+		// Share page: brotli, rewritten before compression (no owner code inside), Vary set
+		const share = await rawGet(server.port, `/p/${token}/`, "gzip, br");
+		assert.equal(share.status, 200);
+		assert.equal(share.headers["content-encoding"], "br");
+		assert.equal(share.headers.vary, "Accept-Encoding");
+		assert.equal(Number(share.headers["content-length"]), share.body.byteLength);
+		const shareText = brotliDecompressSync(share.body).toString("utf8");
+		assert.ok(share.body.byteLength < shareText.length / 3);
+		assert.match(shareText, /<html data-grug-shared /);
+		assert.ok(!shareText.includes(CODE));
+		// Share CSS: gzip when that's all the client takes; immutable caching kept; same bytes twice (cached copy)
+		const css = await rawGet(server.port, `/p/${token}/_astro/BaseLayout.abc123.css`, "gzip");
+		assert.equal(css.headers["content-encoding"], "gzip");
+		assert.equal(css.headers["cache-control"], "public, max-age=31536000, immutable");
+		assert.match(gunzipSync(css.body).toString("utf8"), new RegExp(`url\\(/p/${token}/_astro/geist\\.def456\\.woff2\\)`));
+		assert.deepEqual((await rawGet(server.port, `/p/${token}/_astro/BaseLayout.abc123.css`, "gzip")).body, css.body);
+		// Owner page and owner CSS: compressed too; security headers stay
+		const owner = await rawGet(server.port, `/${CODE}/sox/`, "br");
+		assert.equal(owner.headers["content-encoding"], "br");
+		assert.match(String(owner.headers["content-security-policy"]), /script-src 'self'/);
+		assert.match(brotliDecompressSync(owner.body).toString("utf8"), /<h1>sox<\/h1>/);
+		const ownerCss = await rawGet(server.port, `/${CODE}/_astro/BaseLayout.abc123.css`, "br");
+		assert.equal(ownerCss.headers["content-encoding"], "br");
+		assert.equal(ownerCss.headers["cache-control"], "public, max-age=31536000, immutable");
+		// HEAD reports the compressed length and sends nothing
+		const head = await rawGet(server.port, `/${CODE}/sox/`, "br", "HEAD");
+		assert.equal(head.headers["content-encoding"], "br");
+		assert.equal(head.body.byteLength, 0);
+		// No Accept-Encoding: plain. Fonts, images and small text never get an encoding
+		const plain = await rawGet(server.port, `/p/${token}/`);
+		assert.equal(plain.headers["content-encoding"], undefined);
+		assert.match(plain.body.toString("utf8"), /<html data-grug-shared /);
+		for (const path of [`/p/${token}/_astro/geist.def456.woff2`, `/${CODE}/_astro/photo.h1_b.avif`, `/${CODE}/_astro/client.x2.js`, `/${CODE}/favicon.svg`]) {
+			const res = await rawGet(server.port, path, "br, gzip");
+			assert.equal(res.status, 200, path);
+			assert.equal(res.headers["content-encoding"], undefined, path);
+		}
+		// Redirects and 404s are unchanged
+		assert.equal((await rawGet(server.port, `/${CODE}/sox`, "br")).status, 308);
+		assert.equal((await rawGet(server.port, `/${CODE}/nope/`, "br")).status, 404);
+	} finally {
+		await server.stop();
+	}
+});
+

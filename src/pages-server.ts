@@ -8,6 +8,7 @@
 import { createReadStream, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join, resolve, sep } from "node:path";
+import { brotliCompressSync, constants as zlib, gzipSync } from "node:zlib";
 import { createStaticHandler, mimeTypeFor, resolveSafeFile, SECURITY_HEADERS } from "../sites/grug-pages/lib/static-handler.mjs";
 import { PAGES_CODE } from "./config.ts";
 import { ShareLinks } from "./share-links.ts";
@@ -21,6 +22,51 @@ const TEXT_TYPES = new Set([".html", ".htm", ".css", ".js", ".mjs", ".svg", ".js
 const TEMPLATE_TYPES = new Set([".css", ".js", ".mjs", ".woff", ".woff2"]);
 const ICONS = new Set(["favicon.svg", "favicon-32x32.png", "apple-touch-icon.png"]);
 const ASTRO_ASSET = /^_astro\/[A-Za-z0-9_-][A-Za-z0-9._-]*$/;
+
+type Encoding = "br" | "gzip";
+/** Text bodies smaller than this go out as they are. */
+const COMPRESS_MIN_BYTES = 1024;
+/** Compressed immutable assets (`_astro/…`, keyed by file, version and share token), so each is compressed once. */
+const compressedCache = new Map<string, Buffer>();
+const COMPRESSED_CACHE_MAX = 256;
+
+/** The best encoding the client accepts: brotli, then gzip, else none. Honours `;q=0`. */
+export function pickEncoding(acceptEncoding: string | string[] | undefined): Encoding | undefined {
+	const header = Array.isArray(acceptEncoding) ? acceptEncoding.join(",") : (acceptEncoding ?? "");
+	const accepted = new Map<string, number>();
+	for (const part of header.split(",")) {
+		const [name, ...params] = part.trim().toLowerCase().split(";");
+		if (!name) continue;
+		const q = params.map((p) => /^\s*q=([\d.]+)\s*$/.exec(p)?.[1]).find((v) => v !== undefined);
+		accepted.set(name, q === undefined ? 1 : Number(q));
+	}
+	const ok = (name: string) => (accepted.get(name) ?? (accepted.has("*") ? accepted.get("*")! : 0)) > 0;
+	if (ok("br")) return "br";
+	if (ok("gzip")) return "gzip";
+	return undefined;
+}
+
+function compress(body: Buffer, encoding: Encoding, cacheKey: string | undefined): Buffer {
+	const key = cacheKey === undefined ? undefined : `${encoding}:${cacheKey}`;
+	const cached = key === undefined ? undefined : compressedCache.get(key);
+	if (cached) return cached;
+	const out =
+		encoding === "br"
+			? brotliCompressSync(body, {
+					params: {
+						[zlib.BROTLI_PARAM_MODE]: zlib.BROTLI_MODE_TEXT,
+						// Cached assets are compressed once, so harder; per-request HTML stays fast.
+						[zlib.BROTLI_PARAM_QUALITY]: key === undefined ? 5 : 9,
+						[zlib.BROTLI_PARAM_SIZE_HINT]: body.byteLength,
+					},
+				})
+			: gzipSync(body, { level: key === undefined ? 6 : 9 });
+	if (key !== undefined) {
+		if (compressedCache.size >= COMPRESSED_CACHE_MAX) compressedCache.delete(compressedCache.keys().next().value!);
+		compressedCache.set(key, out);
+	}
+	return out;
+}
 
 function isWithinRoot(targetReal: string, rootReal: string): boolean {
 	if (targetReal === rootReal) return true;
@@ -144,24 +190,34 @@ function referencedAssets(html: string, token: string): Set<string> {
 	return found;
 }
 
+/**
+ * Send a text body, compressed (brotli or gzip) when the client accepts it. This runs after any share rewrite, so
+ * what is compressed is exactly what the client gets. `cacheKey` (immutable assets only) keeps the compressed copy.
+ */
 function sendBody(
+	req: IncomingMessage,
 	res: ServerResponse,
 	method: string,
 	body: Buffer,
 	contentType: string,
 	cacheControl: string,
+	cacheKey?: string,
 ): void {
+	const encoding = body.byteLength >= COMPRESS_MIN_BYTES ? pickEncoding(req.headers["accept-encoding"]) : undefined;
+	const out = encoding === undefined ? body : compress(body, encoding, cacheKey);
 	res.writeHead(200, {
 		...SECURITY_HEADERS,
 		"Content-Type": contentType,
-		"Content-Length": String(body.byteLength),
+		"Content-Length": String(out.byteLength),
 		"Cache-Control": cacheControl,
+		Vary: "Accept-Encoding",
+		...(encoding === undefined ? {} : { "Content-Encoding": encoding }),
 	});
 	if (method === "HEAD") {
 		res.end();
 		return;
 	}
-	res.end(body);
+	res.end(out);
 }
 
 /**
@@ -169,6 +225,7 @@ function sendBody(
  * icons. Everything else under a token, and any token that isn't live, is a 404.
  */
 function serveShared(
+	req: IncomingMessage,
 	res: ServerResponse,
 	method: string,
 	pagesDir: string,
@@ -200,7 +257,7 @@ function serveShared(
 		return;
 	}
 	if (rest === "/") {
-		sendBody(res, method, Buffer.from(html, "utf8"), "text/html; charset=utf-8", "no-cache");
+		sendBody(req, res, method, Buffer.from(html, "utf8"), "text/html; charset=utf-8", "no-cache");
 		return;
 	}
 
@@ -226,7 +283,8 @@ function serveShared(
 			writeText(res, method, 404, "Not Found\n");
 			return;
 		}
-		sendBody(res, method, Buffer.from(rewriteForShare(text, target, token), "utf8"), contentType, cacheControl);
+		const cacheKey = file.isImmutable ? `${file.filePath}:${file.stat.mtimeMs}:${file.stat.size}:${token}` : undefined;
+		sendBody(req, res, method, Buffer.from(rewriteForShare(text, target, token), "utf8"), contentType, cacheControl, cacheKey);
 		return;
 	}
 	res.writeHead(200, {
@@ -279,7 +337,7 @@ export function createPagesHandler(
 
 		const share = SHARE_ROUTE.exec(pathname);
 		if (share) {
-			serveShared(res, method, pagesDir, links, share[1]!, share[2]);
+			serveShared(req, res, method, pagesDir, links, share[1]!, share[2]);
 			return;
 		}
 
@@ -317,15 +375,20 @@ export function createPagesHandler(
 			return;
 		}
 
-		// Owner HTML carries the "Copy share link" links, filled in fresh on every request (a rotated token shows at once).
+		// Owner text files go out compressed. Owner HTML also carries the "Copy share link" links, filled in fresh on
+		// every request (a rotated token shows at once). Images, fonts, redirects and 404s are the static handler's.
 		const file = resolveSafeFile(userDir, rest, pathname);
-		if (file.status === "file" && extname(file.filePath).toLowerCase() === ".html") {
-			let html: string | undefined;
+		if (file.status === "file" && TEXT_TYPES.has(extname(file.filePath).toLowerCase())) {
+			let text: string | undefined;
 			try {
-				html = readFileSync(file.filePath, "utf8");
+				text = readFileSync(file.filePath, "utf8");
 			} catch {}
-			if (html?.includes("data-share-")) {
-				sendBody(res, method, Buffer.from(ownerHtml(html, userCode, links), "utf8"), "text/html; charset=utf-8", "no-cache");
+			if (text !== undefined) {
+				const isHtml = /\.html?$/i.test(file.filePath);
+				const body = isHtml ? ownerHtml(text, userCode, links) : text;
+				const cacheControl = file.isImmutable ? "public, max-age=31536000, immutable" : "no-cache";
+				const cacheKey = file.isImmutable ? `${file.filePath}:${file.stat.mtimeMs}:${file.stat.size}` : undefined;
+				sendBody(req, res, method, Buffer.from(body, "utf8"), mimeTypeFor(file.filePath), cacheControl, cacheKey);
 				return;
 			}
 		}

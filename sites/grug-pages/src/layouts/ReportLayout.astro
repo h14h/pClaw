@@ -2,8 +2,6 @@
 import type { MarkdownHeading } from "astro";
 import BaseLayout from "./BaseLayout.astro";
 import { formatDate, withBase } from "@lib/urls";
-import lightboxMath from "../../lib/lightbox.mjs?raw";
-import lightboxClient from "../../lib/lightbox-client.js?raw";
 
 interface Props {
   slug?: string;
@@ -17,15 +15,30 @@ interface Props {
 }
 
 const { slug, title, subtitle, date, updated, summary, tags = [], headings = [] } = Astro.props;
-const tocHeadings = headings.filter((h) => h.depth === 2);
-const showToc = tocHeadings.length >= 4;
 const homeHref = withBase("/");
 const ogImagePath = slug ? `/og/${slug}.png` : "/og/index.png";
 const canonicalPath = slug ? `/${slug}/` : undefined;
-// The photo viewer: tested zoom/pan math plus the page wiring, as one classic inline script per page.
-// Comments are dropped from the inlined copy (the sources keep them).
-const stripComments = (source: string) => source.replace(/\/\*\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*\n/gm, "");
-const lightboxScript = `(() => {\n${stripComments(lightboxMath.replace(/^export /gm, ""))}\n${stripComments(lightboxClient)}\n})();`;
+
+// The report body, rendered first so Contents can link the Sources section it actually contains.
+const body = await Astro.slots.render("default");
+const sourcesTitle = /<h2 id="sources-heading"[^>]*>\s*([^<]*?)\s*<\/h2>/.exec(body)?.[1];
+
+// Contents: H2s, with each H2's H3s nested under it, then Sources. Shown once a report has 3 or more major
+// destinations (H2s plus Sources) or 6 or more H2/H3 entries.
+type TocEntry = { slug: string; text: string; children: { slug: string; text: string }[] };
+const toc: TocEntry[] = [];
+for (const heading of headings) {
+  if (heading.depth === 2 || (heading.depth === 3 && toc.length === 0)) {
+    toc.push({ slug: heading.slug, text: heading.text, children: [] });
+  } else if (heading.depth === 3) {
+    toc.at(-1)!.children.push({ slug: heading.slug, text: heading.text });
+  }
+}
+if (sourcesTitle) toc.push({ slug: "sources", text: sourcesTitle, children: [] });
+const tocEntries = toc.reduce((count, entry) => count + 1 + entry.children.length, 0);
+const showToc = toc.length >= 3 || tocEntries >= 6;
+const tocLink =
+  "-mx-2 flex min-h-12 items-center rounded-md px-2 py-3 underline underline-offset-4 hover:bg-stone-950/4 hover:text-accent hover:decoration-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:pointer-fine:min-h-0 sm:pointer-fine:py-1.5 dark:hover:bg-white/6 dark:hover:text-accent-dark dark:hover:decoration-accent-dark dark:focus-visible:outline-accent-dark";
 ---
 
 <BaseLayout
@@ -35,8 +48,8 @@ const lightboxScript = `(() => {\n${stripComments(lightboxMath.replace(/^export 
   ogImagePath={ogImagePath}
   canonicalPath={canonicalPath}
 >
-  <header class="border-b border-stone-950/8 pb-7 dark:border-white/8">
-    <h1 class="text-2xl font-semibold tracking-tight text-pretty text-stone-900 sm:text-3xl dark:text-stone-100">
+  <header class="border-b border-stone-950/8 pb-5 sm:pb-7 dark:border-white/8">
+    <h1 id="report-title" tabindex="-1" class="text-2xl font-semibold tracking-tight text-pretty text-stone-900 sm:text-3xl dark:text-stone-100">
       {title}
     </h1>
     {subtitle && (
@@ -51,15 +64,6 @@ const lightboxScript = `(() => {\n${stripComments(lightboxMath.replace(/^export 
           <span aria-hidden="true" class="text-stone-300 dark:text-stone-700">&middot;</span>
           <span class="tabular-nums">Updated <time datetime={updated}>{formatDate(updated)}</time></span>
         </>
-      )}
-      {tags.length > 0 && (
-        <ul role="list" class="flex flex-wrap items-center gap-1.5">
-          {tags.map((tag) => (
-            <li class="rounded-md bg-stone-950/5 px-2 py-0.5 text-stone-700 dark:bg-white/8 dark:text-stone-300">
-              {tag}
-            </li>
-          ))}
-        </ul>
       )}
       {slug && (
         // "Copy share link": hidden in the build; the pages server fills in this page's /p/ link on the owner's
@@ -84,6 +88,11 @@ const lightboxScript = `(() => {\n${stripComments(lightboxMath.replace(/^export 
         </a>
       )}
     </div>
+    {tags.length > 0 && (
+      <p class="mt-1.5 text-sm/5 text-pretty text-stone-500 dark:text-stone-400">
+        <span class="sr-only">Tags: </span>{tags.join(", ")}
+      </p>
+    )}
   </header>
 
   {showToc && (
@@ -96,13 +105,13 @@ const lightboxScript = `(() => {\n${stripComments(lightboxMath.replace(/^export 
             </span>
             <span aria-hidden="true" class="text-stone-300 dark:text-stone-700">&middot;</span>
             <span class="tabular-nums text-stone-500 dark:text-stone-400">
-              {tocHeadings.length} sections
+              {toc.length} sections
             </span>
           </span>
           <svg
             viewBox="0 0 16 16"
             aria-hidden="true"
-            class="size-4 shrink-0 fill-stone-500 transition-transform duration-150 group-open:rotate-90 dark:fill-stone-400"
+            class="size-4 shrink-0 fill-stone-500 group-open:rotate-90 motion-safe:transition-transform motion-safe:duration-150 dark:fill-stone-400"
           >
             <path
               fill-rule="evenodd"
@@ -112,14 +121,30 @@ const lightboxScript = `(() => {\n${stripComments(lightboxMath.replace(/^export 
           </svg>
         </summary>
         <ol role="list" class="pt-1 pb-4 text-base/6 sm:columns-2 sm:gap-8 sm:pb-5 sm:text-sm/6">
-          {tocHeadings.map((heading) => (
+          {toc.map((entry) => (
             <li class="break-inside-avoid">
               <a
-                href={`#${heading.slug}`}
-                class="-mx-2 block min-h-11 rounded-md px-2 py-2.5 text-stone-700 underline decoration-stone-950/20 underline-offset-4 hover:bg-stone-950/4 hover:text-accent hover:decoration-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:min-h-0 sm:py-1.5 dark:text-stone-300 dark:decoration-white/20 dark:hover:bg-white/6 dark:hover:text-accent-dark dark:hover:decoration-accent-dark dark:focus-visible:outline-accent-dark"
+                href={`#${entry.slug}`}
+                data-jump
+                class={`${tocLink} text-stone-800 decoration-stone-950/20 dark:text-stone-200 dark:decoration-white/20`}
               >
-                {heading.text}
+                {entry.text}
               </a>
+              {entry.children.length > 0 && (
+                <ol role="list" class="mb-1 ml-1 border-l border-stone-950/10 pl-3 dark:border-white/10">
+                  {entry.children.map((child) => (
+                    <li>
+                      <a
+                        href={`#${child.slug}`}
+                        data-jump
+                        class={`${tocLink} text-stone-600 decoration-stone-950/15 dark:text-stone-400 dark:decoration-white/15`}
+                      >
+                        {child.text}
+                      </a>
+                    </li>
+                  ))}
+                </ol>
+              )}
             </li>
           ))}
         </ol>
@@ -127,23 +152,22 @@ const lightboxScript = `(() => {\n${stripComments(lightboxMath.replace(/^export 
     </nav>
   )}
 
-  <article class="prose mt-7 sm:mt-8">
-    <slot />
+  <article class="prose mt-5 sm:mt-8">
+    <Fragment set:html={body} />
   </article>
-
-  <script is:inline set:html={lightboxScript} />
 
   <footer class="print-hide mt-14 flex items-center justify-between gap-4 border-t border-stone-950/8 pt-6 text-base/6 sm:text-sm/5 dark:border-white/8">
     <a
       href={homeHref}
       data-owner-nav="all"
-      class="py-1 font-normal text-stone-600 hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent dark:text-stone-400 dark:hover:text-stone-100 dark:focus-visible:outline-accent-dark"
+      class="py-1 font-normal pointer-coarse:-my-2 pointer-coarse:inline-flex pointer-coarse:min-h-12 pointer-coarse:items-center text-stone-600 hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent dark:text-stone-400 dark:hover:text-stone-100 dark:focus-visible:outline-accent-dark"
     >
       &larr; All pages
     </a>
     <a
       href="#top"
-      class="ml-auto py-1 font-normal text-stone-500 hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent dark:text-stone-400 dark:hover:text-stone-100 dark:focus-visible:outline-accent-dark"
+      data-jump="report-title"
+      class="ml-auto py-1 font-normal pointer-coarse:-my-2 pointer-coarse:inline-flex pointer-coarse:min-h-12 pointer-coarse:items-center text-stone-500 hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent dark:text-stone-400 dark:hover:text-stone-100 dark:focus-visible:outline-accent-dark"
     >
       Back to top &uarr;
     </a>

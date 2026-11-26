@@ -12,10 +12,10 @@ const { checked, title = "Sources" } = Astro.props;
 <section
   id="sources"
   aria-labelledby="sources-heading"
-  class="not-prose mt-12 border-t border-stone-950/10 pt-6 dark:border-white/10"
+  class="not-prose mt-12 scroll-mt-6 border-t border-stone-950/10 pt-6 dark:border-white/10"
 >
   <div class="flex flex-wrap items-baseline justify-between gap-2">
-    <h2 id="sources-heading" class="text-base/6 font-semibold text-stone-900 sm:text-sm/5 dark:text-stone-100">
+    <h2 id="sources-heading" class="text-xl/7 font-semibold text-balance text-stone-900 sm:text-2xl/8 sm:tracking-tight dark:text-stone-100">
       {title}
     </h2>
     {checked && (
@@ -24,7 +24,7 @@ const { checked, title = "Sources" } = Astro.props;
       </p>
     )}
   </div>
-  <div class="mt-3 text-base/7 text-stone-600 sm:text-sm/6 dark:text-stone-400 [&_ol]:list-decimal [&_ol]:space-y-1.5 [&_ol]:pl-7 [&_ol]:tabular-nums [&_ul]:list-disc [&_ul]:space-y-1.5 [&_ul]:pl-6 [&_li]:pl-1 [&_li::marker]:tabular-nums [&_li::marker]:text-stone-400 dark:[&_li::marker]:text-stone-500 [&_a]:text-stone-800 [&_a]:underline [&_a]:decoration-stone-950/25 [&_a]:underline-offset-3 [&_a:hover]:text-accent [&_a:hover]:decoration-accent dark:[&_a]:text-stone-200 dark:[&_a]:decoration-white/25 dark:[&_a:hover]:text-accent-dark dark:[&_a:hover]:decoration-accent-dark">
+  <div class="mt-3 text-base/7 text-stone-600 sm:text-sm/6 dark:text-stone-400 [&_ol]:list-decimal [&_ol]:space-y-1.5 [&_ol]:pl-7 [&_ol]:tabular-nums [&_ul]:list-disc [&_ul]:space-y-1.5 [&_ul]:pl-6 [&_li]:pl-1 [&_li::marker]:tabular-nums [&_li::marker]:text-stone-600 dark:[&_li::marker]:text-stone-400 [&_a]:text-stone-800 [&_a]:underline [&_a]:decoration-stone-950/25 [&_a]:underline-offset-3 [&_a:hover]:text-accent [&_a:hover]:decoration-accent dark:[&_a]:text-stone-200 dark:[&_a]:decoration-white/25 dark:[&_a:hover]:text-accent-dark dark:[&_a:hover]:decoration-accent-dark [&_a]:rounded-sm [&_a:focus-visible]:outline-2 [&_a:focus-visible]:outline-offset-2 [&_a:focus-visible]:outline-accent dark:[&_a:focus-visible]:outline-accent-dark">
     <slot />
   </div>
 </section>

@@ -6,14 +6,14 @@ interface Props {
 const { columns = 3 } = Astro.props;
 
 const gridCols = {
-  2: "@sm:grid-cols-2",
-  3: "@sm:grid-cols-2 @lg:grid-cols-3",
-  4: "@sm:grid-cols-2 @lg:grid-cols-4",
+  2: "@xs:grid-cols-2",
+  3: "@xs:grid-cols-2 @lg:grid-cols-3",
+  4: "@xs:grid-cols-2 @lg:grid-cols-4",
 }[columns];
 ---
 
 <div class="not-prose stat-grid @container my-6 border-y border-stone-950/10 py-5 first:mt-0 first:border-t-0 first:pt-0 dark:border-white/10">
-  <dl data-columns={String(columns)} class={`grid grid-cols-1 gap-x-5 gap-y-4 ${gridCols}`}>
+  <dl data-columns={String(columns)} class={`grid grid-cols-1 gap-x-3 gap-y-4 @lg:gap-x-5 ${gridCols}`}>
     <slot />
   </dl>
 </div>
