@@ -72,7 +72,7 @@
       '<div class="lightbox-notes">' +
       '<p class="lightbox-hint" aria-hidden="true" data-lb-hint></p>' +
       '<p class="lightbox-loading" aria-hidden="true" data-lb-loading><span class="lightbox-spinner"></span>Loading</p>' +
-      '<div class="lightbox-status" data-lb-status><span role="alert" data-lb-status-text></span>' +
+      '<div class="lightbox-status" data-lb-status><span aria-hidden="true" data-lb-status-text></span>' +
       '<button type="button" class="lightbox-retry" data-lb-retry>Retry</button></div>' +
       "</div></div>" +
       button("prev", "Previous photo", "lightbox-side lightbox-prev") +
@@ -80,7 +80,9 @@
       '<div class="lightbox-caption" data-lb-caption></div>' +
       '<p class="sr-only" aria-live="polite" aria-atomic="true" data-lb-live></p>' +
       // Persistent polite status: "Loading photo N" once a wait passes 300ms (the visible pill is the same moment).
-      '<p class="sr-only" role="status" aria-live="polite" aria-atomic="true" data-lb-loading-text></p>';
+      '<p class="sr-only" role="status" aria-live="polite" aria-atomic="true" data-lb-loading-text></p>' +
+      // Persistent, visually hidden alert: empty for the dialog's whole life until a load fails.
+      '<p class="sr-only" role="alert" aria-atomic="true" data-lb-alert></p>';
     document.body.append(dialog);
     const $ = (name) => dialog.querySelector(`[data-lb-${name}]`);
     ui = {
@@ -96,6 +98,7 @@
       status: $("status"),
       loadingText: $("loading-text"),
       statusText: $("status-text"),
+      alert: $("alert"),
       retry: $("retry"),
       close: $("close"),
       prev: $("prev"),
@@ -235,6 +238,10 @@
     ui.img.classList.toggle("lightbox-paper", link.dataset.zoomSurface === "paper");
     ui.dialog.setAttribute("aria-label", alt || "Photo");
 
+    setCaption(figure);
+  }
+
+  function setCaption(figure) {
     ui.caption.replaceChildren();
     const caption = figure?.querySelector("[data-caption]")?.textContent?.trim();
     const credit = figure?.querySelector("[data-credit]");
@@ -322,6 +329,7 @@
   function clearStatus() {
     ui.dialog.removeAttribute("data-failed");
     if (ui.statusText.textContent) ui.statusText.textContent = "";
+    if (ui.alert.textContent) ui.alert.textContent = "";
   }
 
   // Show slide i. A slide whose preview isn't loaded yet is fetched first while the current photo, caption and
@@ -362,15 +370,21 @@
       .catch(() => {
         if (token !== showToken || !ui.dialog.open) return;
         setLoading(false);
-        // Moves count from the photo on screen again, not from the one that failed.
-        index = showing;
-        setDisabled(ui.prev, showing === 0);
-        setDisabled(ui.next, showing === items.length - 1);
+        // Moves count from the photo on screen again, not from the one that failed (if one is on screen yet).
+        if (showing >= 0) {
+          index = showing;
+          setDisabled(ui.prev, showing === 0);
+          setDisabled(ui.next, showing === items.length - 1);
+        }
         ui.dialog.setAttribute("data-failed", "");
-        ui.statusText.textContent = items.length > 1 ? `Couldn't load photo ${i + 1}.` : "Couldn't load this photo.";
+        const message = items.length > 1 ? `Couldn't load photo ${i + 1}.` : "Couldn't load this photo.";
+        ui.statusText.textContent = message;
+        ui.alert.textContent = message;
         // Retry hides the error pill; focus moves to the arrow that leads to the photo being retried (or Close).
+        // Retry hides the error pill. Focus moves to the arrow toward the retried photo, or to Close when no photo
+        // has shown yet in this viewing (nothing else on screen is about that photo).
         ui.retry.onclick = () => {
-          const toward = i > showing ? ui.next : ui.prev;
+          const toward = showing < 0 ? ui.close : i > showing ? ui.next : ui.prev;
           (toward.hidden ? ui.close : toward).focus();
           show(i, announce);
         };
@@ -394,12 +408,36 @@
     items = carousel ? Array.from(carousel.querySelectorAll("a[data-zoom]")) : [link];
     index = Math.max(0, items.indexOf(link));
     scroll = [window.scrollX, window.scrollY];
-    ui.live.textContent = "";
-    // Labelled before it opens, so the first thing announced is the photo.
-    ui.dialog.setAttribute("aria-label", altOf(link) || "Photo");
+    reset(link);
     ui.dialog.showModal();
     ui.dialog.focus();
     show(index, false);
+  }
+
+  // A fresh viewing: nothing from the last one (photo, caption, counter, arrows, loading, error, zoom, hint) may show
+  // while this photo loads. Labelled, captioned and counted for the new photo before the dialog opens.
+  function reset(link) {
+    loadToken += 1;
+    showToken += 1;
+    showing = -1;
+    setLoading(false);
+    clearStatus();
+    ui.live.textContent = "";
+    ui.img.removeAttribute("src");
+    ui.img.alt = "";
+    ui.img.style.transform = "";
+    ui.img.style.width = "0px";
+    ui.img.style.height = "0px";
+    for (const name of ["data-zoomed", "data-pannable", "data-hint"]) ui.dialog.removeAttribute(name);
+    ui.dialog.setAttribute("aria-label", altOf(link) || "Photo");
+    setCaption(link.closest("figure"));
+    const many = items.length > 1;
+    ui.counter.textContent = many ? `${index + 1} / ${items.length}` : "";
+    ui.counter.hidden = !many;
+    ui.prev.hidden = !many;
+    ui.next.hidden = !many;
+    setDisabled(ui.prev, index === 0);
+    setDisabled(ui.next, index === items.length - 1);
   }
 
   function onClosed() {

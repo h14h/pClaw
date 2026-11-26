@@ -832,6 +832,12 @@
       display: block;
     }
 
+    /* A broken image becomes a box of alt text; overflow: hidden lets its aspect-ratio hold the space anyway. */
+    & img {
+      aspect-ratio: var(--img-ratio, auto);
+      overflow: hidden;
+    }
+
     &::after {
       content: "";
       position: absolute;

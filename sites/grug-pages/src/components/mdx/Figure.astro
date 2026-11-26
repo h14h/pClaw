@@ -87,6 +87,10 @@ const frameAttrs = zoom
   : { class: "figure-frame" };
 const Frame = zoom ? "a" : "span";
 
+// The photo's shape as a CSS variable (global.css turns it into aspect-ratio), so its space stays reserved even if
+// the file fails to load: browsers drop the width/height-attribute ratio for a broken image.
+const ratioStyle = `--img-ratio: ${image.width} / ${image.height};`;
+
 const surface = background === "paper" ? "bg-stone-50" : "bg-stone-100 dark:bg-stone-900";
 const imgClass = `block h-auto w-full rounded-[min(1vw,12px)] ${surface} outline -outline-offset-1 outline-stone-950/8 dark:outline-white/10`;
 const figureStyle = portrait
@@ -97,7 +101,7 @@ const figureStyle = portrait
 <figure class="not-prose my-8" style={figureStyle} data-portrait={portrait ? "true" : undefined}>
   <Frame {...frameAttrs}>
     {image.format === "gif" ? (
-      <img src={image.src} width={image.width} height={image.height} alt={alt} loading="lazy" decoding="async" class={imgClass} />
+      <img src={image.src} width={image.width} height={image.height} alt={alt} loading="lazy" decoding="async" class={imgClass} style={ratioStyle} />
     ) : (
       <Picture
         src={image}
@@ -109,6 +113,7 @@ const figureStyle = portrait
         loading="lazy"
         decoding="async"
         class={imgClass}
+        style={ratioStyle}
       />
     )}
     {zoom && (

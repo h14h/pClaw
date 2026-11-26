@@ -1502,7 +1502,7 @@ test("grug-pages photo viewer: fit, panorama and tall openings, bounded zoom and
 	assert.match(client, /button\("close", "Close"\)/);
 	assert.match(client, /target\?\.focus\(\{ preventScroll: true \}\);\n\s*window\.scrollTo\(scroll\[0\], scroll\[1\]\);/);
 	// Labelled before it opens; Tab wraps over visible controls; N of M with the alt is announced
-	assert.match(client, /ui\.dialog\.setAttribute\("aria-label", altOf\(link\) \|\| "Photo"\);\n\s*ui\.dialog\.showModal\(\);/);
+	assert.match(client, /ui\.dialog\.setAttribute\("aria-label", altOf\(link\) \|\| "Photo"\);\n\s*setCaption\(link\.closest\("figure"\)\);/);
 	assert.match(client, /if \(event\.key === "Tab"\) \{/);
 	assert.match(client, /ui\.live\.textContent = `\$\{i \+ 1\} of \$\{items\.length\}: \$\{altOf\(link\)\}`/);
 	assert.match(client, /button\("in", "Zoom in"\)/);
@@ -1516,14 +1516,18 @@ test("grug-pages photo viewer: fit, panorama and tall openings, bounded zoom and
 	// Slides wait on a loading state (indicator after 300ms) instead of a timer; a failed load keeps the view and offers Retry
 	assert.doesNotMatch(client, /setTimeout\(done, 1500\)/);
 	assert.match(client, /ui\.dialog\.setAttribute\("data-loading", ""\);\n\s*ui\.loadingText\.textContent = [^\n]*\n\s*\}, 300\);/);
-	assert.match(client, /ui\.statusText\.textContent = items\.length > 1 \? `Couldn't load photo \$\{i \+ 1\}\.` : "Couldn't load this photo\.";/);
+	assert.match(client, /const message = items\.length > 1 \? `Couldn't load photo \$\{i \+ 1\}\.` : "Couldn't load this photo\.";\n\s*ui\.statusText\.textContent = message;\n\s*ui\.alert\.textContent = message;/);
 	assert.match(client, /data-lb-retry>Retry<\/button>/);
 	// Loading and errors reach assistive tech: a persistent polite status region and a persistent alert region
 	assert.match(client, /<p class="sr-only" role="status" aria-live="polite" aria-atomic="true" data-lb-loading-text><\/p>/);
-	assert.match(client, /<span role="alert" data-lb-status-text><\/span>/);
+	assert.match(client, /<p class="sr-only" role="alert" aria-atomic="true" data-lb-alert><\/p>/);
+	assert.match(client, /<span aria-hidden="true" data-lb-status-text><\/span>/);
+	// Every opening starts clean: the new photo's caption, counter and arrows, before showModal
+	assert.match(client, /reset\(link\);\n\s*ui\.dialog\.showModal\(\);/);
+	assert.match(client, /const toward = showing < 0 \? ui\.close : i > showing \? ui\.next : ui\.prev;/);
 	assert.match(client, /ui\.loadingText\.textContent = items\.length > 1 \? `Loading photo \$\{n\}` : "Loading photo";/);
 	assert.match(client, /\(toward\.hidden \? ui\.close : toward\)\.focus\(\);/);
-	assert.match(client, /\/\/ Moves count from the photo on screen again, not from the one that failed\.\n\s*index = showing;/);
+	assert.match(client, /if \(showing >= 0\) \{\n\s*index = showing;/);
 	// A swipe's photo goes back to rest before the next slide is asked for
 	assert.match(client, /render\(true\);\n\s*if \(action === "next" && index < items\.length - 1\) return show\(index \+ 1, true\);/);
 	// Resizes keep the picked view: Fit/Fill/opening recomputed, a manual zoom keeps the centre point
