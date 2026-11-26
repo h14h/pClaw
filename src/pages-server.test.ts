@@ -1534,4 +1534,5 @@ test("grug-pages photo viewer: fit, panorama and tall openings, bounded zoom and
 	assert.match(css, /@media \(pointer: coarse\) \{\n {4}\.figure-zoom-icon \{\n {6}opacity: 1;/);
 	assert.match(css, /env\(safe-area-inset-left\)/);
 	assert.match(skill, /`zoom=\{false\}` only for logos and small marks\./);
+	assert.match(skill, /Panorama \(2:1 or wider\)\? Readers open it full screen to pan, so save a big copy/);
 });

@@ -96,6 +96,7 @@ Real images make pages much better when they show something words can't: the pla
   It refuses non-images, SVG, files over 5 MB, and private addresses, downsizes huge files, and prints the `<Figure ... />` line to paste. Add `Figure` to the page's `@components/mdx` import.
 - **Check the image itself before using it.** Open actual image. Confirm place, season, product version, or data period. Use only if it helps reader decide. Alt says what reader needs to see. Chart or map: put takeaway in nearby text if labels too small on phone. Caption adds one short useful fact; omit if surrounding text already does that job. Credit creator and link original source page, with license where required.
 - Transparent image with dark labels or lines (maps, logos, diagrams)? Add `--background paper` so it sits on a light surface in dark mode too.
+- Panorama (2:1 or wider)? Readers open it full screen to pan, so save a big copy: Wikimedia `/thumb/` at 3840px, or the original. `grug-page image` warns when its short edge is under 700px.
 - If the command fails, try another source or leave the image out; never link remote images.
 
 ### Carousels
