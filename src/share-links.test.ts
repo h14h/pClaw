@@ -321,7 +321,7 @@ test("templates render the copy-link placeholders and the copy script (clipboard
 	assert.match(report, /pointer-coarse:min-h-12/);
 	// A stable name while it shows "Copied" (the visible label is hidden from assistive tech)
 	assert.match(report, /data-share-copy=\{slug\}\n\s*aria-label="Copy share link"/);
-	assert.match(report, /<span class="share-copy-label" aria-hidden="true">/);
+	assert.match(report, /<span class="share-copy-label[^"]*" aria-hidden="true">/);
 	assert.match(shelf, /<script type="application\/json" data-share-links is:inline set:html=\{"\{\}"\} \/>/);
 	assert.match(rows, /href=\{shareUrls\[page\.slug\] \?\? "#share-link"\}\n\s*hidden=\{!shareUrls\[page\.slug\]\}/);
 	// Shelf rows say what the button does, next to the tags (not squeezing the title)

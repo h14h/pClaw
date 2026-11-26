@@ -36,6 +36,10 @@ for (const heading of headings) {
   }
 }
 if (sourcesTitle) toc.push({ slug: "sources", text: sourcesTitle, focus: "sources-heading", children: [] });
+// Phone disclosures name their section by its first phrase ("Route, leg by leg" → "Route subsections (5)").
+const tocGroups = toc
+  .filter((entry) => entry.children.length > 0)
+  .map((entry) => ({ ...entry, short: entry.text.split(/\s*[,:;(–—]\s*/)[0] || entry.text }));
 const tocEntries = toc.reduce((count, entry) => count + 1 + entry.children.length, 0);
 const showToc = toc.length >= 3 || tocEntries >= 6;
 const tocLink =
@@ -60,8 +64,9 @@ const tocChild = "text-stone-600 decoration-stone-950/15 dark:text-stone-400 dar
       </p>
     )}
     <div class="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 text-base/6 text-stone-500 sm:text-sm/5 dark:text-stone-400">
-      <!-- One text run, so a narrow screen wraps it at a space rather than stranding a separator -->
-      <span class="tabular-nums">
+      <!-- One text run, so a narrow screen wraps it at a space rather than stranding a separator. Below 360px
+           (owner only) it shares the row with an icon-only "Copy share link" and wraps beside it. -->
+      <span class="tabular-nums max-[22.5rem]:min-w-0 max-[22.5rem]:flex-1 max-[22.5rem]:basis-0">
         <time datetime={date}>{formatDate(date)}</time>{updated && updated !== date && (
           <>, updated <time datetime={updated}>{formatDate(updated)}</time></>
         )}
@@ -74,7 +79,7 @@ const tocChild = "text-stone-600 decoration-stone-950/15 dark:text-stone-400 dar
           hidden
           data-share-copy={slug}
           aria-label="Copy share link"
-          class="share-copy print-hide inline-flex items-center gap-1.5 rounded-md py-1 text-stone-500 hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent pointer-coarse:min-h-12 dark:text-stone-400 dark:hover:text-stone-100 dark:focus-visible:outline-accent-dark"
+          class="share-copy print-hide inline-flex items-center gap-1.5 rounded-md py-1 text-stone-500 hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent pointer-coarse:min-h-12 max-[22.5rem]:-mr-4 max-[22.5rem]:size-12 max-[22.5rem]:shrink-0 max-[22.5rem]:justify-center max-[22.5rem]:py-0 dark:text-stone-400 dark:hover:text-stone-100 dark:focus-visible:outline-accent-dark"
         >
           <svg viewBox="0 0 16 16" aria-hidden="true" class="share-copy-icon size-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
             <path d="M6.5 9.5a3 3 0 0 0 4.2 0l2-2a3 3 0 0 0-4.2-4.2l-.6.6M9.5 6.5a3 3 0 0 0-4.2 0l-2 2a3 3 0 0 0 4.2 4.2l.6-.6" />
@@ -82,7 +87,7 @@ const tocChild = "text-stone-600 decoration-stone-950/15 dark:text-stone-400 dar
           <svg viewBox="0 0 16 16" aria-hidden="true" class="share-copy-done size-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
             <path d="M3.5 8.5l3 3 6-7" />
           </svg>
-          <span class="share-copy-label" aria-hidden="true">
+          <span class="share-copy-label max-[22.5rem]:hidden" aria-hidden="true">
             <span class="share-copy-idle">Copy share link</span>
             <span class="share-copy-copied" aria-hidden="true">Copied</span>
           </span>
@@ -121,7 +126,8 @@ const tocChild = "text-stone-600 decoration-stone-950/15 dark:text-stone-400 dar
             />
           </svg>
         </summary>
-        <!-- Phones: the main sections first, each one's subsections behind a small disclosure. From sm: all nested. -->
+        <!-- Phones: the main sections first, all together, then each one's subsections behind its own disclosure.
+             From sm: one list, subsections nested under their section. -->
         <ol role="list" class="pt-1 pb-4 text-base/6 sm:columns-2 sm:gap-8 sm:pb-5 sm:text-sm/6">
           {toc.map((entry) => (
             <li class="break-inside-avoid">
@@ -133,34 +139,38 @@ const tocChild = "text-stone-600 decoration-stone-950/15 dark:text-stone-400 dar
                 {entry.text}
               </a>
               {entry.children.length > 0 && (
-                <>
-                  <details class="group/sub sm:hidden">
-                    <summary class="-mx-2 ml-1 flex min-h-12 cursor-pointer list-none items-center gap-2 rounded-md px-2 pl-3 text-stone-500 select-none hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent dark:text-stone-400 dark:hover:text-accent-dark dark:focus-visible:outline-accent-dark [&::-webkit-details-marker]:hidden">
-                      <svg viewBox="0 0 16 16" aria-hidden="true" class="size-4 shrink-0 fill-current group-open/sub:rotate-90 motion-safe:transition-transform motion-safe:duration-150">
-                        <path fill-rule="evenodd" d="M6.22 4.22a.75.75 0 0 1 1.06 0l3.25 3.25a.75.75 0 0 1 0 1.06l-3.25 3.25a.75.75 0 0 1-1.06-1.06L8.94 8 6.22 5.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
-                      </svg>
-                      <span class="tabular-nums">{entry.children.length} subsections</span>
-                    </summary>
-                    <ol role="list" class="mb-1 ml-1 border-l border-stone-950/10 pl-3 dark:border-white/10">
-                      {entry.children.map((child) => (
-                        <li>
-                          <a href={`#${child.slug}`} data-jump="" class={`${tocLink} ${tocChild}`}>{child.text}</a>
-                        </li>
-                      ))}
-                    </ol>
-                  </details>
-                  <ol role="list" class="mb-1 ml-1 hidden border-l border-stone-950/10 pl-3 sm:block dark:border-white/10">
-                    {entry.children.map((child) => (
-                      <li>
-                        <a href={`#${child.slug}`} data-jump="" class={`${tocLink} ${tocChild}`}>{child.text}</a>
-                      </li>
-                    ))}
-                  </ol>
-                </>
+                <ol role="list" class="mb-1 ml-1 hidden border-l border-stone-950/10 pl-3 sm:block dark:border-white/10">
+                  {entry.children.map((child) => (
+                    <li>
+                      <a href={`#${child.slug}`} data-jump="" class={`${tocLink} ${tocChild}`}>{child.text}</a>
+                    </li>
+                  ))}
+                </ol>
               )}
             </li>
           ))}
         </ol>
+        {tocGroups.length > 0 && (
+          <div class="-mt-3 pb-4 text-base/6 sm:hidden">
+            {tocGroups.map((entry) => (
+              <details class="group/sub">
+                <summary class="-mx-2 flex min-h-12 cursor-pointer list-none items-center gap-2 rounded-md px-2 text-stone-500 select-none hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent dark:text-stone-400 dark:hover:text-accent-dark dark:focus-visible:outline-accent-dark [&::-webkit-details-marker]:hidden">
+                  <svg viewBox="0 0 16 16" aria-hidden="true" class="size-4 shrink-0 fill-current group-open/sub:rotate-90 motion-safe:transition-transform motion-safe:duration-150">
+                    <path fill-rule="evenodd" d="M6.22 4.22a.75.75 0 0 1 1.06 0l3.25 3.25a.75.75 0 0 1 0 1.06l-3.25 3.25a.75.75 0 0 1-1.06-1.06L8.94 8 6.22 5.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
+                  </svg>
+                  <span>{entry.short} subsections <span class="tabular-nums">({entry.children.length})</span></span>
+                </summary>
+                <ol role="list" class="mb-1 ml-1 border-l border-stone-950/10 pl-3 dark:border-white/10">
+                  {entry.children.map((child) => (
+                    <li>
+                      <a href={`#${child.slug}`} data-jump="" class={`${tocLink} ${tocChild}`}>{child.text}</a>
+                    </li>
+                  ))}
+                </ol>
+              </details>
+            ))}
+          </div>
+        )}
       </details>
     </nav>
   )}

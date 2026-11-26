@@ -1647,11 +1647,18 @@ test("grug-pages report: answer-first opening, Contents with nested legs and Sou
 	assert.match(report, /if \(sourcesTitle\) toc\.push\(\{ slug: "sources", text: sourcesTitle, focus: "sources-heading", children: \[\] \}\);/);
 	assert.match(report, /href=\{`#\$\{entry\.slug\}`\}\n\s*data-jump=\{entry\.focus \?\? ""\}/);
 	assert.match(base, /document\.getElementById\(link\.dataset\.jump \|\| decodeURIComponent\(link\.hash\.slice\(1\)\)\)/);
-	// Phones: main sections first, each one's subsections behind its own 48px disclosure; from sm all nested
-	assert.match(report, /<details class="group\/sub sm:hidden">\n\s*<summary class="[^"]*min-h-12[^"]*">/);
-	assert.match(report, /<span class="tabular-nums">\{entry\.children\.length\} subsections<\/span>/);
+	// Phones: the main sections first, all together; then each section's subsections behind its own 48px disclosure,
+	// named by the section's first phrase. From sm: one list with subsections nested.
+	assert.match(report, /\.map\(\(entry\) => \(\{ \.\.\.entry, short: entry\.text\.split\(/);
+	assert.match(report, /<div class="-mt-3 pb-4 text-base\/6 sm:hidden">\n\s*\{tocGroups\.map\(\(entry\) => \(\n\s*<details class="group\/sub">\n\s*<summary class="[^"]*min-h-12[^"]*">/);
+	assert.match(report, /<span>\{entry\.short\} subsections <span class="tabular-nums">\(\{entry\.children\.length\}\)<\/span><\/span>/);
+	assert.ok(report.indexOf("tocGroups.map") > report.indexOf("toc.map((entry)"), "subsection disclosures come after the main list");
 	assert.match(report, /<ol role="list" class="mb-1 ml-1 hidden border-l [^"]*sm:block/);
 	assert.equal(report.match(/data-jump="" class=\{`\$\{tocLink\} \$\{tocChild\}`\}/g)?.length, 2);
+	// Below 360px (owner): the dates share their row with a 48px icon-only "Copy share link" and wrap beside it
+	assert.match(report, /<span class="tabular-nums max-\[22\.5rem\]:min-w-0 max-\[22\.5rem\]:flex-1 max-\[22\.5rem\]:basis-0">/);
+	assert.match(report, /aria-label="Copy share link"\n\s*class="share-copy [^"]*max-\[22\.5rem\]:size-12 max-\[22\.5rem\]:shrink-0 max-\[22\.5rem\]:justify-center/);
+	assert.match(report, /<span class="share-copy-label max-\[22\.5rem\]:hidden" aria-hidden="true">/);
 	assert.match(report, /const showToc = toc\.length >= 3 \|\| tocEntries >= 6;/);
 	assert.match(report, /toc\.at\(-1\)!\.children\.push/);
 	assert.match(report, /-mx-2 flex min-h-12 items-center[^"]*sm:pointer-fine:min-h-0/);
