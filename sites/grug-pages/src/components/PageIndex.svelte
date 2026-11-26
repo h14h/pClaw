@@ -257,7 +257,7 @@
               hidden={!shareUrls[page.slug]}
               data-share-copy={page.slug}
               aria-label={`Copy share link for ${page.title}`}
-              class="share-copy ml-auto inline-flex items-center gap-1.5 rounded-md py-1 text-sm/5 text-stone-500 hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent pointer-coarse:-my-2 pointer-coarse:min-h-12 dark:text-stone-400 dark:hover:text-stone-100 dark:focus-visible:outline-accent-dark"
+              class="share-copy ml-auto inline-flex items-center gap-1.5 rounded-md py-1 text-sm/5 text-stone-500 hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent pointer-coarse:min-h-12 dark:text-stone-400 dark:hover:text-stone-100 dark:focus-visible:outline-accent-dark"
             >
               <svg viewBox="0 0 16 16" aria-hidden="true" class="share-copy-icon size-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M6.5 9.5a3 3 0 0 0 4.2 0l2-2a3 3 0 0 0-4.2-4.2l-.6.6M9.5 6.5a3 3 0 0 0-4.2 0l-2 2a3 3 0 0 0 4.2 4.2l.6-.6" />

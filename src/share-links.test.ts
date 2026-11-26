@@ -322,6 +322,8 @@ test("templates render the copy-link placeholders and the copy script (clipboard
 	// Shelf rows say what the button does, next to the tags (not squeezing the title)
 	assert.match(rows, /<span class="share-copy-idle">Copy link<\/span>/);
 	assert.doesNotMatch(rows, /<li class="flex/);
+	// Its whole 48px touch target is its own: no negative margin reaching under the next row
+	assert.doesNotMatch(rows, /pointer-coarse:-my-/);
 	assert.match(rows, /aria-label=\{`Copy share link for \$\{page\.title\}`\}/);
 	assert.match(rows, /pointer-coarse:min-h-12/);
 	assert.match(base, /navigator\.clipboard\.writeText\(url\)\.then\(copied, \(\) => \{/);
