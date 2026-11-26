@@ -1530,6 +1530,8 @@ test("grug-pages photo viewer: fit, panorama and tall openings, bounded zoom and
 	assert.match(client, /resetGestures\(\);\n\s*\/\/ Image-only controls wait for a photo\.\n\s*for \(const control of \[ui\.zoomIn, ui\.zoomOut, ui\.reset, ui\.fitfill\]\) setDisabled\(control, true\);/);
 	assert.match(client, /if \(blank\(\)\) return;\n\s*const \[a, b\] = \[\.\.\.pointers\.values\(\)\];/);
 	assert.match(client, /enabled\(fitfill, /);
+	assert.match(client, /function render\(animate = false\) \{\n(?:\s*\/\/[^\n]*\n)*\s*if \(blank\(\)\) \{/);
+	assert.match(client, /ui\.fitfill\.title = "Fit whole photo";\n\s*ui\.zoomIn\.setAttribute\("aria-label", "Zoom in"\);/);
 	assert.match(client, /ui\.loadingText\.textContent = items\.length > 1 \? `Loading photo \$\{n\}` : "Loading photo";/);
 	assert.match(client, /\(toward\.hidden \? ui\.close : toward\)\.focus\(\);/);
 	assert.match(client, /if \(showing >= 0\) \{\n\s*index = showing;/);

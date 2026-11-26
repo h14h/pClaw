@@ -127,6 +127,13 @@
   const setDisabled = (el, off) => el.setAttribute("aria-disabled", String(off));
 
   function render(animate = false) {
+    // Blank (no photo yet): nothing to draw, and the image controls keep the disabled loading state reset() gave
+    // them, whatever a gesture release or cancel asks for.
+    if (blank()) {
+      ui.img.style.transition = "none";
+      ui.img.style.transform = "";
+      return;
+    }
     const motion = animate && !reducedMotion.matches;
     // Sized in layout (not a transform scale) and placed on whole device pixels: one resample, no tile seams.
     const ratio = dpr();
@@ -246,8 +253,13 @@
     setCaption(figure);
   }
 
+  // Each photo gets a fresh caption element: a bottom-anchored box changing height in place would count as a layout
+  // shift of the old one. Focus on the old credit link moves to the new one (or the dialog).
   function setCaption(figure) {
-    ui.caption.replaceChildren();
+    const hadFocus = ui.caption.contains(document.activeElement);
+    const fresh = ui.caption.cloneNode(false);
+    ui.caption.replaceWith(fresh);
+    ui.caption = fresh;
     const caption = figure?.querySelector("[data-caption]")?.textContent?.trim();
     const credit = figure?.querySelector("[data-credit]");
     if (caption) {
@@ -267,6 +279,7 @@
       ui.caption.append(node);
     }
     ui.caption.hidden = !caption && !credit;
+    if (hadFocus) (ui.caption.querySelector("a") ?? ui.dialog).focus({ preventScroll: true });
   }
 
   function views() {
@@ -442,6 +455,11 @@
     ui.fitfill.hidden = false;
     ui.fitfillText.textContent = "Fit";
     ui.fitfill.setAttribute("aria-label", "Fit whole photo");
+    ui.fitfill.title = "Fit whole photo";
+    ui.zoomIn.setAttribute("aria-label", "Zoom in");
+    ui.zoomIn.title = "Zoom in";
+    ui.zoomOut.setAttribute("aria-label", "Zoom out");
+    ui.zoomOut.title = "Zoom out";
     setLoading(false);
     clearStatus();
     ui.live.textContent = "";
