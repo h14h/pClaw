@@ -977,10 +977,11 @@
     background: white;
     box-shadow: 0 0 0 1px rgb(12 10 9 / 0.12);
 
+    /* Inset, so the ring stays whole even when the field sits flush with the bottom of the screen. */
     &:focus-visible,
     &:focus {
       outline: 2px solid var(--color-accent);
-      outline-offset: 1px;
+      outline-offset: -2px;
     }
 
     @variant dark {

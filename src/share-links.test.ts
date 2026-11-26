@@ -336,6 +336,8 @@ test("templates render the copy-link placeholders and the copy script (clipboard
 	assert.match(base, /input\.dataset\.shareField = "";/);
 	assert.match(base, /text\.textContent = "Copy this link:";/);
 	assert.match(base, /field\.setSelectionRange\(0, url\.length\);/);
+	const css = read("src/styles/global.css");
+	assert.match(css, /\.share-copy-field \{[\s\S]*?outline: 2px solid var\(--color-accent\);\n\s*outline-offset: -2px;/);
 	assert.match(base, /if \(box_\.top < 0 \|\| box_\.bottom > window\.innerHeight\) box\.scrollIntoView\(\{ block: "nearest", behavior: "instant" \}\);/);
 	// A successful legacy copy hands focus back to the button
 	assert.match(base, /if \(before instanceof HTMLElement && before !== document\.body\) before\.focus\(\{ preventScroll: true \}\);/);
