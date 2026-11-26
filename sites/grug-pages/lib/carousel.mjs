@@ -217,3 +217,35 @@ export function createSettler({ nativeScrollEnd, settle, delay = 150, setTimer =
     },
   };
 }
+
+/**
+ * Decides when a prev/next button press counts. iOS WebKit never fires `click` for a tap that starts while a
+ * scroller on the page is still moving (a strip snapping after a swipe, or the slide animating from the previous
+ * press), but it does deliver pointerdown/pointerup. So a touch or pen tap counts on pointerup (if the finger
+ * stayed on the button), and a click that follows it within `window` ms is the same press, not another one. Mouse
+ * clicks, Enter and Space arrive as plain clicks and count once.
+ */
+export function createPressGate({ now = () => performance.now(), slop = 10, window = 700 } = {}) {
+  let down = null;
+  let tappedAt = -Infinity;
+  return {
+    pointerDown(event) {
+      down = event.pointerType === "mouse" ? null : { id: event.pointerId, x: event.clientX, y: event.clientY };
+    },
+    pointerCancel() {
+      down = null;
+    },
+    /** True when this pointerup is a tap that should activate the button now. */
+    pointerUp(event) {
+      if (!down || event.pointerId !== down.id) return false;
+      const stayed = Math.hypot(event.clientX - down.x, event.clientY - down.y) <= slop;
+      down = null;
+      if (stayed) tappedAt = now();
+      return stayed;
+    },
+    /** True when this click is a press of its own (mouse, keyboard, assistive tech), not the echo of a tap. */
+    click() {
+      return now() - tappedAt > window;
+    },
+  };
+}

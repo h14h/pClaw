@@ -1118,7 +1118,7 @@ test("grug-pages Figure: portraits fit on screen, credits are 48px touch targets
 });
 
 test("grug-pages Carousel: stacked without JS, one settled slide with JS, lazy slot-true images, and build warnings", async () => {
-	const { buildCarousel, carouselFrame, createSettler, lintCarousels, slideSizes, CAROUSEL_MAX_SLIDES, CAROUSEL_SMALL_FILL, CAROUSEL_TOO_MANY } =
+	const { buildCarousel, carouselFrame, createPressGate, createSettler, lintCarousels, slideSizes, CAROUSEL_MAX_SLIDES, CAROUSEL_SMALL_FILL, CAROUSEL_TOO_MANY } =
 		await import("../sites/grug-pages/lib/carousel.mjs");
 	const figure = (width: number, height: number, alt: string) =>
 		`<figure class="not-prose my-8" style="--figure-ratio: 0.6; width: min(100%, 1rem);" data-portrait="true"><picture>` +
@@ -1256,6 +1256,31 @@ test("grug-pages Carousel: stacked without JS, one settled slide with JS, lazy s
 		assert.equal(settled, 3, `${path}: one settle per programmatic move`);
 	}
 
+	// Prev/next presses: a touch tap counts on pointerup (iOS drops the click of a tap made while the strip is still
+	// moving), the click that may follow is not a second press, and mouse/keyboard clicks count once each.
+	{
+		let t = 0;
+		const gate = createPressGate({ now: () => t });
+		const touch = (x: number) => ({ pointerType: "touch", pointerId: 7, clientX: x, clientY: 10 });
+		gate.pointerDown(touch(100));
+		assert.equal(gate.pointerUp(touch(104)), true, "tap counts on pointerup");
+		t += 30;
+		assert.equal(gate.click(), false, "its click is the same press");
+		t += 800;
+		assert.equal(gate.click(), true, "a later click (keyboard, assistive tech) is a press of its own");
+		gate.pointerDown(touch(100));
+		assert.equal(gate.pointerUp(touch(160)), false, "a finger that slid off doesn't press");
+		gate.pointerDown(touch(100));
+		gate.pointerCancel();
+		assert.equal(gate.pointerUp(touch(100)), false, "a cancelled touch doesn't press");
+		gate.pointerDown({ pointerType: "mouse", pointerId: 1, clientX: 5, clientY: 5 });
+		assert.equal(gate.pointerUp({ pointerType: "mouse", pointerId: 1, clientX: 5, clientY: 5 }), false, "mouse waits for click");
+		t += 800;
+		assert.equal(gate.click(), true);
+		gate.pointerDown(touch(100));
+		assert.equal(gate.pointerUp({ ...touch(100), pointerId: 8 }), false, "another pointer's lift doesn't press");
+	}
+
 	const component = readFileSync(new URL("../sites/grug-pages/src/components/mdx/Carousel.astro", import.meta.url), "utf8");
 	const css = readFileSync(new URL("../sites/grug-pages/src/styles/global.css", import.meta.url), "utf8");
 	const index = readFileSync(new URL("../sites/grug-pages/src/components/mdx/index.ts", import.meta.url), "utf8");
@@ -1286,8 +1311,11 @@ test("grug-pages Carousel: stacked without JS, one settled slide with JS, lazy s
 	assert.match(component, /for \(const control of \[strip, prev, next\]\) control\.addEventListener\("keydown", onKey\);/);
 	assert.match(component, /if \(event\.target !== event\.currentTarget\) \{\n\s*if \(event\.key === "ArrowLeft" \|\| event\.key === "ArrowRight"\) event\.preventDefault\(\);\n\s*return;/);
 	assert.match(component, /if \(button\.getAttribute\("aria-disabled"\) === "true"\) return;/);
+	assert.match(component, /if \(gate\.pointerUp\(event\)\) activate\(\);/);
+	assert.match(component, /if \(gate\.click\(\)\) activate\(\);/);
+	assert.match(component, /if \(!moved && !there\) jump\(left\);/);
 	assert.doesNotMatch(component, /setInterval|autoplay/i);
-	assert.match(component, /behavior: reducedMotion\.matches \? "auto" : "smooth"/);
+	assert.match(component, /if \(reducedMotion\.matches\) return jump\(left\);/);
 	assert.match(component, /if \(announce\) warm\(i \+ 1\);/);
 	assert.match(component, /warm\(0\);\n\s*warm\(1\);/);
 	// Control row contrast and type

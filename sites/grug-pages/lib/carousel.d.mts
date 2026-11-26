@@ -24,3 +24,10 @@ export declare function createSettler(options: {
   clearTimer?: (handle: unknown) => void;
 }): CarouselSettler;
 export declare function lintCarousels(body: string, options?: { sizeOf?: (src: string) => [number, number] | undefined }): string[];
+export type PointerLike = { pointerType: string; pointerId: number; clientX: number; clientY: number };
+export declare function createPressGate(options?: { now?: () => number; slop?: number; window?: number }): {
+  pointerDown(event: PointerLike): void;
+  pointerCancel(): void;
+  pointerUp(event: PointerLike): boolean;
+  click(): boolean;
+};

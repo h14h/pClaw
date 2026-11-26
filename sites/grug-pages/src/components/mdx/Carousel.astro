@@ -89,7 +89,7 @@ const circle =
 )}
 
 <script>
-  import { createSettler } from "../../../lib/carousel.mjs";
+  import { createPressGate, createSettler } from "../../../lib/carousel.mjs";
 
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
@@ -149,24 +149,59 @@ const circle =
       let target: number | null = null;
       // scrollend where the browser has it, a quiet spell otherwise; never while a finger or pointer is down.
       const nativeScrollEnd = "onscrollend" in window;
+      let pressedAt = 0;
       const settler = createSettler({
         nativeScrollEnd,
         settle: () => {
+          // A press still on its way (e.g. made while a swipe's snap was finishing) settles when it arrives, so the
+          // swipe's own scrollend can't commit and announce the slide in between.
+          if (target !== null && Math.abs(strip.scrollLeft - offset(target)) > 2 && performance.now() - pressedAt < 1500) return;
           target = null;
           apply(nearest(), true);
         },
       });
+      const arrive = () => {
+        target = null;
+        apply(nearest(), true);
+      };
+      // Jump without animation: WebKit can drop a smooth scroll on a snap container that is still settling.
+      const jump = (left: number) => {
+        strip.style.scrollSnapType = "none";
+        strip.scrollLeft = left;
+        requestAnimationFrame(() => {
+          strip.style.scrollSnapType = "";
+          if (Math.abs(strip.scrollLeft - left) < 2) arrive();
+        });
+      };
       const go = (i: number) => {
         target = Math.max(0, Math.min(last, i));
+        pressedAt = performance.now();
         warm(target);
-        if (Math.abs(strip.scrollLeft - offset(target)) < 1) {
-          target = null;
-          apply(nearest(), true);
-          return;
-        }
-        strip.scrollTo({ left: offset(target), behavior: reducedMotion.matches ? "auto" : "smooth" });
+        const left = offset(target);
+        if (Math.abs(strip.scrollLeft - left) < 1) return arrive();
+        if (reducedMotion.matches) return jump(left);
+        const startLeft = strip.scrollLeft;
+        const wanted = target;
+        strip.scrollTo({ left, behavior: "smooth" });
+        setTimeout(() => {
+          if (target !== wanted) return;
+          const moved = Math.abs(strip.scrollLeft - startLeft) >= 1;
+          const there = Math.abs(strip.scrollLeft - left) < 2;
+          if (!moved && !there) jump(left);
+        }, 120);
       };
-      strip.addEventListener("scroll", () => settler.scroll(), { passive: true });
+      let heading = 0;
+      let lastLeft = strip.scrollLeft;
+      strip.addEventListener(
+        "scroll",
+        () => {
+          const left = strip.scrollLeft;
+          if (left !== lastLeft) heading = Math.sign(left - lastLeft);
+          lastLeft = left;
+          settler.scroll();
+        },
+        { passive: true },
+      );
       if (nativeScrollEnd) strip.addEventListener("scrollend", () => settler.scrollEnd());
       strip.addEventListener("touchstart", () => settler.press(), { passive: true });
       const lift = (event: TouchEvent) => {
@@ -187,11 +222,34 @@ const circle =
         window.addEventListener("pointercancel", up);
       });
 
-      const from = () => target ?? index;
+      // Which slide a press steps from: the press already on its way, else the settled slide, else (a swipe still
+      // snapping, not yet settled) the slide the strip is heading for, so swipe-then-Next lands one further on.
+      const from = () => {
+        if (target !== null) return target;
+        const left = strip.scrollLeft;
+        if (Math.abs(left - offset(index)) < 2) return index;
+        if (heading > 0) {
+          const ahead = slides.findIndex((_, i) => offset(i) >= left - 1);
+          return ahead === -1 ? last : ahead;
+        }
+        let behind = 0;
+        for (let i = 0; i < slides.length; i++) if (offset(i) <= left + 1) behind = i;
+        return behind;
+      };
+      // Touch taps count on pointerup: iOS drops the click of a tap that starts while the strip is still moving.
       const press = (button: HTMLButtonElement, step: number) => {
-        button.addEventListener("click", () => {
+        const gate = createPressGate();
+        const activate = () => {
           if (button.getAttribute("aria-disabled") === "true") return;
           go(from() + step);
+        };
+        button.addEventListener("pointerdown", (event) => gate.pointerDown(event));
+        button.addEventListener("pointercancel", () => gate.pointerCancel());
+        button.addEventListener("pointerup", (event) => {
+          if (gate.pointerUp(event)) activate();
+        });
+        button.addEventListener("click", () => {
+          if (gate.click()) activate();
         });
       };
       press(prev, -1);
