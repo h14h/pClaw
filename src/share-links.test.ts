@@ -317,6 +317,9 @@ test("templates render the copy-link placeholders and the copy script (clipboard
 	const base = read("src/layouts/BaseLayout.astro");
 	assert.match(report, /href="#share-link"\n\s*hidden\n\s*data-share-copy=\{slug\}/);
 	assert.match(report, /pointer-coarse:min-h-12/);
+	// A stable name while it shows "Copied" (the visible label is hidden from assistive tech)
+	assert.match(report, /data-share-copy=\{slug\}\n\s*aria-label="Copy share link"/);
+	assert.match(report, /<span class="share-copy-label" aria-hidden="true">/);
 	assert.match(shelf, /<script type="application\/json" data-share-links is:inline set:html=\{"\{\}"\} \/>/);
 	assert.match(rows, /href=\{shareUrls\[page\.slug\] \?\? "#share-link"\}\n\s*hidden=\{!shareUrls\[page\.slug\]\}/);
 	// Shelf rows say what the button does, next to the tags (not squeezing the title)
@@ -333,6 +336,7 @@ test("templates render the copy-link placeholders and the copy script (clipboard
 	assert.match(base, /input\.dataset\.shareField = "";/);
 	assert.match(base, /text\.textContent = "Copy this link:";/);
 	assert.match(base, /field\.setSelectionRange\(0, url\.length\);/);
+	assert.match(base, /if \(box_\.top < 0 \|\| box_\.bottom > window\.innerHeight\) box\.scrollIntoView\(\{ block: "nearest", behavior: "instant" \}\);/);
 	// A successful legacy copy hands focus back to the button
 	assert.match(base, /if \(before instanceof HTMLElement && before !== document\.body\) before\.focus\(\{ preventScroll: true \}\);/);
 	assert.match(base, /<p id="share-copy-status" class="sr-only" aria-live="polite" aria-atomic="true"><\/p>/);

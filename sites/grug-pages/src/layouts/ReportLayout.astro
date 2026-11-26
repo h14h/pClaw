@@ -68,6 +68,7 @@ const lightboxScript = `(() => {\n${stripComments(lightboxMath.replace(/^export 
           href="#share-link"
           hidden
           data-share-copy={slug}
+          aria-label="Copy share link"
           class="share-copy print-hide inline-flex items-center gap-1.5 rounded-md py-1 text-stone-500 hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent pointer-coarse:min-h-12 dark:text-stone-400 dark:hover:text-stone-100 dark:focus-visible:outline-accent-dark"
         >
           <svg viewBox="0 0 16 16" aria-hidden="true" class="share-copy-icon size-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -76,7 +77,7 @@ const lightboxScript = `(() => {\n${stripComments(lightboxMath.replace(/^export 
           <svg viewBox="0 0 16 16" aria-hidden="true" class="share-copy-done size-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
             <path d="M3.5 8.5l3 3 6-7" />
           </svg>
-          <span class="share-copy-label">
+          <span class="share-copy-label" aria-hidden="true">
             <span class="share-copy-idle">Copy share link</span>
             <span class="share-copy-copied" aria-hidden="true">Copied</span>
           </span>

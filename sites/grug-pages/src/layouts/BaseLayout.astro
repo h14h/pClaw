@@ -209,6 +209,10 @@ const tableHeadingScript = `const grugTableHeading = (() => {\n${tableHeadingSou
           field.focus({ preventScroll: true });
           field.select();
           field.setSelectionRange(0, url.length);
+          // If the instruction or the field landed off screen (a button at the bottom edge), bring them into view at
+          // once; an instant jump also respects reduced motion. Focus and selection stay.
+          const box_ = box.getBoundingClientRect();
+          if (box_.top < 0 || box_.bottom > window.innerHeight) box.scrollIntoView({ block: "nearest", behavior: "instant" });
           if (status) status.textContent = "Copy the share link from the field below";
         };
         const timers = new WeakMap();
