@@ -248,3 +248,82 @@ test("shareHtml leaves pages without owner markers safe and unmarked links alone
 	assert.match(out, /<a href="\/p\/AbCdEfGh1234\/">old All pages<\/a>/);
 	assert.match(out, /<a href="https:\/\/example.com\/">src<\/a>/);
 });
+
+test("owner pages offer each page's share link (minted on demand, fresh after rotation); share pages never do", async () => {
+	const root = join(dir, "copy-link");
+	const code = "c0py5har";
+	const site = join(root, code);
+	const copyLink = (slug: string, svelte = false) =>
+		`<a href="#share-link" ${svelte ? 'hidden=""' : "hidden"} data-share-copy="${slug}" class="share-copy inline-flex"><svg aria-hidden="true"></svg><span>Copy share link</span></a>`;
+	mkdirSync(join(site, "fjords"), { recursive: true });
+	writeFileSync(
+		join(site, "index.html"),
+		`<!doctype html><html><body><script type="application/json" data-share-links>{}</script><ul>` +
+			`<li><a href="/${code}/fjords/">Fjords</a>${copyLink("fjords", true)}</li>` +
+			`<li><a href="/${code}/draft/">Draft</a>${copyLink("draft", true)}</li></ul></body></html>`,
+	);
+	writeFileSync(join(site, "fjords", "index.html"), pageHtml(code, "fjords", copyLink("fjords")));
+	const links = new ShareLinks(root);
+	const server = await startPagesServer({ pagesDir: root, port: 0, host: "127.0.0.1" });
+	const base = `http://127.0.0.1:${server.port}`;
+	try {
+		// A page published after startup has no token yet: the owner page mints it, like publishing does
+		mkdirSync(join(site, "late"), { recursive: true });
+		writeFileSync(join(site, "late", "index.html"), pageHtml(code, "late", copyLink("late")));
+		assert.equal(links.get(code, "late"), undefined);
+		const late = await (await fetch(`${base}/${code}/late/`)).text();
+		const lateToken = links.get(code, "late");
+		assert.ok(lateToken && SHARE_TOKEN.test(lateToken));
+		assert.ok(late.includes(`<a href="/p/${lateToken}/" data-share-copy="late" class="share-copy inline-flex">`), "a plain, visible link to the share address");
+
+		// The report page: its own share link, visible
+		const res = await fetch(`${base}/${code}/fjords/`);
+		assert.equal(res.headers.get("cache-control"), "no-cache");
+		assert.match(res.headers.get("content-security-policy") ?? "", /default-src 'self'/);
+		const page = await res.text();
+		const token = links.get(code, "fjords")!;
+		assert.ok(page.includes(`<a href="/p/${token}/" data-share-copy="fjords"`));
+		assert.doesNotMatch(page, /data-share-copy="fjords"[^>]*\shidden/);
+
+		// The shelf: each published row gets its link, the JSON map matches, an unpublished slug stays hidden
+		const shelf = await (await fetch(`${base}/${code}/`)).text();
+		assert.ok(shelf.includes(`<a href="/p/${token}/" data-share-copy="fjords"`));
+		assert.ok(shelf.includes(`<a href="#share-link" hidden="" data-share-copy="draft"`));
+		const map = JSON.parse(/data-share-links>([^<]*)<\/script>/.exec(shelf)![1]!) as Record<string, string>;
+		assert.deepEqual(map, { fjords: `/p/${token}/` });
+
+		// Rotating the token shows the new link at once; the old one is dead
+		const rotated = links.rotate(code, "fjords");
+		const after = await (await fetch(`${base}/${code}/fjords/`)).text();
+		assert.ok(after.includes(`<a href="/p/${rotated}/" data-share-copy="fjords"`));
+		assert.ok(!after.includes(token));
+		assert.equal((await fetch(`${base}/p/${token}/`)).status, 404);
+
+		// The share page carries no copy link, no shelf map, and still no owner code
+		const shared = await (await fetch(`${base}/p/${rotated}/`)).text();
+		assert.doesNotMatch(shared, /data-share-copy|Copy share link/);
+		assert.ok(!shared.includes(code));
+		assert.equal(shareHtml(`<p>x</p>${copyLink("fjords")}<script type="application/json" data-share-links>{"a":"/p/x/"}</script>`, { code, slug: "fjords" }, rotated), `<p>x</p><script type="application/json" data-share-links>{}</script>`);
+	} finally {
+		await server.stop();
+	}
+});
+
+test("templates render the copy-link placeholders and the copy script (clipboard, legacy copy, field)", () => {
+	const read = (path: string) => readFileSync(new URL(`../sites/grug-pages/${path}`, import.meta.url), "utf8");
+	const report = read("src/layouts/ReportLayout.astro");
+	const shelf = read("src/pages/index.astro");
+	const rows = read("src/components/PageIndex.svelte");
+	const base = read("src/layouts/BaseLayout.astro");
+	assert.match(report, /href="#share-link"\n\s*hidden\n\s*data-share-copy=\{slug\}/);
+	assert.match(report, /pointer-coarse:min-h-12/);
+	assert.match(shelf, /<script type="application\/json" data-share-links is:inline set:html=\{"\{\}"\} \/>/);
+	assert.match(rows, /href=\{shareUrls\[page\.slug\] \?\? "#share-link"\}\n\s*hidden=\{!shareUrls\[page\.slug\]\}/);
+	assert.match(rows, /aria-label=\{`Copy share link for \$\{page\.title\}`\}/);
+	assert.match(rows, /pointer-coarse:size-12/);
+	assert.match(base, /navigator\.clipboard\.writeText\(url\)\.then\(copied, \(\) => \{/);
+	assert.match(base, /document\.execCommand\("copy"\)/);
+	assert.match(base, /field\.dataset\.shareField = "";/);
+	assert.match(base, /<p id="share-copy-status" class="sr-only" aria-live="polite" aria-atomic="true"><\/p>/);
+	assert.match(base, /if \(!href \|\| !href\.startsWith\("\/p\/"\)\) return;/);
+});

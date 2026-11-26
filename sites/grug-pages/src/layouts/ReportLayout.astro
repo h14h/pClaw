@@ -61,6 +61,27 @@ const lightboxScript = `(() => {\n${stripComments(lightboxMath.replace(/^export 
           ))}
         </ul>
       )}
+      {slug && (
+        // "Copy share link": hidden in the build; the pages server fills in this page's /p/ link on the owner's
+        // address (a plain link without JS) and removes it from the share address. See ownerHtml in pages-server.ts.
+        <a
+          href="#share-link"
+          hidden
+          data-share-copy={slug}
+          class="share-copy print-hide inline-flex items-center gap-1.5 rounded-md py-1 text-stone-500 hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent pointer-coarse:min-h-12 dark:text-stone-400 dark:hover:text-stone-100 dark:focus-visible:outline-accent-dark"
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true" class="share-copy-icon size-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M6.5 9.5a3 3 0 0 0 4.2 0l2-2a3 3 0 0 0-4.2-4.2l-.6.6M9.5 6.5a3 3 0 0 0-4.2 0l-2 2a3 3 0 0 0 4.2 4.2l.6-.6" />
+          </svg>
+          <svg viewBox="0 0 16 16" aria-hidden="true" class="share-copy-done size-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3.5 8.5l3 3 6-7" />
+          </svg>
+          <span class="share-copy-label">
+            <span class="share-copy-idle">Copy share link</span>
+            <span class="share-copy-copied" aria-hidden="true">Copied</span>
+          </span>
+        </a>
+      )}
     </div>
   </header>
 

@@ -96,13 +96,39 @@ export function rewriteForShare(text: string, target: { code: string; slug: stri
 		.join(token);
 }
 
+/** A "Copy share link" placeholder the templates render: `<a … data-share-copy="<slug>" … href="#share-link" … hidden>`. */
+const SHARE_COPY_TAG = /<a\b[^>]*\bdata-share-copy="([a-z0-9][a-z0-9-]{0,62})"[^>]*>/g;
+const SHARE_COPY_ELEMENT = /<a\b[^>]*\bdata-share-copy="[^"]*"[^>]*>[\s\S]*?<\/a>/g;
+/** The shelf's map of slug → share link, which the shelf script reads when it re-renders rows. */
+const SHARE_LINKS_MAP = /(<script\b[^>]*\bdata-share-links\b[^>]*>)[\s\S]*?(<\/script>)/g;
+
+/**
+ * Owner pages (the shelf and each report) offer "Copy share link": every placeholder becomes a plain link to that
+ * page's `/p/<token>/` (minting a token the first time, like publishing does), so it works without JS too, and the
+ * shelf's JSON map gets the same links. Only published pages get one; the rest stay hidden.
+ */
+export function ownerHtml(html: string, code: string, links: ShareLinks): string {
+	if (!html.includes("data-share-")) return html;
+	const urls: Record<string, string> = {};
+	const urlFor = (slug: string): string | undefined => {
+		if (!(slug in urls) && links.isPublished(code, slug)) urls[slug] = `/p/${links.tokenFor(code, slug)}/`;
+		return urls[slug];
+	};
+	const out = html.replace(SHARE_COPY_TAG, (tag, slug: string) => {
+		const url = urlFor(slug);
+		if (url === undefined) return tag;
+		return tag.replace(/\shref="#share-link"/, ` href="${url}"`).replace(/\shidden(?:="")?(?=[\s>])/, "");
+	});
+	return out.replace(SHARE_LINKS_MAP, (_, open: string, close: string) => `${open}${JSON.stringify(urls).replace(/</g, "\\u003c")}${close}`);
+}
+
 /**
  * The shared view of a page: rewritten like any text, marked `data-grug-shared`, and with the owner's navigation
  * (links the layouts mark `data-owner-nav`) defused. "All pages" links lose their href and hide; the header mark
  * stays but stops being a link. The page's own script puts them back for the owner (see BaseLayout.astro).
  */
 export function shareHtml(html: string, target: { code: string; slug: string }, token: string): string {
-	return rewriteForShare(html, target, token)
+	return rewriteForShare(html.replace(SHARE_COPY_ELEMENT, "").replace(SHARE_LINKS_MAP, "$1{}$2"), target, token)
 		.replace(/<html\b/i, "<html data-grug-shared")
 		.replace(/<a\b[^>]*\bdata-owner-nav\b[^>]*>/gi, (tag) => {
 			const withoutHref = tag.replace(/\s+href\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "");
@@ -289,6 +315,19 @@ export function createPagesHandler(
 			});
 			res.end();
 			return;
+		}
+
+		// Owner HTML carries the "Copy share link" links, filled in fresh on every request (a rotated token shows at once).
+		const file = resolveSafeFile(userDir, rest, pathname);
+		if (file.status === "file" && extname(file.filePath).toLowerCase() === ".html") {
+			let html: string | undefined;
+			try {
+				html = readFileSync(file.filePath, "utf8");
+			} catch {}
+			if (html?.includes("data-share-")) {
+				sendBody(res, method, Buffer.from(ownerHtml(html, userCode, links), "utf8"), "text/html; charset=utf-8", "no-cache");
+				return;
+			}
 		}
 
 		const handler = createStaticHandler({ rootDir: userDir, basePath: `/${userCode}` });

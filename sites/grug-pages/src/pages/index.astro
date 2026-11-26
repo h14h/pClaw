@@ -36,5 +36,7 @@ const pages: PageListItem[] = entries
   ogImagePath="/og/index.png"
   canonicalPath="/"
 >
+  {/* Filled by the pages server with each page's /p/ share link (slug → URL), for the shelf's "Copy share link". */}
+  <script type="application/json" data-share-links is:inline set:html={"{}"} />
   <PageIndex client:load pages={pages} />
 </BaseLayout>

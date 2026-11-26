@@ -159,6 +159,76 @@ const tableHeadingScript = `const grugTableHeading = (() => {\n${tableHeadingSou
         }
       })();
     </script>
+    <p id="share-copy-status" class="sr-only" aria-live="polite" aria-atomic="true"></p>
+    <script is:inline>
+      // "Copy share link" (links the pages server fills in on the owner's address, a[data-share-copy] pointing at
+      // /p/<token>/). Copies the full share URL: the Clipboard API, then a hidden-textarea copy for browsers that
+      // refuse it (some in-app browsers), then a selectable field as a last resort. "Copied" for 2s, announced.
+      (() => {
+        const status = document.getElementById("share-copy-status");
+        const legacyCopy = (text) => {
+          const area = document.createElement("textarea");
+          area.value = text;
+          area.setAttribute("readonly", "");
+          area.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none";
+          document.body.append(area);
+          area.focus({ preventScroll: true });
+          area.select();
+          area.setSelectionRange(0, text.length);
+          let ok = false;
+          try {
+            ok = document.execCommand("copy");
+          } catch {}
+          area.remove();
+          return ok;
+        };
+        const showField = (link, url) => {
+          let field = link.nextElementSibling;
+          if (!field || !field.matches("input[data-share-field]")) {
+            field = document.createElement("input");
+            field.type = "text";
+            field.readOnly = true;
+            field.dataset.shareField = "";
+            field.setAttribute("aria-label", "Share link");
+            field.className = "share-copy-field";
+            link.after(field);
+          }
+          field.value = url;
+          field.focus();
+          field.select();
+          if (status) status.textContent = "Copy the share link from the field";
+        };
+        const timers = new WeakMap();
+        document.addEventListener("click", (event) => {
+          if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+          const link = event.target instanceof Element ? event.target.closest("a[data-share-copy]") : null;
+          if (!link) return;
+          const href = link.getAttribute("href");
+          if (!href || !href.startsWith("/p/")) return;
+          event.preventDefault();
+          const url = new URL(href, location.href).href;
+          const copied = () => {
+            clearTimeout(timers.get(link));
+            link.setAttribute("data-copied", "");
+            if (status) {
+              status.textContent = "";
+              status.textContent = "Share link copied";
+            }
+            timers.set(link, setTimeout(() => link.removeAttribute("data-copied"), 2000));
+          };
+          // Without the async API, copy synchronously while the tap still counts as a user gesture.
+          if (!navigator.clipboard || !window.isSecureContext) {
+            if (legacyCopy(url)) copied();
+            else showField(link, url);
+            return;
+          }
+          navigator.clipboard.writeText(url).then(copied, () => {
+            if (legacyCopy(url)) copied();
+            else showField(link, url);
+          });
+        });
+      })();
+    </script>
     <script is:inline set:html={tableHeadingScript} />
     <script is:inline>
       (() => {

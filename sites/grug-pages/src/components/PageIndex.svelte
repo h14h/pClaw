@@ -13,6 +13,17 @@
 
   let { pages = [] }: { pages: PageListItem[] } = $props();
 
+  // Share links the pages server filled in on the owner's address (slug → /p/<token>/). Empty when built or
+  // previewed, which keeps each row's copy button hidden.
+  const shareUrls: Record<string, string> = (() => {
+    if (typeof document === "undefined") return {};
+    try {
+      return JSON.parse(document.querySelector("script[data-share-links]")?.textContent || "{}");
+    } catch {
+      return {};
+    }
+  })();
+
   let query = $state("");
   let activeTag = $state<string | null>(null);
   let mobileTagsOpen = $state(false);
@@ -213,7 +224,8 @@
   {:else}
     <ul role="list" class="mt-6 divide-y divide-stone-950/8 border-t border-stone-950/8 dark:divide-white/8 dark:border-white/8">
       {#each filtered as page (page.slug)}
-        <li class="py-5">
+        <li class="flex items-start gap-2 py-5">
+          <div class="min-w-0 flex-1">
           <div class="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between sm:gap-4">
             <h2 class="min-w-0 text-lg/7 font-medium text-pretty text-stone-900 sm:text-base/6 dark:text-stone-100">
               <a
@@ -240,6 +252,22 @@
               {/each}
             </p>
           {/if}
+          </div>
+          <a
+            href={shareUrls[page.slug] ?? "#share-link"}
+            hidden={!shareUrls[page.slug]}
+            data-share-copy={page.slug}
+            aria-label={`Copy share link for ${page.title}`}
+            title="Copy share link"
+            class="share-copy -mt-1 -mr-1.5 inline-flex size-8 shrink-0 items-center justify-center rounded-md text-stone-500 hover:bg-stone-950/5 hover:text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent pointer-coarse:-mt-2.5 pointer-coarse:-mr-3 pointer-coarse:size-12 dark:text-stone-400 dark:hover:bg-white/8 dark:hover:text-stone-100 dark:focus-visible:outline-accent-dark"
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true" class="share-copy-icon size-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6.5 9.5a3 3 0 0 0 4.2 0l2-2a3 3 0 0 0-4.2-4.2l-.6.6M9.5 6.5a3 3 0 0 0-4.2 0l-2 2a3 3 0 0 0 4.2 4.2l.6-.6" />
+            </svg>
+            <svg viewBox="0 0 16 16" aria-hidden="true" class="share-copy-done size-4" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3.5 8.5l3 3 6-7" />
+            </svg>
+          </a>
         </li>
       {/each}
     </ul>

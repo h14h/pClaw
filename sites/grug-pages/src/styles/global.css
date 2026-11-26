@@ -902,6 +902,63 @@
     opacity: 0;
   }
 
+  /* "Copy share link" (report header and shelf rows): "Copied" and a check for 2s, in the same box (no shift). */
+  .share-copy-label {
+    display: inline-grid;
+
+    & > * {
+      grid-area: 1 / 1;
+    }
+  }
+
+  .share-copy-done {
+    display: none;
+  }
+
+  .share-copy-copied {
+    visibility: hidden;
+  }
+
+  .share-copy[data-copied] {
+    .share-copy-icon {
+      display: none;
+    }
+
+    .share-copy-done {
+      display: block;
+      color: var(--color-accent);
+
+      @variant dark {
+        color: var(--color-accent-dark);
+      }
+    }
+
+    .share-copy-idle {
+      visibility: hidden;
+    }
+
+    .share-copy-copied {
+      visibility: visible;
+    }
+  }
+
+  .share-copy-field {
+    width: 100%;
+    margin-top: --spacing(2);
+    padding: --spacing(2) --spacing(3);
+    border-radius: var(--radius-md);
+    font-size: var(--text-sm);
+    color: var(--color-stone-800);
+    background: white;
+    box-shadow: 0 0 0 1px rgb(12 10 9 / 0.12);
+
+    @variant dark {
+      color: var(--color-stone-100);
+      background: var(--color-obsidian-raised);
+      box-shadow: 0 0 0 1px rgb(255 255 255 / 0.12);
+    }
+  }
+
   /* A credit that wraps keeps one outline around all its lines. Touch keeps the Figure's 48px inline-flex target. */
   .figure-credit {
     display: inline-block;
