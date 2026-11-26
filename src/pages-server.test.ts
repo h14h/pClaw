@@ -1641,7 +1641,15 @@ test("grug-pages report: answer-first opening, Contents with nested legs and Sou
 	// Contents: H2s with their H3s nested, plus the rendered Sources; shown at 3+ destinations or 6+ entries
 	assert.match(report, /const body = await Astro\.slots\.render\("default"\);/);
 	assert.match(report, /const sourcesTitle = \/<h2 id="sources-heading"/);
-	assert.match(report, /if \(sourcesTitle\) toc\.push\(\{ slug: "sources", text: sourcesTitle, children: \[\] \}\);/);
+	// Every entry focuses a visible heading: Sources keeps its #sources fragment but focuses its H2
+	assert.match(report, /if \(sourcesTitle\) toc\.push\(\{ slug: "sources", text: sourcesTitle, focus: "sources-heading", children: \[\] \}\);/);
+	assert.match(report, /href=\{`#\$\{entry\.slug\}`\}\n\s*data-jump=\{entry\.focus \?\? ""\}/);
+	assert.match(base, /document\.getElementById\(link\.dataset\.jump \|\| decodeURIComponent\(link\.hash\.slice\(1\)\)\)/);
+	// Phones: main sections first, each one's subsections behind its own 48px disclosure; from sm all nested
+	assert.match(report, /<details class="group\/sub sm:hidden">\n\s*<summary class="[^"]*min-h-12[^"]*">/);
+	assert.match(report, /<span class="tabular-nums">\{entry\.children\.length\} subsections<\/span>/);
+	assert.match(report, /<ol role="list" class="mb-1 ml-1 hidden border-l [^"]*sm:block/);
+	assert.equal(report.match(/data-jump="" class=\{`\$\{tocLink\} \$\{tocChild\}`\}/g)?.length, 2);
 	assert.match(report, /const showToc = toc\.length >= 3 \|\| tocEntries >= 6;/);
 	assert.match(report, /toc\.at\(-1\)!\.children\.push/);
 	assert.match(report, /-mx-2 flex min-h-12 items-center[^"]*sm:pointer-fine:min-h-0/);

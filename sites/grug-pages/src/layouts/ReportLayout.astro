@@ -24,8 +24,9 @@ const body = await Astro.slots.render("default");
 const sourcesTitle = /<h2 id="sources-heading"[^>]*>\s*([^<]*?)\s*<\/h2>/.exec(body)?.[1];
 
 // Contents: H2s, with each H2's H3s nested under it, then Sources. Shown once a report has 3 or more major
-// destinations (H2s plus Sources) or 6 or more H2/H3 entries.
-type TocEntry = { slug: string; text: string; children: { slug: string; text: string }[] };
+// destinations (H2s plus Sources) or 6 or more H2/H3 entries. Every entry focuses a visible heading: `focus` names
+// it when the link's fragment is a wrapper (Sources scrolls to its section, focuses its H2).
+type TocEntry = { slug: string; text: string; focus?: string; children: { slug: string; text: string }[] };
 const toc: TocEntry[] = [];
 for (const heading of headings) {
   if (heading.depth === 2 || (heading.depth === 3 && toc.length === 0)) {
@@ -34,11 +35,12 @@ for (const heading of headings) {
     toc.at(-1)!.children.push({ slug: heading.slug, text: heading.text });
   }
 }
-if (sourcesTitle) toc.push({ slug: "sources", text: sourcesTitle, children: [] });
+if (sourcesTitle) toc.push({ slug: "sources", text: sourcesTitle, focus: "sources-heading", children: [] });
 const tocEntries = toc.reduce((count, entry) => count + 1 + entry.children.length, 0);
 const showToc = toc.length >= 3 || tocEntries >= 6;
 const tocLink =
   "-mx-2 flex min-h-12 items-center rounded-md px-2 py-3 underline underline-offset-4 hover:bg-stone-950/4 hover:text-accent hover:decoration-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:pointer-fine:min-h-0 sm:pointer-fine:py-1.5 dark:hover:bg-white/6 dark:hover:text-accent-dark dark:hover:decoration-accent-dark dark:focus-visible:outline-accent-dark";
+const tocChild = "text-stone-600 decoration-stone-950/15 dark:text-stone-400 dark:decoration-white/15";
 ---
 
 <BaseLayout
@@ -120,30 +122,42 @@ const tocLink =
             />
           </svg>
         </summary>
+        <!-- Phones: the main sections first, each one's subsections behind a small disclosure. From sm: all nested. -->
         <ol role="list" class="pt-1 pb-4 text-base/6 sm:columns-2 sm:gap-8 sm:pb-5 sm:text-sm/6">
           {toc.map((entry) => (
             <li class="break-inside-avoid">
               <a
                 href={`#${entry.slug}`}
-                data-jump
+                data-jump={entry.focus ?? ""}
                 class={`${tocLink} text-stone-800 decoration-stone-950/20 dark:text-stone-200 dark:decoration-white/20`}
               >
                 {entry.text}
               </a>
               {entry.children.length > 0 && (
-                <ol role="list" class="mb-1 ml-1 border-l border-stone-950/10 pl-3 dark:border-white/10">
-                  {entry.children.map((child) => (
-                    <li>
-                      <a
-                        href={`#${child.slug}`}
-                        data-jump
-                        class={`${tocLink} text-stone-600 decoration-stone-950/15 dark:text-stone-400 dark:decoration-white/15`}
-                      >
-                        {child.text}
-                      </a>
-                    </li>
-                  ))}
-                </ol>
+                <>
+                  <details class="group/sub sm:hidden">
+                    <summary class="-mx-2 ml-1 flex min-h-12 cursor-pointer list-none items-center gap-2 rounded-md px-2 pl-3 text-stone-500 select-none hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent dark:text-stone-400 dark:hover:text-accent-dark dark:focus-visible:outline-accent-dark [&::-webkit-details-marker]:hidden">
+                      <svg viewBox="0 0 16 16" aria-hidden="true" class="size-4 shrink-0 fill-current group-open/sub:rotate-90 motion-safe:transition-transform motion-safe:duration-150">
+                        <path fill-rule="evenodd" d="M6.22 4.22a.75.75 0 0 1 1.06 0l3.25 3.25a.75.75 0 0 1 0 1.06l-3.25 3.25a.75.75 0 0 1-1.06-1.06L8.94 8 6.22 5.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
+                      </svg>
+                      <span class="tabular-nums">{entry.children.length} subsections</span>
+                    </summary>
+                    <ol role="list" class="mb-1 ml-1 border-l border-stone-950/10 pl-3 dark:border-white/10">
+                      {entry.children.map((child) => (
+                        <li>
+                          <a href={`#${child.slug}`} data-jump="" class={`${tocLink} ${tocChild}`}>{child.text}</a>
+                        </li>
+                      ))}
+                    </ol>
+                  </details>
+                  <ol role="list" class="mb-1 ml-1 hidden border-l border-stone-950/10 pl-3 sm:block dark:border-white/10">
+                    {entry.children.map((child) => (
+                      <li>
+                        <a href={`#${child.slug}`} data-jump="" class={`${tocLink} ${tocChild}`}>{child.text}</a>
+                      </li>
+                    ))}
+                  </ol>
+                </>
               )}
             </li>
           ))}
