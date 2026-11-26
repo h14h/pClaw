@@ -60,21 +60,27 @@
     dialog.tabIndex = -1;
     dialog.innerHTML =
       '<div class="lightbox-stage" data-lb-stage><img class="lightbox-img" alt="" draggable="false" decoding="async" data-lb-img></div>' +
-      '<div class="lightbox-top"><p class="lightbox-counter" aria-hidden="true" data-lb-counter></p><div class="lightbox-tools">' +
+      '<div class="lightbox-top"><div class="lightbox-bar"><p class="lightbox-counter" aria-hidden="true" data-lb-counter></p><div class="lightbox-tools">' +
       button("out", "Zoom out") +
       button("in", "Zoom in") +
       button("reset", "Reset zoom") +
       '<button type="button" class="lightbox-button lightbox-text" aria-label="Fit whole photo" data-lb-fitfill><span data-lb-fitfill-text>Fit</span></button>' +
       button("close", "Close") +
       "</div></div>" +
-      button("prev", "Previous photo", "lightbox-side lightbox-prev") +
-      button("next", "Next photo", "lightbox-side lightbox-next") +
+      // Notes under the bar, in one cell: the pan hint, the loading pill (a polite status region, always present, with
+      // under it, a separate status region announces) and the error pill (an alert region, always present, with Retry).
+      '<div class="lightbox-notes">' +
       '<p class="lightbox-hint" aria-hidden="true" data-lb-hint></p>' +
       '<p class="lightbox-loading" aria-hidden="true" data-lb-loading><span class="lightbox-spinner"></span>Loading</p>' +
-      '<div class="lightbox-status" role="alert" hidden data-lb-status><span data-lb-status-text></span>' +
+      '<div class="lightbox-status" data-lb-status><span role="alert" data-lb-status-text></span>' +
       '<button type="button" class="lightbox-retry" data-lb-retry>Retry</button></div>' +
+      "</div></div>" +
+      button("prev", "Previous photo", "lightbox-side lightbox-prev") +
+      button("next", "Next photo", "lightbox-side lightbox-next") +
       '<div class="lightbox-caption" data-lb-caption></div>' +
-      '<p class="sr-only" aria-live="polite" aria-atomic="true" data-lb-live></p>';
+      '<p class="sr-only" aria-live="polite" aria-atomic="true" data-lb-live></p>' +
+      // Persistent polite status: "Loading photo N" once a wait passes 300ms (the visible pill is the same moment).
+      '<p class="sr-only" role="status" aria-live="polite" aria-atomic="true" data-lb-loading-text></p>';
     document.body.append(dialog);
     const $ = (name) => dialog.querySelector(`[data-lb-${name}]`);
     ui = {
@@ -88,6 +94,7 @@
       fitfill: $("fitfill"),
       fitfillText: $("fitfill-text"),
       status: $("status"),
+      loadingText: $("loading-text"),
       statusText: $("status-text"),
       retry: $("retry"),
       close: $("close"),
@@ -300,14 +307,21 @@
     hint();
   }
 
-  function setLoading(on) {
+  // The loading pill appears (and is announced, once) only if the wait passes 300ms.
+  function setLoading(on, n) {
     clearTimeout(loadingTimer);
     ui.dialog.removeAttribute("data-loading");
-    if (on) loadingTimer = setTimeout(() => ui.dialog.setAttribute("data-loading", ""), 300);
+    if (ui.loadingText.textContent) ui.loadingText.textContent = "";
+    if (on)
+      loadingTimer = setTimeout(() => {
+        ui.dialog.setAttribute("data-loading", "");
+        ui.loadingText.textContent = items.length > 1 ? `Loading photo ${n}` : "Loading photo";
+      }, 300);
   }
 
   function clearStatus() {
-    ui.status.hidden = true;
+    ui.dialog.removeAttribute("data-failed");
+    if (ui.statusText.textContent) ui.statusText.textContent = "";
   }
 
   // Show slide i. A slide whose preview isn't loaded yet is fetched first while the current photo, caption and
@@ -339,7 +353,7 @@
     };
     const thumb = link.querySelector("img");
     if (thumb && thumb.complete && thumb.naturalWidth > 0) return apply();
-    setLoading(true);
+    setLoading(true, i + 1);
     const pre = new Image();
     pre.src = previewOf(link);
     pre
@@ -348,12 +362,17 @@
       .catch(() => {
         if (token !== showToken || !ui.dialog.open) return;
         setLoading(false);
+        // Moves count from the photo on screen again, not from the one that failed.
+        index = showing;
+        setDisabled(ui.prev, showing === 0);
+        setDisabled(ui.next, showing === items.length - 1);
+        ui.dialog.setAttribute("data-failed", "");
         ui.statusText.textContent = items.length > 1 ? `Couldn't load photo ${i + 1}.` : "Couldn't load this photo.";
-        ui.status.hidden = false;
+        // Retry hides the error pill; focus moves to the arrow that leads to the photo being retried (or Close).
         ui.retry.onclick = () => {
-          ui.retry.blur();
+          const toward = i > showing ? ui.next : ui.prev;
+          (toward.hidden ? ui.close : toward).focus();
           show(i, announce);
-          ui.dialog.focus();
         };
       });
   }
@@ -571,9 +590,10 @@
       }
       const action = releaseGesture(finished.kind, point.x - finished.origin.x, point.y - finished.origin.y);
       if (action === "close") return dialog.close();
+      // The photo dragged aside goes back to rest at once; it stays there while the next one loads.
+      render(true);
       if (action === "next" && index < items.length - 1) return show(index + 1, true);
       if (action === "prev" && index > 0) return show(index - 1, true);
-      render(true);
     };
     stageEl.addEventListener("pointerup", end);
     stageEl.addEventListener("pointercancel", end);

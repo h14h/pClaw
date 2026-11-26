@@ -996,18 +996,37 @@
   background: var(--color-stone-50);
 }
 
+/* The head: a bar (counter + tools) and, under it, notes (pan hint, loading, error). Everything stays inside the
+   safe-area insets: when the counter and the tools don't fit on one row, the tools keep the top row and the counter
+   drops to a second one (wrap-reverse), and the notes follow whatever height the bar ends up. */
 .lightbox-top {
   position: absolute;
   inset: 0 0 auto;
   display: flex;
+  flex-direction: column;
+  padding: max(--spacing(2), env(safe-area-inset-top)) var(--lightbox-inset-r) 0 var(--lightbox-inset-l);
+  pointer-events: none;
+}
+
+.lightbox-bar {
+  display: flex;
+  flex-wrap: wrap-reverse;
   align-items: center;
   justify-content: space-between;
   gap: --spacing(1);
-  padding: max(--spacing(2), env(safe-area-inset-top)) var(--lightbox-inset-r) 0 var(--lightbox-inset-l);
-  pointer-events: none;
 
   & > * {
     pointer-events: auto;
+  }
+}
+
+.lightbox-notes {
+  display: grid;
+  justify-items: center;
+  margin-top: --spacing(2);
+
+  & > * {
+    grid-area: 1 / 1;
   }
 }
 
@@ -1157,10 +1176,6 @@
 }
 
 .lightbox-hint {
-  position: absolute;
-  left: 50%;
-  top: calc(max(--spacing(2), env(safe-area-inset-top)) + --spacing(14));
-  translate: -50% 0;
   padding: --spacing(1.5) --spacing(3);
   border-radius: 9999px;
   font-size: var(--text-sm);
@@ -1179,18 +1194,14 @@
 /* Waiting on a slide that isn't loaded yet: the current photo stays; a quiet pill says why nothing changed. */
 .lightbox-loading,
 .lightbox-status {
-  position: absolute;
-  left: 50%;
-  top: calc(max(--spacing(2), env(safe-area-inset-top)) + --spacing(14));
-  translate: -50% 0;
   display: flex;
+  max-width: 100%;
   align-items: center;
   gap: --spacing(2);
   padding: --spacing(1.5) --spacing(3);
   border-radius: 9999px;
   font-size: var(--text-sm);
   line-height: --spacing(5);
-  white-space: nowrap;
   color: #fafaf9;
   background: var(--lightbox-plate);
 }
@@ -1205,7 +1216,9 @@
   opacity: 1;
 }
 
-.lightbox[data-loading] .lightbox-hint {
+.lightbox[data-loading] .lightbox-hint,
+.lightbox[data-failed] .lightbox-hint,
+.lightbox[data-failed] .lightbox-loading {
   opacity: 0;
 }
 
@@ -1224,13 +1237,16 @@
   }
 }
 
+/* Present (and its alert region readable) all the time; shown, and Retry reachable, only after a failed load. */
 .lightbox-status {
   padding-block: --spacing(1);
   padding-right: --spacing(1);
+  visibility: hidden;
+  pointer-events: auto;
+}
 
-  &[hidden] {
-    display: none;
-  }
+.lightbox[data-failed] .lightbox-status {
+  visibility: visible;
 }
 
 .lightbox-retry {

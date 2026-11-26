@@ -1515,9 +1515,17 @@ test("grug-pages photo viewer: fit, panorama and tall openings, bounded zoom and
 	assert.match(client, /ui\.zoomIn\.title = atMax \? "Maximum zoom" : "Zoom in";/);
 	// Slides wait on a loading state (indicator after 300ms) instead of a timer; a failed load keeps the view and offers Retry
 	assert.doesNotMatch(client, /setTimeout\(done, 1500\)/);
-	assert.match(client, /loadingTimer = setTimeout\(\(\) => ui\.dialog\.setAttribute\("data-loading", ""\), 300\);/);
+	assert.match(client, /ui\.dialog\.setAttribute\("data-loading", ""\);\n\s*ui\.loadingText\.textContent = [^\n]*\n\s*\}, 300\);/);
 	assert.match(client, /ui\.statusText\.textContent = items\.length > 1 \? `Couldn't load photo \$\{i \+ 1\}\.` : "Couldn't load this photo\.";/);
 	assert.match(client, /data-lb-retry>Retry<\/button>/);
+	// Loading and errors reach assistive tech: a persistent polite status region and a persistent alert region
+	assert.match(client, /<p class="sr-only" role="status" aria-live="polite" aria-atomic="true" data-lb-loading-text><\/p>/);
+	assert.match(client, /<span role="alert" data-lb-status-text><\/span>/);
+	assert.match(client, /ui\.loadingText\.textContent = items\.length > 1 \? `Loading photo \$\{n\}` : "Loading photo";/);
+	assert.match(client, /\(toward\.hidden \? ui\.close : toward\)\.focus\(\);/);
+	assert.match(client, /\/\/ Moves count from the photo on screen again, not from the one that failed\.\n\s*index = showing;/);
+	// A swipe's photo goes back to rest before the next slide is asked for
+	assert.match(client, /render\(true\);\n\s*if \(action === "next" && index < items\.length - 1\) return show\(index \+ 1, true\);/);
 	// Resizes keep the picked view: Fit/Fill/opening recomputed, a manual zoom keeps the centre point
 	assert.match(client, /new ResizeObserver\(\(\) => dialog\.open && showing >= 0 && relayout\(\)\)\.observe\(stageEl\);/);
 	assert.match(client, /if \(selected === "fit"\) view = fit;/);
@@ -1549,6 +1557,8 @@ test("grug-pages photo viewer: fit, panorama and tall openings, bounded zoom and
 	assert.match(css, /@media \(pointer: coarse\) \{\n {2}\.lightbox-credit \{\n {4}display: flex;\n {4}align-items: center;\n {4}width: fit-content;\n {4}min-height: --spacing\(12\);/);
 	assert.match(css, /@media \(pointer: coarse\) \{\n {4}\.figure-zoom-icon \{\n {6}opacity: 1;/);
 	assert.match(css, /env\(safe-area-inset-left\)/);
+	// Tools keep the top row inside the insets; the counter drops to a second row when they don't both fit
+	assert.match(css, /\.lightbox-bar \{\n {2}display: flex;\n {2}flex-wrap: wrap-reverse;/);
 	assert.match(skill, /`zoom=\{false\}` only for logos and small marks\./);
 	assert.match(skill, /Panorama \(2:1 or wider\)\? Readers open it full screen to pan, so save a big copy/);
 });
