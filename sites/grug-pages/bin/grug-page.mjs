@@ -632,18 +632,83 @@ function verifyDist(distDir, targetSlug) {
   return { totalBytes };
 }
 
-/** Non-blocking advice printed before the build, e.g. carousels with too many slides. */
-function warnPageLint(pagesDir, slugs) {
-  for (const slug of slugs) {
-    const file = [join(pagesDir, slug, "index.mdx"), join(pagesDir, `${slug}.mdx`)].find((f) => existsSync(f));
-    if (!file) continue;
-    for (const warning of lintCarousels(readFileSync(file, "utf8"))) {
-      process.stderr.write(`WARN ${slug}: ${warning}\n`);
-    }
+const SIZES_FILE = ".sizes.json";
+
+function readSizes(imgDir) {
+  try {
+    return JSON.parse(readFileSync(join(imgDir, SIZES_FILE), "utf8"));
+  } catch {
+    return {};
   }
 }
 
-function cmdBuild(cfg, args) {
+/** Remember an image's pixel size in img/.sizes.json (a dotfile, so builds skip it) for the carousel lint. */
+function writeSize(imgDir, file, width, height) {
+  const sizes = readSizes(imgDir);
+  sizes[file] = [width, height];
+  const sorted = Object.fromEntries(Object.entries(sizes).sort(([a], [b]) => a.localeCompare(b)));
+  writeFileSync(join(imgDir, SIZES_FILE), `${JSON.stringify(sorted, null, 2)}\n`, "utf8");
+}
+
+/**
+ * Pixel sizes of the images a page uses, from img/.sizes.json. Images saved before the sidecar existed are measured
+ * once (sharp, already installed for Astro's image pipeline) and added to it.
+ */
+async function pageImageSizes(pageDir, body) {
+  const imgDir = join(pageDir, "img");
+  const sizes = readSizes(imgDir);
+  const wanted = [...new Set([...body.matchAll(/\ssrc="\.?\/?img\/([^"/]+)"/g)].map((m) => m[1]))];
+  const missing = wanted.filter((file) => !sizes[file] && existsSync(join(imgDir, file)));
+  const sharp = missing.length > 0 ? loadSharp() : null;
+  for (const file of missing) {
+    if (!sharp) break;
+    try {
+      const meta = await sharp(join(imgDir, file), { animated: file.endsWith(".gif") }).metadata();
+      const height = meta.pageHeight ?? meta.height;
+      if (meta.width && height) {
+        sizes[file] = [meta.width, height];
+        writeSize(imgDir, file, meta.width, height);
+      }
+    } catch {
+      // Unreadable image: the build will say so.
+    }
+  }
+  return (src) => (src.startsWith("img/") ? sizes[src.slice(4)] : undefined);
+}
+
+/** Non-blocking advice: carousel slide counts, carousels per page, and photos that fill too little of the frame. */
+async function warnPageLint(pagesDir, slugs) {
+  let count = 0;
+  for (const slug of slugs) {
+    const file = [join(pagesDir, slug, "index.mdx"), join(pagesDir, `${slug}.mdx`)].find((f) => existsSync(f));
+    if (!file) continue;
+    const body = readFileSync(file, "utf8");
+    const sizeOf = await pageImageSizes(dirname(file) === pagesDir ? join(pagesDir, slug) : dirname(file), body);
+    for (const warning of lintCarousels(body, { sizeOf })) {
+      process.stderr.write(`WARN ${slug}: ${warning}\n`);
+      count += 1;
+    }
+  }
+  return count;
+}
+
+async function cmdLint(cfg, args) {
+  const slug = args.find((a) => !a.startsWith("-"));
+  if (slug) validateSlug(slug);
+  const slugs = slug ? [slug] : syncablePageSlugs(cfg.pagesDir);
+  const count = await warnPageLint(cfg.pagesDir, slugs);
+  process.stdout.write(count ? `LINT ${count} warning${count === 1 ? "" : "s"}\n` : "LINT ok\n");
+}
+
+function syncablePageSlugs(pagesDir) {
+  if (!existsSync(pagesDir)) return [];
+  return readdirSync(pagesDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && SLUG_RE.test(entry.name))
+    .map((entry) => entry.name)
+    .sort();
+}
+
+async function cmdBuild(cfg, args) {
   const slug = args.find((a) => !a.startsWith("-")) ?? null;
   if (slug) {
     validateSlug(slug);
@@ -664,7 +729,7 @@ function cmdBuild(cfg, args) {
 
   const contentPagesDir = join(cfg.siteDir, "src", "content", "pages");
   const slugs = syncPagesToSite(cfg.pagesDir, contentPagesDir);
-  warnPageLint(cfg.pagesDir, slug ? [slug] : slugs);
+  await warnPageLint(cfg.pagesDir, slug ? [slug] : slugs);
 
   const astroBin = join(cfg.siteDir, "node_modules", ".bin", "astro");
   if (!existsSync(astroBin)) {
@@ -679,6 +744,8 @@ function cmdBuild(cfg, args) {
       ...process.env,
       GRUG_PAGES_BASE: basePath,
       GRUG_PAGES_SITE: cfg.siteUrl,
+      // The lint above already printed carousel warnings; <Carousel> stays quiet so each prints once.
+      GRUG_PAGE_LINTED: "1",
       ASTRO_TELEMETRY_DISABLED: "1",
     },
   });
@@ -1019,6 +1086,7 @@ async function cmdImage(cfg, args) {
   const file = `${createHash("sha256").update(bytes).digest("hex").slice(0, 12)}.${type.ext}`;
   const target = join(imgDir, file);
   if (!existsSync(target)) writeFileSync(target, bytes);
+  if (width && height) writeSize(imgDir, file, width, height);
 
   const href = opts.href || fetched.finalUrl;
   let credit = opts.credit;
@@ -1052,7 +1120,8 @@ function printHelp() {
 Commands:
   init <slug> [--title "..."]         Scaffold ~/work/pages/<slug>/index.mdx
   polish <slug>                       Two-stage unslop -> ultracave editing pass
-  build [slug]                        Sync pages into ~/site and run astro build
+  build [slug]                        Sync pages into ~/site and run astro build (runs lint first)
+  lint [slug]                         Check carousels: slide counts, carousels per page, photo fit
   preview [slug] [--port 0] [--daemon] Serve dist/ locally with production CSP
   preview-stop                        Stop daemon preview server
   list                                List pages in ~/work/pages/
@@ -1080,7 +1149,10 @@ async function main() {
       cmdPolish(cfg, rest);
       break;
     case "build":
-      cmdBuild(cfg, rest);
+      await cmdBuild(cfg, rest);
+      break;
+    case "lint":
+      await cmdLint(cfg, rest);
       break;
     case "preview":
       await cmdPreview(cfg, rest);

@@ -724,6 +724,13 @@
   .carousel {
     --carousel-gutter: --spacing(5);
     --carousel-peek: 3rem;
+    --carousel-ring: var(--color-accent);
+    --carousel-ring-gap: var(--color-paper);
+
+    @variant dark {
+      --carousel-ring: var(--color-accent-dark);
+      --carousel-ring-gap: var(--color-obsidian);
+    }
 
     @variant sm {
       --carousel-gutter: --spacing(8);
@@ -820,14 +827,40 @@
     }
   }
 
-  /* The strip bleeds to the screen edge, so its keyboard focus ring goes around the whole carousel instead. */
-  .carousel-section:has(.carousel-strip:focus-visible) {
-    outline: 2px solid var(--color-accent);
-    outline-offset: 4px;
-    border-radius: var(--radius-md);
+  /* The strip bleeds past the screen edge on phones, where a ring around it would be cut off or painted over by the
+     peek. Keyboard focus on the strip shows instead as a double ring inside the current photo's frame (accent edge,
+     page-colored separator so it reads on dark and light photos) and an underlined accent counter. It is deliberately
+     heavier than a credit link's thin outline. */
+  .carousel[data-js] .carousel-slide picture {
+    position: relative;
+    display: block;
+
+    &::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-radius: min(1vw, 12px);
+      pointer-events: none;
+    }
+  }
+
+}
+
+/* Unlayered so the counter cue beats its text-stone-600 utility. */
+.carousel-section:has(.carousel-strip:focus-visible) {
+  .carousel-slide[data-current] picture::after {
+    box-shadow:
+      inset 0 0 0 3px var(--carousel-ring),
+      inset 0 0 0 5px var(--carousel-ring-gap);
+  }
+
+  .carousel-counter {
+    color: var(--color-accent);
+    text-decoration: underline 2px;
+    text-underline-offset: 4px;
 
     @variant dark {
-      outline-color: var(--color-accent-dark);
+      color: var(--color-accent-dark);
     }
   }
 }

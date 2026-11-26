@@ -42,6 +42,22 @@ export function carouselFrame(ratios) {
   return round(Math.min(16 / 9, Math.max(3 / 4, median(ratios))));
 }
 
+/** How much of the frame's width or height a photo of this shape fills (1 = all of it). */
+export function frameFill(ratio, frame) {
+  return Math.min(ratio / frame, frame / ratio);
+}
+
+/**
+ * The photo-specific warnings for one carousel, shared by the build and the CLI lint so both print the same line.
+ * `photos` are `{ alt, ratio }` in slide order.
+ */
+export function fillWarnings(label, photos) {
+  const frame = carouselFrame(photos.map((photo) => photo.ratio));
+  return photos
+    .filter((photo) => frameFill(photo.ratio, frame) < CAROUSEL_MIN_FILL)
+    .map((photo) => `Carousel "${label.trim()}". Photo "${photo.alt.slice(0, 60)}": ${CAROUSEL_SMALL_FILL}`);
+}
+
 /**
  * `sizes` for one slide: the slide is the column minus the peek, capped like a portrait Figure (65vh, 34rem tall),
  * and the image covers `scale` of the slide's width (under 1 when it sits inside the frame, over 1 when it fills it).
@@ -61,7 +77,7 @@ export function slideSizes(frame, scale) {
  * Turn the rendered children of a <Carousel> into slides. Children must be <Figure>s; anything else is an authoring
  * mistake and fails the build. One Figure comes back untouched, to render as a plain Figure.
  */
-export function buildCarousel(html) {
+export function buildCarousel(html, label = "") {
   const figures = html.match(FIGURE_RE) ?? [];
   const stray = html.replace(FIGURE_RE, "").replace(/<!--[\s\S]*?-->/g, "").trim();
   if (stray) {
@@ -81,16 +97,13 @@ export function buildCarousel(html) {
   });
   const frame = carouselFrame(ratios);
 
-  const warnings = [];
+  const alts = figures.map((figure, i) => decode(/\salt="([^"]*)"/.exec(figure)?.[1] ?? `slide ${i + 1}`));
+  const warnings = fillWarnings(label, ratios.map((ratio, i) => ({ alt: alts[i], ratio })));
   const slides = figures.map((figure, i) => {
     const ratio = ratios[i];
     const relative = ratio / frame;
     const fit = Math.abs(relative - 1) <= CAROUSEL_FIT_TOLERANCE ? "cover" : "contain";
     const scale = fit === "cover" ? Math.max(1, relative) : Math.min(1, relative);
-    if (Math.min(relative, 1 / relative) < CAROUSEL_MIN_FILL) {
-      const alt = /\salt="([^"]*)"/.exec(figure)?.[1] ?? `slide ${i + 1}`;
-      warnings.push(`Photo "${alt.slice(0, 60)}": ${CAROUSEL_SMALL_FILL}`);
-    }
     // The slide owns width and spacing. Portraits keep their ratio so the no-JS stack can cap them like a Figure.
     const portrait = ratio < 1 ? ` style="--figure-ratio: ${round(ratio)};" data-portrait="true"` : "";
     const out = figure
@@ -100,6 +113,15 @@ export function buildCarousel(html) {
   });
 
   return { kind: "carousel", id: `carousel-${hash(html)}`, frame, slides, warnings };
+}
+
+function decode(text) {
+  return text
+    .replace(/&quot;/g, '"')
+    .replace(/&#0*39;|&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
 }
 
 // Stable per carousel, so builds are reproducible and the buttons can name the strip they control.
@@ -113,12 +135,20 @@ function hash(text) {
  * Advice for a page's MDX body: too many slides, too many carousels, or a carousel with one image. Returns
  * human-readable warnings; an empty list means nothing to fix.
  */
-export function lintCarousels(body) {
+export function lintCarousels(body, { sizeOf } = {}) {
   const warnings = [];
   const blocks = [...body.matchAll(/<Carousel\b[^>]*>([\s\S]*?)<\/Carousel>/g)];
   blocks.forEach((block, i) => {
-    const label = /\blabel=["']([^"']*)["']/.exec(block[0])?.[1] ?? `#${i + 1}`;
-    const slides = (block[1].match(/<Figure\b/g) ?? []).length;
+    const label = /\blabel="([^"]*)"/.exec(block[0])?.[1] ?? `#${i + 1}`;
+    const figures = block[1].match(/<Figure\b[^>]*>/g) ?? [];
+    const slides = figures.length;
+    // With image sizes (from the page's img/.sizes.json), the same photo warnings the build prints.
+    const photos = figures.map((tag) => {
+      const src = /\ssrc="([^"]*)"/.exec(tag)?.[1] ?? "";
+      const size = sizeOf?.(src.replace(/^\.?\//, ""));
+      return size ? { alt: /\salt="([^"]*)"/.exec(tag)?.[1] ?? src, ratio: size[0] / size[1] } : null;
+    });
+    if (slides >= 2 && photos.every(Boolean)) warnings.push(...fillWarnings(label, photos));
     if (slides > CAROUSEL_MAX_SLIDES) {
       warnings.push(`Carousel "${label}" has ${slides} slides; keep it to ${CAROUSEL_MAX_SLIDES} or fewer (3–6 reads best).`);
     } else if (slides < 2) {
@@ -132,4 +162,58 @@ export function lintCarousels(body) {
     warnings.push(`${blocks.length} carousels on one page. ${CAROUSEL_TOO_MANY}`);
   }
   return warnings;
+}
+
+/**
+ * Decides when a carousel strip has come to rest, so the slide is committed (counter, caption, focusable slide,
+ * announcement) only once. Where the browser fires `scrollend`, that is the signal. Otherwise it is a quiet spell
+ * after the last scroll event. Either way nothing settles while a finger or pointer is still down: a drag paused
+ * past halfway must not commit a slide the reader may still drag back.
+ *
+ * Call `scroll()` on scroll events, `scrollEnd()` on scrollend, `press()` when a touch or pointer drag starts and
+ * `release()` when it ends or is cancelled. `settle()` is called when the strip is at rest.
+ */
+export function createSettler({ nativeScrollEnd, settle, delay = 150, setTimer = setTimeout, clearTimer = clearTimeout }) {
+  let held = false;
+  // After a release with scrollend available, a backstop in case the strip was already at rest (no scrollend comes).
+  let afterRelease = false;
+  let timer = null;
+  const clear = () => {
+    if (timer !== null) clearTimer(timer);
+    timer = null;
+  };
+  const arm = (ms) => {
+    clear();
+    timer = setTimer(() => {
+      timer = null;
+      afterRelease = false;
+      if (!held) settle();
+    }, ms);
+  };
+  const quiet = () => (nativeScrollEnd ? delay * 2 : delay);
+  return {
+    scroll() {
+      if (held) return;
+      if (!nativeScrollEnd || afterRelease) arm(quiet());
+    },
+    scrollEnd() {
+      if (held) return;
+      clear();
+      afterRelease = false;
+      settle();
+    },
+    press() {
+      held = true;
+      clear();
+    },
+    release() {
+      if (!held) return;
+      held = false;
+      afterRelease = nativeScrollEnd;
+      arm(quiet());
+    },
+    get held() {
+      return held;
+    },
+  };
 }

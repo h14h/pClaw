@@ -1118,7 +1118,7 @@ test("grug-pages Figure: portraits fit on screen, credits are 48px touch targets
 });
 
 test("grug-pages Carousel: stacked without JS, one settled slide with JS, lazy slot-true images, and build warnings", async () => {
-	const { buildCarousel, carouselFrame, lintCarousels, slideSizes, CAROUSEL_MAX_SLIDES, CAROUSEL_SMALL_FILL, CAROUSEL_TOO_MANY } =
+	const { buildCarousel, carouselFrame, createSettler, lintCarousels, slideSizes, CAROUSEL_MAX_SLIDES, CAROUSEL_SMALL_FILL, CAROUSEL_TOO_MANY } =
 		await import("../sites/grug-pages/lib/carousel.mjs");
 	const figure = (width: number, height: number, alt: string) =>
 		`<figure class="not-prose my-8" style="--figure-ratio: 0.6; width: min(100%, 1rem);" data-portrait="true"><picture>` +
@@ -1162,12 +1162,28 @@ test("grug-pages Carousel: stacked without JS, one settled slide with JS, lazy s
 	assert.ok(built.slides[2]!.html.includes(`sizes="${slideSizes(1.6, 1)}"`));
 
 	// A portrait keeps its ratio for the no-JS stack's height cap; a photo filling under 70% of the frame warns
-	const mixed = buildCarousel([figure(1600, 1000, "A"), figure(1600, 1000, "B"), figure(800, 1000, "Tall"), figure(4300, 1000, "Pano")].join(""));
+	const mixed = buildCarousel(
+		[figure(1600, 1000, "A"), figure(1600, 1000, "B"), figure(800, 1000, "Tall"), figure(4300, 1000, "Bergen&#39;s pano")].join(""),
+		"Leg 5",
+	);
 	assert.ok(mixed.kind === "carousel");
 	if (mixed.kind !== "carousel") return;
 	assert.match(mixed.slides[2]!.html, /^<figure class="not-prose" style="--figure-ratio: 0\.8;" data-portrait="true">/);
 	assert.ok(mixed.slides[2]!.html.includes(`sizes="${slideSizes(1.6, 0.5)}"`));
-	assert.deepEqual(mixed.warnings, [`Photo "Tall": ${CAROUSEL_SMALL_FILL}`, `Photo "Pano": ${CAROUSEL_SMALL_FILL}`]);
+	const fillLines = [`Carousel "Leg 5". Photo "Tall": ${CAROUSEL_SMALL_FILL}`, `Carousel "Leg 5". Photo "Bergen's pano": ${CAROUSEL_SMALL_FILL}`];
+	assert.deepEqual(mixed.warnings, fillLines);
+	// The CLI lint, given the saved image sizes, prints the very same lines from the MDX
+	const mdx = [
+		'<Carousel label="Leg 5">',
+		'<Figure src="img/a.jpg" alt="A" />',
+		'<Figure src="img/b.jpg" alt="B" />',
+		'<Figure src="img/tall.jpg" alt="Tall" />',
+		`<Figure src="img/pano.jpg" alt="Bergen's pano" />`,
+		"</Carousel>",
+	].join("\n");
+	const sizes: Record<string, [number, number]> = { "img/a.jpg": [1600, 1000], "img/b.jpg": [1600, 1000], "img/tall.jpg": [800, 1000], "img/pano.jpg": [4300, 1000] };
+	assert.deepEqual(lintCarousels(mdx, { sizeOf: (src: string) => sizes[src] }), fillLines);
+	assert.deepEqual(lintCarousels(mdx), []);
 	assert.equal(CAROUSEL_SMALL_FILL, "This photo fills less than 70% of the carousel frame. Use a standalone Figure if the full view matters.");
 
 	// Lint: too many slides, too many carousels, one-slide carousels, and page-local carousel components
@@ -1184,6 +1200,61 @@ test("grug-pages Carousel: stacked without JS, one settled slide with JS, lazy s
 		"Use up to three carousels per report. Keep them where several views explain something a single photo cannot. For other sections, choose one representative photo or omit it.",
 	);
 	assert.match(lintCarousels('import PhotoCarousel from "./components/PhotoCarousel.svelte";\n')[0]!, /use <Carousel> from "@components\/mdx"/);
+
+	// Settling: a paused drag never commits; release decides. Both with scrollend and on the timer fallback.
+	for (const nativeScrollEnd of [true, false]) {
+		let now = 0;
+		let timers: { at: number; fn: () => void; id: number }[] = [];
+		let nextId = 0;
+		const tick = (ms: number) => {
+			now += ms;
+			for (const t of timers.filter((t) => t.at <= now).sort((a, b) => a.at - b.at)) {
+				timers = timers.filter((x) => x !== t);
+				t.fn();
+			}
+		};
+		let settled = 0;
+		const settler = createSettler({
+			nativeScrollEnd,
+			settle: () => (settled += 1),
+			setTimer: (fn: () => void, ms: number) => {
+				const id = ++nextId;
+				timers.push({ at: now + ms, fn, id });
+				return id;
+			},
+			clearTimer: (id: unknown) => (timers = timers.filter((t) => t.id !== id)),
+		});
+		const path = nativeScrollEnd ? "scrollend" : "timer fallback";
+		// (a) drag past halfway, hold 360ms, drag back, release onto the same slide
+		settler.press();
+		for (let i = 0; i < 10; i++) (settler.scroll(), tick(16));
+		tick(360);
+		assert.equal(settled, 0, `${path}: nothing settles while the finger is down`);
+		for (let i = 0; i < 10; i++) (settler.scroll(), tick(16));
+		settler.release();
+		for (let i = 0; i < 5; i++) (settler.scroll(), tick(16));
+		if (nativeScrollEnd) settler.scrollEnd();
+		tick(400);
+		assert.equal(settled, 1, `${path}: one settle after release (the page decides nothing changed)`);
+		// (b) drag and release: settles once, after the snap
+		settler.press();
+		settler.scroll();
+		settler.release();
+		for (let i = 0; i < 15; i++) (settler.scroll(), tick(16));
+		assert.equal(settled, 1, `${path}: not before the snap finishes`);
+		if (nativeScrollEnd) settler.scrollEnd();
+		tick(400);
+		assert.equal(settled, 2, `${path}: exactly once after the snap`);
+		// Buttons, keys and wheel: scroll events alone settle once (scrollend, or the quiet spell)
+		for (let i = 0; i < 20; i++) (settler.scroll(), tick(16));
+		if (nativeScrollEnd) {
+			tick(1000);
+			assert.equal(settled, 2, "scrollend path ignores bare scroll events");
+			settler.scrollEnd();
+		}
+		tick(400);
+		assert.equal(settled, 3, `${path}: one settle per programmatic move`);
+	}
 
 	const component = readFileSync(new URL("../sites/grug-pages/src/components/mdx/Carousel.astro", import.meta.url), "utf8");
 	const css = readFileSync(new URL("../sites/grug-pages/src/styles/global.css", import.meta.url), "utf8");
@@ -1207,7 +1278,10 @@ test("grug-pages Carousel: stacked without JS, one settled slide with JS, lazy s
 	assert.match(component, /slide\.inert = j !== i;/);
 	assert.match(component, /slides\.some\(\(slide, j\) => j !== i && slide\.contains\(active\)\)\) strip\.focus\(\{ preventScroll: true \}\)/);
 	assert.match(component, /if \(announce && i !== announced\)/);
-	assert.match(component, /strip\.addEventListener\("scrollend", settle\);/);
+	assert.match(component, /const nativeScrollEnd = "onscrollend" in window;/);
+	assert.match(component, /if \(nativeScrollEnd\) strip\.addEventListener\("scrollend", \(\) => settler\.scrollEnd\(\)\);/);
+	assert.match(component, /strip\.addEventListener\("touchstart", \(\) => settler\.press\(\), \{ passive: true \}\);/);
+	assert.match(component, /if \(event\.pointerType === "touch"\) return;/);
 	// Keys only on the strip and buttons; disabled buttons ignore Enter/Space; no autoplay; reduced motion
 	assert.match(component, /for \(const control of \[strip, prev, next\]\) control\.addEventListener\("keydown", onKey\);/);
 	assert.match(component, /if \(event\.target !== event\.currentTarget\) \{\n\s*if \(event\.key === "ArrowLeft" \|\| event\.key === "ArrowRight"\) event\.preventDefault\(\);\n\s*return;/);
@@ -1230,11 +1304,22 @@ test("grug-pages Carousel: stacked without JS, one settled slide with JS, lazy s
 	assert.match(css, /--slide-width: min\(100% - var\(--carousel-peek\), min\(65svh, 34rem\) \* var\(--frame\)\);/);
 	assert.match(css, /width: max\(0px, 100% - var\(--slide-width\) - --spacing\(3\)\);/);
 	assert.match(css, /aspect-ratio: var\(--frame\);/);
-	assert.match(css, /\.carousel-section:has\(\.carousel-strip:focus-visible\) \{\n {4}outline: 2px solid var\(--color-accent\);\n {4}outline-offset: 4px;/);
+	// Strip focus: a double ring inside the current frame plus an accent counter, never a ring the peek can cover
+	assert.match(css, /\.carousel-section:has\(\.carousel-strip:focus-visible\) \{\n {2}\.carousel-slide\[data-current\] picture::after \{\n {4}box-shadow:\n {6}inset 0 0 0 3px var\(--carousel-ring\),\n {6}inset 0 0 0 5px var\(--carousel-ring-gap\);/);
+	assert.match(css, /--carousel-ring: var\(--color-accent-dark\);\n {6}--carousel-ring-gap: var\(--color-obsidian\);/);
+	assert.match(css, /\.carousel-counter \{\n {4}color: var\(--color-accent\);\n {4}text-decoration: underline 2px;/);
+	assert.doesNotMatch(css, /outline-offset: 4px/);
+	// Button focus hugs the 36px circle, not the 48px touch target
+	assert.match(component, /group-focus-visible\/btn:outline-2 group-focus-visible\/btn:outline-offset-2/);
+	assert.doesNotMatch(component, /class="[^"]*\bfocus-visible:outline-2/);
 	assert.match(css, /\.carousel \.carousel-slide figcaption a:focus-visible \{\n {2}outline-offset: -2px;/);
 	assert.match(css, /@media \(prefers-reduced-motion: no-preference\) \{\n {8}scroll-behavior: smooth;/);
 
-	assert.match(cli, /warnPageLint\(cfg\.pagesDir, slug \? \[slug\] : slugs\);/);
+	assert.match(cli, /await warnPageLint\(cfg\.pagesDir, slug \? \[slug\] : slugs\);/);
+	assert.match(cli, /if \(width && height\) writeSize\(imgDir, file, width, height\);/);
+	assert.match(cli, /const SIZES_FILE = "\.sizes\.json";/);
+	assert.match(cli, /GRUG_PAGE_LINTED: "1"/);
+	assert.match(component, /process\.env\.GRUG_PAGE_LINTED !== "1"/);
 	assert.ok(skill.includes(CAROUSEL_TOO_MANY));
 	assert.match(skill, /One sentence, up to 100 characters for carousel captions\. Put route advice in the section text\./);
 	assert.match(skill, /Never write page-local components for UI the template owns/);

@@ -12,5 +12,15 @@ export declare const CAROUSEL_TOO_MANY: string;
 export declare const CAROUSEL_SMALL_FILL: string;
 export declare function carouselFrame(ratios: number[]): number;
 export declare function slideSizes(frame: number, scale: number): string;
-export declare function buildCarousel(html: string): BuiltCarousel;
-export declare function lintCarousels(body: string): string[];
+export declare function buildCarousel(html: string, label?: string): BuiltCarousel;
+export declare function frameFill(ratio: number, frame: number): number;
+export declare function fillWarnings(label: string, photos: { alt: string; ratio: number }[]): string[];
+export type CarouselSettler = { scroll(): void; scrollEnd(): void; press(): void; release(): void; readonly held: boolean };
+export declare function createSettler(options: {
+  nativeScrollEnd: boolean;
+  settle: () => void;
+  delay?: number;
+  setTimer?: (fn: () => void, ms: number) => unknown;
+  clearTimer?: (handle: unknown) => void;
+}): CarouselSettler;
+export declare function lintCarousels(body: string, options?: { sizeOf?: (src: string) => [number, number] | undefined }): string[];

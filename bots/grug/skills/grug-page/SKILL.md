@@ -113,7 +113,7 @@ Real images make pages much better when they show something words can't: the pla
   </Carousel>
   ```
 - Similar shapes: slides share one frame. Panorama or tall shot among landscapes shows small; build warns. Give it own `<Figure>` if full view matters.
-- Use template `<Carousel>`, `<Tabs>`, `<Figure>`. Never write page-local components for UI the template owns (carousels, galleries, tabs, accordions). `grug-page build` warns on carousels over 8 slides, over 3 per page, photos filling under 70% of the frame, or a page-local carousel.
+- Use template `<Carousel>`, `<Tabs>`, `<Figure>`. Never write page-local components for UI the template owns (carousels, galleries, tabs, accordions). `grug-page lint <slug>` (and `build`) warns on carousels over 8 slides, over 3 per page, photos filling under 70% of the frame, or a page-local carousel.
 
 ## Sourcing and content rules
 
