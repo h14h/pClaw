@@ -60,13 +60,12 @@ const tocChild = "text-stone-600 decoration-stone-950/15 dark:text-stone-400 dar
       </p>
     )}
     <div class="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 text-base/6 text-stone-500 sm:text-sm/5 dark:text-stone-400">
-      <time datetime={date} class="tabular-nums">{formatDate(date)}</time>
-      {updated && updated !== date && (
-        <>
-          <span aria-hidden="true" class="text-stone-300 dark:text-stone-700">&middot;</span>
-          <span class="tabular-nums">Updated <time datetime={updated}>{formatDate(updated)}</time></span>
-        </>
-      )}
+      <!-- One text run, so a narrow screen wraps it at a space rather than stranding a separator -->
+      <span class="tabular-nums">
+        <time datetime={date}>{formatDate(date)}</time>{updated && updated !== date && (
+          <>, updated <time datetime={updated}>{formatDate(updated)}</time></>
+        )}
+      </span>
       {slug && (
         // "Copy share link": hidden in the build; the pages server fills in this page's /p/ link on the owner's
         // address (a plain link without JS) and removes it from the share address. See ownerHtml in pages-server.ts.

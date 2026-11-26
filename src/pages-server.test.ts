@@ -1633,6 +1633,8 @@ test("grug-pages report: answer-first opening, Contents with nested legs and Sou
 	assert.match(report, /<article class="prose mt-5 sm:mt-8">/);
 	assert.match(report, /<p class="mt-1\.5 text-sm\/5 text-pretty text-stone-500 dark:text-stone-400">\n\s*<span class="sr-only">Tags: <\/span>\{tags\.join\(", "\)\}/);
 	assert.doesNotMatch(report, /rounded-md bg-stone-950\/5 px-2/);
+	// Published and updated dates are one text run ("25 Nov 2026, updated 26 Nov 2026"): no stranded separator
+	assert.match(report, /<time datetime=\{date\}>\{formatDate\(date\)\}<\/time>\{updated && updated !== date && \(\n\s*<>, updated <time datetime=\{updated\}>/);
 	// Stats: two columns from a 20rem container (2×2 for four), 12/16px gaps, 20/28px values, dividers to match
 	assert.match(statGrid, /4: "@xs:grid-cols-2 @lg:grid-cols-4"/);
 	assert.match(statGrid, /grid grid-cols-1 gap-x-3 gap-y-4 @lg:gap-x-5/);
