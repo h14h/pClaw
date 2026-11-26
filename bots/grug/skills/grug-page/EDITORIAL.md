@@ -51,7 +51,9 @@ The reader acts on one or two decisions. Shape the page so each one is easy to c
   - Each day gets one default route and one default evening stop. No backtracking across town without saying why.
   - Name the dates the plan depends on (closures, timed slots, opening days).
   - Booking links and slot order go at the point of action, in the day that needs them.
-- Any threshold that drives advice ("4+ rides: buy the day pass") holds at every rate the page lists, or the page says which rate it assumes.
+- Any threshold that drives advice ("4+ rides: buy the day pass") holds at every rate the page lists and the reader's likely use, or the page says it's conditional.
+- Deals name the exact qualifying configuration. Deadlines carry a time zone and say whether the end is inclusive ("ends Dec 1, 12:00 a.m. PT").
+- Each explicit ask in the brief ("a sunset spot each evening") is met, or the page says plainly where it isn't. The summary never claims a partly met ask.
 - Use complete sentences whenever a fragment leaves the actor, action, or condition unclear.
 
 ## Claim precision
@@ -64,6 +66,7 @@ Most deductions came from here.
   - "One of the steepest with regular passenger service" is not "steepest standard-gauge".
   - "Older guides describe" is not "buses still stop there".
 - Every number carries its scope and date: what it covers, which source, when checked. Put it in the stat's `note`, the table's caption sentence, or the same sentence.
+- A cited comparative verdict covers only the models or generations the source tested. No comparable evidence: say so, and narrow the pick to the traits the evidence supports.
 - Durations and ranges: use the source's range ("about 6.5 to 7.5 hours, per Vy"), not a midpoint or a tighter range.
 - A fact with no source you read today: cut it or mark it `<Callout type="warn" title="Not verified">`.
 - Source notes list only what that source actually supports. Re-open the link before writing the note.
@@ -90,7 +93,7 @@ Most deductions came from here.
 
 ## Voice
 
-Terse, ultracave. Short sentences, no filler, no hype. Keep grammar wherever dropping it blurs meaning: "One of world's steepest" was marked down, "One of the world's steepest" was not. A fragment that can be read two ways gets its full sentence back.
+Official spellings with diacritics for places and names: Belém, São Vicente, Nærøyfjord. Terse, ultracave. Short sentences, no filler, no hype. Keep grammar wherever dropping it blurs meaning: "One of world's steepest" was marked down, "One of the world's steepest" was not. A fragment that can be read two ways gets its full sentence back.
 
 ## Self-check before build
 

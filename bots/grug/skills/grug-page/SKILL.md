@@ -138,7 +138,7 @@ Real images make pages much better when they show something words can't: the pla
    ```
    A fresh reviewer reads `.brief.md` and the polished page, verifies the two decisions the reader will act on (current lineup and full prices, itinerary routes, thresholds), spot-checks the riskiest claims against their cited URLs, reviews the copy against `EDITORIAL.md`, and prints `DECISIONS`, numbered `MUST FIX` and `NICE TO FIX` findings, and `SPOT CHECKS`. It never edits the page.
 4. **Fix every MUST FIX yourself** in `index.mdx`, and NICE TO FIX where cheap. Fix from your sources only: never invent a fact, number, date or URL to satisfy a finding. If a claim can't be supported, cut it or mark it `<Callout type="warn" title="Not verified">`. A missing current model or a broken route means research it, not paper over it. Don't re-run polish.
-   Then reread the final subtitle, lead, share summary (`summary`), decision table, and action section together, and verify every change agrees across those blocks.
+   Then reread the final page against `.brief.md`. For each requested decision, write down the one action the reader should take and its source, and confirm the subtitle, lead, share summary (`summary`), decision table, and action section all give that same answer. For time-sensitive actions (sales, bookings, cutoffs), open the purchase or booking link and confirm the exact date with time zone, the configuration, and the cutoff.
 5. **Lint, build and validate**:
    ```bash
    grug-page lint <slug>

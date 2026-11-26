@@ -172,7 +172,9 @@ else {
 		assert.match(prompt, /1\. Decisions first\. Read the original brief\. Identify the two decisions the reader is most likely to act on\. Verify them end to end\./);
 		assert.match(prompt, /open the maker's current lineup and confirm the exact generation, market, configuration, availability, and complete price/);
 		assert.match(prompt, /trace each day in order, including the evening stop, and flag backtracking, transfers, and dates the plan depends on/);
-		assert.match(prompt, /Recalculate every threshold or total that supports a recommendation against each applicable rate\. Mark a material omission or contradiction MUST FIX\./);
+		assert.match(prompt, /Recalculate every threshold or total that supports a recommendation against each applicable rate and the reader's likely use\./);
+		assert.match(prompt, /Check that the subtitle, summary, and table give the same answer as the body; that each cited comparative verdict covers the models or generations the source actually tested; that deals name the qualifying configuration and deadlines a time zone and inclusive end; and that every explicit ask in the brief is met or plainly marked unmet/);
+		assert.match(prompt, /Mark a material omission or contradiction MUST FIX\./);
 		assert.ok(prompt.indexOf("1. Decisions first") < prompt.indexOf("3. Then the copy"));
 		assert.match(prompt, /^DECISIONS$/m);
 		assert.match(prompt, /Review only; do not edit, create or delete any file\./);
@@ -223,10 +225,15 @@ test("grug-page skill: EDITORIAL.md is the one source of editorial rules; workfl
 	assert.match(editorial, /Each day gets one default route and one default evening stop/);
 	assert.match(editorial, /Opening stats: keep one only if it changes what the reader does, and only with a source or date in its note\./);
 	assert.match(skill, /Save the request you were given, word for word, as `~\/work\/pages\/<slug>\/\.brief\.md`/);
-	assert.match(skill, /reread the final subtitle, lead, share summary \(`summary`\), decision table, and action section together/);
+	assert.match(skill, /reread the final page against `\.brief\.md`\. For each requested decision, write down the one action the reader should take and its source, and confirm the subtitle, lead, share summary \(`summary`\), decision table, and action section all give that same answer\./);
+	assert.match(skill, /open the purchase or booking link and confirm the exact date with time zone, the configuration, and the cutoff/);
+	assert.match(editorial, /A cited comparative verdict covers only the models or generations the source tested\./);
+	assert.match(editorial, /Deadlines carry a time zone and say whether the end is inclusive/);
+	assert.match(editorial, /The summary never claims a partly met ask\./);
+	assert.match(editorial, /Official spellings with diacritics for places and names: Belém, São Vicente, Nærøyfjord\./);
 	assert.match(skill, /At `320` wide, check the first screen and the widest table/);
 	assert.match(editorial, /Fjord Tours' "From 2,698 NOK" was the cheapest of 32 routes; Oslo → Bergen one way was 3,131 NOK\./);
 	// Remote workers get the same order in their prompt
 	assert.match(REMOTE_PAGES_GUIDANCE, /save the request you were given, word for word, as `~\/work\/pages\/<slug>\/\.brief\.md`, then write/);
-	assert.match(REMOTE_PAGES_GUIDANCE, /EDITORIAL\.md` rules -> `grug-page polish <slug>` -> `grug-page review <slug>`, then fix every MUST FIX yourself \(never inventing facts\) and reread the final subtitle, lead, share summary, decision table, and action section together so every change agrees -> `grug-page build <slug>` \(fix its WARN lines\)/);
+	assert.match(REMOTE_PAGES_GUIDANCE, /EDITORIAL\.md` rules -> `grug-page polish <slug>` -> `grug-page review <slug>`, then fix every MUST FIX yourself \(never inventing facts\) and reread the final page against `\.brief\.md`: for each requested decision, the subtitle, lead, share summary, decision table, and action section give the same one action, and any sale, booking, or cutoff date is confirmed at its link with time zone and configuration -> `grug-page build <slug>` \(fix its WARN lines\)/);
 });
