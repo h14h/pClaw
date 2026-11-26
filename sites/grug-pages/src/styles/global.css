@@ -717,9 +717,10 @@
     white-space: nowrap;
   }
 
-  /* Carousel (<Carousel>): a scroll-snap strip that bleeds into the page gutters, so slides line up with the text
-     and the next one peeks in from the edge. Every slide shares the strip's frame ratio (--frame), capped like a
-     portrait Figure, so the strip's height never changes as you swipe. */
+  /* Carousel (<Carousel>). Without JS the Figures stack like ordinary Figures. With JS ([data-js], set before first
+     paint) they become a scroll-snap strip that bleeds into the phone gutters so the next slide peeks in. Every
+     slide shares the strip's frame ratio (--frame), capped like a portrait Figure, so the strip's height never
+     changes as you swipe. */
   .carousel {
     --carousel-gutter: --spacing(5);
     --carousel-peek: 3rem;
@@ -734,77 +735,107 @@
     }
   }
 
-  .carousel-strip {
-    position: relative;
-    display: flex;
-    gap: --spacing(3);
-    margin-inline: calc(var(--carousel-gutter) * -1);
-    padding-inline: var(--carousel-gutter);
-    scroll-padding-inline: var(--carousel-gutter);
-    overflow-x: auto;
-    overflow-y: hidden;
-    overscroll-behavior-x: contain;
-    scroll-snap-type: x mandatory;
-    scrollbar-width: none;
-    -webkit-overflow-scrolling: touch;
-
-    &::-webkit-scrollbar {
-      display: none;
-    }
-
-    @media (prefers-reduced-motion: no-preference) {
-      scroll-behavior: smooth;
-    }
+  .carousel-bar {
+    display: none;
   }
 
-  .carousel-slide {
-    flex: none;
-    width: min(100% - var(--carousel-peek), min(65svh, 34rem) * var(--frame));
-    scroll-snap-align: start;
-    scroll-snap-stop: always;
+  .carousel-strip {
+    display: grid;
+    gap: --spacing(6);
+  }
 
-    & img {
-      aspect-ratio: var(--frame);
-      height: auto;
-      object-fit: contain;
+  .carousel:not([data-js]) .carousel-slide figure[data-portrait] {
+    width: min(100%, calc(min(65svh, 34rem) * var(--figure-ratio)));
+  }
+
+  .carousel[data-js] {
+    .carousel-bar {
+      display: flex;
     }
 
-    &[data-fit="cover"] img {
-      object-fit: cover;
+    .carousel-strip {
+      --slide-width: min(100% - var(--carousel-peek), min(65svh, 34rem) * var(--frame));
+      position: relative;
+      display: flex;
+      gap: --spacing(3);
+      margin-top: --spacing(2);
+      margin-inline: calc(var(--carousel-gutter) * -1);
+      padding-inline: var(--carousel-gutter);
+      scroll-padding-inline: var(--carousel-gutter);
+      overflow-x: auto;
+      overflow-y: hidden;
+      overscroll-behavior-x: contain;
+      scroll-snap-type: x mandatory;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+
+      &::-webkit-scrollbar {
+        display: none;
+      }
+
+      /* Room after the last slide so it can snap to the text gutter like the others. */
+      &::after {
+        content: "";
+        flex: none;
+        width: max(0px, 100% - var(--slide-width) - --spacing(3));
+      }
+
+      &:focus-visible {
+        outline: none;
+      }
+
+      @media (prefers-reduced-motion: no-preference) {
+        scroll-behavior: smooth;
+      }
     }
 
+    .carousel-slide {
+      flex: none;
+      width: var(--slide-width);
+      scroll-snap-align: start;
+      scroll-snap-stop: always;
+
+      & img {
+        aspect-ratio: var(--frame);
+        height: auto;
+        object-fit: contain;
+      }
+
+      &[data-fit="cover"] img {
+        object-fit: cover;
+      }
+
+      /* Only the settled slide shows its caption; the peek is a picture, not cut-off text. */
+      &:not([data-current]) figcaption {
+        opacity: 0;
+      }
+    }
   }
 
   .carousel[data-settled] .carousel-slide figcaption {
     transition: opacity 150ms ease;
-  }
 
-  /* With the script running, captions show only on slides in full view, so the peek is a picture, not cut-off text. */
-  .carousel[data-ready] .carousel-slide:not([data-whole]) figcaption {
-    opacity: 0;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .carousel[data-settled] .carousel-slide figcaption {
+    @media (prefers-reduced-motion: reduce) {
       transition: none;
     }
   }
 
-  .carousel-buttons {
-    display: none;
-  }
+  /* The strip bleeds to the screen edge, so its keyboard focus ring goes around the whole carousel instead. */
+  .carousel-section:has(.carousel-strip:focus-visible) {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 4px;
+    border-radius: var(--radius-md);
 
-  .carousel-hint {
-    display: flex;
+    @variant dark {
+      outline-color: var(--color-accent-dark);
+    }
   }
+}
 
-  .carousel[data-ready] .carousel-buttons {
-    display: flex;
-  }
-
-  .carousel[data-ready] .carousel-hint {
-    display: none;
-  }
+/* Unlayered so it beats the Figure's focus-visible:outline-offset-2 utility: inside a strip that clips overflow,
+   a credit link's ring has to sit inside the link. */
+.carousel .carousel-slide figcaption a:focus-visible {
+  outline-offset: -2px;
 }
 
 /* Print stylesheet: clean ink on white paper, hide interactive chrome */
@@ -884,21 +915,25 @@
     padding-inline: 0 !important;
   }
 
-  .carousel-strip {
-    display: block !important;
+  .carousel[data-js] .carousel-strip {
+    display: grid !important;
+    gap: 1.5rem;
     margin-inline: 0 !important;
     padding-inline: 0 !important;
     overflow: visible !important;
   }
 
-  .carousel-slide {
+  .carousel[data-js] .carousel-strip::after,
+  .carousel-bar {
+    display: none !important;
+  }
+
+  .carousel[data-js] .carousel-slide {
     width: auto !important;
-    margin-bottom: 1.5rem;
     break-inside: avoid;
   }
 
-  .carousel-buttons,
-  .carousel-hint {
-    display: none !important;
+  .carousel .carousel-slide figcaption {
+    opacity: 1 !important;
   }
 }

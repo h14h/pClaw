@@ -1,51 +1,55 @@
 ---
 /**
- * A swipeable strip of `<Figure>`s: 3–6 genuinely different views of one place or thing.
+ * A swipeable strip of `<Figure>`s: several views that explain something a single photo cannot.
  *
- *   <Carousel label="Leg 1 photos: Oslo S to Myrdal">
+ *   <Carousel label="Leg 2 photos: Myrdal to Flåm">
  *     <Figure src="img/…" alt="…" caption="…" credit="…" href="…" />
  *     …
  *   </Carousel>
  *
- * Without JS it is a CSS scroll-snap strip (touch, trackpad, keyboard). The script adds prev/next buttons, a
- * "2 / 5" counter, arrow keys, and polite announcements. Every slide shares one frame ratio (the median of its
- * images), so mixed shapes never change the strip's height. Images within 10% of the frame fill it; the rest are
- * shown whole on the figure's surface. One Figure renders as a plain Figure.
+ * Without JS the Figures simply stack, each with its caption and credit. With JS (switched on before first paint,
+ * so nothing moves) they become a scroll-snap strip with prev/next buttons, a "2 / 4" counter, arrow keys, and
+ * one polite announcement per settled slide. Only the settled slide shows its caption and can take focus. Every
+ * slide shares one frame ratio (the median of its images), so mixed shapes never change the strip's height. One
+ * Figure renders as a plain Figure.
  */
 import { buildCarousel } from "../../../lib/carousel.mjs";
 
 interface Props {
-  /** What the slides show, for screen readers ("Leg 1 photos: Oslo S to Myrdal"). */
+  /** What the slides show, for screen readers ("Leg 2 photos: Myrdal to Flåm"). */
   label: string;
 }
 
 const { label } = Astro.props;
 if (!label || !label.trim()) {
-  throw new Error('<Carousel> needs a label saying what the slides show, e.g. label="Leg 1 photos: Oslo S to Myrdal".');
+  throw new Error('<Carousel> needs a label saying what the slides show, e.g. label="Leg 2 photos: Myrdal to Flåm".');
 }
 
 const html = Astro.slots.has("default") ? await Astro.slots.render("default") : "";
 const carousel = buildCarousel(html);
+if (carousel.kind === "carousel") {
+  const slug = Astro.url.pathname.split("/").filter(Boolean).at(-1) ?? "";
+  for (const warning of carousel.warnings) console.warn(`\nWARN ${slug}: Carousel "${label.trim()}". ${warning}`);
+}
 // A 36px circle; on touch screens the button around it grows to a 48px target without the circle getting heavier.
 const button =
-  "group/btn inline-flex size-9 shrink-0 items-center justify-center rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent aria-disabled:pointer-events-none pointer-coarse:size-12 dark:focus-visible:outline-accent-dark";
+  "group/btn inline-flex size-9 shrink-0 items-center justify-center rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent aria-disabled:cursor-default pointer-coarse:size-12 dark:focus-visible:outline-accent-dark";
 const circle =
-  "inline-flex size-9 items-center justify-center rounded-full border border-stone-950/12 text-stone-700 group-hover/btn:bg-stone-950/5 group-hover/btn:text-stone-950 group-aria-disabled/btn:opacity-35 dark:border-white/15 dark:text-stone-300 dark:group-hover/btn:bg-white/8 dark:group-hover/btn:text-stone-50";
+  "inline-flex size-9 items-center justify-center rounded-full border border-stone-950/20 text-stone-700 group-hover/btn:bg-stone-950/5 group-hover/btn:text-stone-950 group-aria-disabled/btn:border-stone-950/10 group-aria-disabled/btn:bg-transparent group-aria-disabled/btn:text-stone-400 dark:border-white/25 dark:text-stone-300 dark:group-hover/btn:bg-white/8 dark:group-hover/btn:text-stone-50 dark:group-aria-disabled/btn:border-white/10 dark:group-aria-disabled/btn:text-stone-600";
 ---
 
 {carousel.kind === "single" ? (
   <Fragment set:html={carousel.html} />
 ) : (
   <grug-carousel class="carousel not-prose my-8 block">
-    <section role="region" aria-roledescription="carousel" aria-label={label.trim()}>
-      <div class="flex h-9 items-center justify-between gap-3 pointer-coarse:h-12">
-        <p class="font-mono text-xs tracking-wide text-stone-500 tabular-nums dark:text-stone-400" aria-hidden="true">
-          <span data-carousel-counter>{carousel.slides.length} images</span>
+    {/* Runs during parsing, before the strip paints: the horizontal layout never replaces a painted stack. */}
+    <script is:inline>document.currentScript.parentElement.setAttribute("data-js", "");</script>
+    <section class="carousel-section" role="region" aria-roledescription="carousel" aria-label={label.trim()}>
+      <div class="carousel-bar h-9 items-center justify-between gap-3 pointer-coarse:h-12">
+        <p class="text-sm/5 tracking-normal text-stone-600 tabular-nums dark:text-stone-400" aria-hidden="true">
+          <span data-carousel-counter>1 / {carousel.slides.length}</span>
         </p>
-        <p class="carousel-hint items-center gap-1 font-mono text-xs tracking-wide text-stone-500 select-none dark:text-stone-400" aria-hidden="true">
-          Scroll <span aria-hidden="true">&rarr;</span>
-        </p>
-        <div class="carousel-buttons items-center gap-2 pointer-coarse:-mr-1.5 pointer-coarse:gap-0">
+        <div class="flex items-center gap-2 pointer-coarse:-mr-1.5 pointer-coarse:gap-0">
           <button type="button" class={button} aria-label="Previous slide" aria-controls={carousel.id} aria-disabled="true" data-carousel-prev>
             <span class={circle}>
               <svg viewBox="0 0 16 16" aria-hidden="true" class="size-4 fill-current">
@@ -53,7 +57,7 @@ const circle =
               </svg>
             </span>
           </button>
-          <button type="button" class={button} aria-label="Next slide" aria-controls={carousel.id} data-carousel-next>
+          <button type="button" class={button} aria-label="Next slide" aria-controls={carousel.id} aria-disabled="false" data-carousel-next>
             <span class={circle}>
               <svg viewBox="0 0 16 16" aria-hidden="true" class="size-4 fill-current">
                 <path fill-rule="evenodd" d="M6.22 4.22a.75.75 0 0 1 1.06 0l3.25 3.25a.75.75 0 0 1 0 1.06l-3.25 3.25a.75.75 0 0 1-1.06-1.06L8.94 8 6.22 5.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
@@ -62,15 +66,7 @@ const circle =
           </button>
         </div>
       </div>
-      <div
-        id={carousel.id}
-        class="carousel-strip mt-2 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent dark:focus-visible:outline-accent-dark"
-        style={`--frame: ${carousel.frame};`}
-        role="group"
-        aria-label="Slides"
-        tabindex="0"
-        data-carousel-strip
-      >
+      <div id={carousel.id} class="carousel-strip" style={`--frame: ${carousel.frame};`} role="group" aria-label="Slides" data-carousel-strip>
         {carousel.slides.map((slide, i) => (
           <div
             class="carousel-slide"
@@ -78,6 +74,7 @@ const circle =
             aria-roledescription="slide"
             aria-label={`${i + 1} of ${carousel.slides.length}`}
             data-fit={slide.fit}
+            data-current={i === 0 ? "" : undefined}
             data-carousel-slide
           >
             <Fragment set:html={slide.html} />
@@ -93,44 +90,27 @@ const circle =
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
   class GrugCarousel extends HTMLElement {
-    #index = 0;
-    #announced = 0;
-    #settle = 0;
-
     connectedCallback() {
+      if (this.hasAttribute("data-ready")) return;
       const strip = this.querySelector<HTMLElement>("[data-carousel-strip]");
       const slides = Array.from(this.querySelectorAll<HTMLElement>("[data-carousel-slide]"));
       const prev = this.querySelector<HTMLButtonElement>("[data-carousel-prev]");
       const next = this.querySelector<HTMLButtonElement>("[data-carousel-next]");
       const counter = this.querySelector<HTMLElement>("[data-carousel-counter]");
       const status = this.querySelector<HTMLElement>("[data-carousel-status]");
-      if (!strip || slides.length < 2 || !prev || !next || !counter || !status || this.hasAttribute("data-ready")) return;
+      if (!strip || slides.length < 2 || !prev || !next || !counter || !status) return;
 
+      this.setAttribute("data-js", "");
+      strip.tabIndex = 0;
       const last = slides.length - 1;
       const offset = (i: number) => slides[i].offsetLeft - slides[0].offsetLeft;
-      const preload = (start: number) => {
-        for (const slide of slides.slice(start, start + 2)) {
-          for (const img of slide.querySelectorAll("img")) img.loading = "eager";
-        }
+      const warm = (i: number) => {
+        for (const img of slides[i]?.querySelectorAll("img") ?? []) img.loading = "eager";
       };
 
-      const render = () => {
-        counter.textContent = `${this.#index + 1} / ${slides.length}`;
-        prev.setAttribute("aria-disabled", String(this.#index === 0));
-        next.setAttribute("aria-disabled", String(this.#index === last));
-      };
-
-      const announce = () => {
-        if (this.#announced === this.#index) return;
-        this.#announced = this.#index;
-        status.textContent = `Slide ${this.#index + 1} of ${slides.length}`;
-      };
-
-      // The current slide is the one whose snap point is nearest; at the end of the strip it is the last, even when
-      // narrow (portrait) slides mean the last one can never reach the start edge.
-      const current = () => {
+      // The settled slide: the one whose snap point is nearest once scrolling stops.
+      const nearest = () => {
         const left = strip.scrollLeft;
-        if (left >= strip.scrollWidth - strip.clientWidth - 2) return last;
         let best = 0;
         for (let i = 1; i < slides.length; i++) {
           if (Math.abs(offset(i) - left) < Math.abs(offset(best) - left)) best = i;
@@ -138,58 +118,86 @@ const circle =
         return best;
       };
 
+      // One settled index drives everything: counter, buttons, the visible caption, which slide can take focus,
+      // and one announcement per slide reached.
+      let index = -1;
+      let announced = 0;
+      const apply = (i: number, announce: boolean) => {
+        if (i === index) return;
+        index = i;
+        const active = document.activeElement;
+        if (active && slides.some((slide, j) => j !== i && slide.contains(active))) strip.focus({ preventScroll: true });
+        slides.forEach((slide, j) => {
+          slide.toggleAttribute("data-current", j === i);
+          slide.inert = j !== i;
+        });
+        counter.textContent = `${i + 1} / ${slides.length}`;
+        prev.setAttribute("aria-disabled", String(i === 0));
+        next.setAttribute("aria-disabled", String(i === last));
+        if (announce && i !== announced) {
+          announced = i;
+          status.textContent = `Slide ${i + 1} of ${slides.length}`;
+        }
+        if (announce) warm(i + 1);
+      };
+
       // Where a button or key last sent the strip, so quick repeated presses add up while it is still moving.
       let target: number | null = null;
-      const settle = (ms: number) => {
-        clearTimeout(this.#settle);
-        this.#settle = window.setTimeout(() => {
-          target = null;
-          announce();
-        }, ms);
+      let timer = 0;
+      const settle = () => {
+        clearTimeout(timer);
+        target = null;
+        apply(nearest(), true);
+      };
+      const later = (ms: number) => {
+        clearTimeout(timer);
+        timer = window.setTimeout(settle, ms);
       };
       const go = (i: number) => {
         target = Math.max(0, Math.min(last, i));
-        settle(600);
-        preload(target);
+        warm(target);
+        later(700);
         strip.scrollTo({ left: offset(target), behavior: reducedMotion.matches ? "auto" : "smooth" });
       };
+      strip.addEventListener("scroll", () => later(150), { passive: true });
+      strip.addEventListener("scrollend", settle);
 
-      let frame = 0;
-      strip.addEventListener(
-        "scroll",
-        () => {
-          if (!frame) {
-            frame = requestAnimationFrame(() => {
-              frame = 0;
-              const index = current();
-              if (index !== this.#index) {
-                this.#index = index;
-                preload(index + 1);
-                render();
-              }
-            });
-          }
-          settle(180);
-        },
-        { passive: true },
-      );
+      const from = () => target ?? index;
+      const press = (button: HTMLButtonElement, step: number) => {
+        button.addEventListener("click", () => {
+          if (button.getAttribute("aria-disabled") === "true") return;
+          go(from() + step);
+        });
+      };
+      press(prev, -1);
+      press(next, 1);
 
-      const from = () => target ?? this.#index;
-      prev.addEventListener("click", () => go(from() - 1));
-      next.addEventListener("click", () => go(from() + 1));
-      this.addEventListener("keydown", (event) => {
+      // Only the strip and buttons move the carousel. From a credit link inside the slide, Left/Right would scroll
+      // the strip natively and pull the slide out from under the focused link, so they do nothing there.
+      const onKey = (event: KeyboardEvent) => {
         if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-        const moves: Record<string, number> = { ArrowLeft: from() - 1, ArrowRight: from() + 1, Home: 0, End: last };
-        if (!(event.key in moves)) return;
+        if (event.target !== event.currentTarget) {
+          if (event.key === "ArrowLeft" || event.key === "ArrowRight") event.preventDefault();
+          return;
+        }
+        const to =
+          event.key === "ArrowLeft" ? from() - 1
+          : event.key === "ArrowRight" ? from() + 1
+          : event.key === "Home" ? 0
+          : event.key === "End" ? last
+          : null;
+        if (to === null) return;
         event.preventDefault();
-        go(moves[event.key]);
-      });
+        go(to);
+      };
+      for (const control of [strip, prev, next]) control.addEventListener("keydown", onKey);
 
-      // Fetch the peeking slide once the carousel is close, so a first swipe never lands on a blank frame.
+      // Warm the first two slides once the carousel is close; after that, only the slide after the settled one.
       const near = new IntersectionObserver(
         (entries) => {
           if (entries.some((entry) => entry.isIntersecting)) {
-            preload(1);
+            warm(0);
+            warm(1);
             near.disconnect();
           }
         },
@@ -197,26 +205,10 @@ const circle =
       );
       near.observe(this);
 
-      // Captions show only on slides in full view, so the peeking slide reads as a picture, not cut-off text.
-      const whole = (slide: HTMLElement) => {
-        const box = strip.getBoundingClientRect();
-        const rect = slide.getBoundingClientRect();
-        return rect.left >= box.left - 1 && rect.right <= box.right + 1;
-      };
-      for (const slide of slides) slide.toggleAttribute("data-whole", whole(slide));
-      const view = new IntersectionObserver(
-        (entries) => {
-          for (const entry of entries) entry.target.toggleAttribute("data-whole", entry.intersectionRatio >= 0.95);
-        },
-        { root: strip, threshold: [0, 0.95] },
-      );
-      for (const slide of slides) view.observe(slide);
-
-      this.#index = current();
-      this.#announced = this.#index;
-      render();
+      apply(nearest(), false);
+      announced = index;
       this.setAttribute("data-ready", "");
-      // Caption fades start after the first paint, so peeking captions don't visibly fade out on load.
+      // Caption fades start after the first paint.
       requestAnimationFrame(() => requestAnimationFrame(() => this.setAttribute("data-settled", "")));
     }
   }

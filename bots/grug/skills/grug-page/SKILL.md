@@ -74,7 +74,7 @@ import { Callout, StatGrid, Stat, Details, Sources, Tabs, Figure, Carousel } fro
 - `<Tabs client:load labels={["Option A", "Option B"]}><div>...</div><div>...</div></Tabs>` — interactive tabbed views (also accepts `tabs={[{ label, content }]}`). Always include `client:load` on Svelte islands (`Tabs` and any custom `components/*.svelte`).
 - `<Details summary="Methodology and assumptions" open={false}>...</Details>` — collapsible secondary detail.
 - `<Figure src="img/3f9a1c2b7d4e.jpg" alt="..." caption="..." credit="..." href="..." [background="paper"] />` — a real image saved with `grug-page image` (see Images below). Never hand-write `src`; paste the line the command prints.
-- `<Carousel label="Leg 1 photos: Oslo S to Myrdal">` wrapping 2–8 `<Figure />` lines — swipeable photo strip (see Carousels below). No `client:load`.
+- `<Carousel label="Leg 2 photos: Myrdal to Flåm">` wrapping 3–6 `<Figure />` lines — swipeable photo strip (see Carousels below). No `client:load`.
 - `<Sources checked="2026-11-24">` wrapping a numbered Markdown list of links — always include at the bottom.
 - Standard Markdown tables work out of the box (automatically wrapped for mobile horizontal scroll with `tabular-nums`).
 - **Never use a standalone `Rank` or `#` column as Column 1** — put the identifying name (Provider, Option, Site, Scenario) in Column 1 (e.g. `1. GFiber Webpass`) so future tables are naturally compact and self-identifying.
@@ -100,9 +100,10 @@ Real images make pages much better when they show something words can't: the pla
 
 ### Carousels
 
-- Use `<Carousel>` only for 3–6 genuinely different views of one place or thing (a route leg, a venue inside and out). One view: plain `<Figure>`. Same view twice: cut one.
-- Never filler. At most ~3 carousels per page. Most pages need none.
+- Use up to three carousels per report. Keep them where several views explain something a single photo cannot. For other sections, choose one representative photo or omit it.
+- 3–6 genuinely different views of one place or thing. Never filler. Same view twice: cut one.
 - Every slide: verified, relevant photo saved with `grug-page image`, real alt, credit with link. Same checks as single images.
+- One sentence, up to 100 characters for carousel captions. Put route advice in the section text.
 - Only `<Figure />` lines inside. `label` says what slides show, for screen readers.
   ```mdx
   <Carousel label="Nærøyfjord from the boat">
@@ -111,8 +112,8 @@ Real images make pages much better when they show something words can't: the pla
   <Figure src="img/…" alt="…" caption="…" credit="…" href="…" />
   </Carousel>
   ```
-- Similar shapes look best: slides share one frame. Odd panorama or tall shot sits whole on a plain surface; give it its own `<Figure>` if it matters.
-- Use template `<Carousel>`, `<Tabs>`, `<Figure>`. Never write page-local components for UI the template owns (carousels, galleries, tabs, accordions). `grug-page build` warns on carousels over 8 slides, over 3 per page, or a page-local carousel.
+- Similar shapes: slides share one frame. Panorama or tall shot among landscapes shows small; build warns. Give it own `<Figure>` if full view matters.
+- Use template `<Carousel>`, `<Tabs>`, `<Figure>`. Never write page-local components for UI the template owns (carousels, galleries, tabs, accordions). `grug-page build` warns on carousels over 8 slides, over 3 per page, photos filling under 70% of the frame, or a page-local carousel.
 
 ## Sourcing and content rules
 

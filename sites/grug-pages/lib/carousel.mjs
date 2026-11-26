@@ -4,6 +4,12 @@
 export const CAROUSEL_MAX_SLIDES = 8;
 /** Carousels past this many per page turn a guide into a photo album. */
 export const CAROUSEL_MAX_PER_PAGE = 3;
+/** A photo filling less than this share of the frame's width or height is better as a standalone Figure. */
+export const CAROUSEL_MIN_FILL = 0.7;
+export const CAROUSEL_TOO_MANY =
+  "Use up to three carousels per report. Keep them where several views explain something a single photo cannot. For other sections, choose one representative photo or omit it.";
+export const CAROUSEL_SMALL_FILL =
+  "This photo fills less than 70% of the carousel frame. Use a standalone Figure if the full view matters.";
 /** An image within this share of the frame's ratio fills the frame (crops at most ~5% a side); others show whole. */
 export const CAROUSEL_FIT_TOLERANCE = 0.1;
 /** How much of the next slide shows at the right edge, so the strip reads as swipeable. Matches the CSS. */
@@ -40,15 +46,15 @@ export function carouselFrame(ratios) {
  * `sizes` for one slide: the slide is the column minus the peek, capped like a portrait Figure (65vh, 34rem tall),
  * and the image covers `scale` of the slide's width (under 1 when it sits inside the frame, over 1 when it fills it).
  */
-export function slideSizes(frame, scale, { eager = false } = {}) {
+export function slideSizes(frame, scale) {
   const k = round(scale);
   const cap = (n) => `${round(n * frame * k, 2)}`;
   const slots = COLUMN.map(([media, column]) => {
     const width = k === 1 ? `calc(${column} - ${CAROUSEL_PEEK_REM}rem)` : `calc((${column} - ${CAROUSEL_PEEK_REM}rem) * ${k})`;
     return `${media}min(${width}, ${cap(34)}rem, ${cap(65)}vh)`;
   });
-  // `auto` is only valid on lazy images.
-  return (eager ? slots : ["auto", ...slots]).join(", ");
+  // Every slide is lazy, so supporting browsers can size by the rendered slide (`auto`); the rest is the fallback.
+  return ["auto", ...slots].join(", ");
 }
 
 /**
@@ -75,20 +81,25 @@ export function buildCarousel(html) {
   });
   const frame = carouselFrame(ratios);
 
+  const warnings = [];
   const slides = figures.map((figure, i) => {
-    const relative = ratios[i] / frame;
+    const ratio = ratios[i];
+    const relative = ratio / frame;
     const fit = Math.abs(relative - 1) <= CAROUSEL_FIT_TOLERANCE ? "cover" : "contain";
     const scale = fit === "cover" ? Math.max(1, relative) : Math.min(1, relative);
-    const eager = i === 0;
+    if (Math.min(relative, 1 / relative) < CAROUSEL_MIN_FILL) {
+      const alt = /\salt="([^"]*)"/.exec(figure)?.[1] ?? `slide ${i + 1}`;
+      warnings.push(`Photo "${alt.slice(0, 60)}": ${CAROUSEL_SMALL_FILL}`);
+    }
+    // The slide owns width and spacing. Portraits keep their ratio so the no-JS stack can cap them like a Figure.
+    const portrait = ratio < 1 ? ` style="--figure-ratio: ${round(ratio)};" data-portrait="true"` : "";
     const out = figure
-      // The slide owns width and spacing; the Figure's own portrait width and margins don't apply in a strip.
-      .replace(/^<figure\b[^>]*>/, '<figure class="not-prose">')
-      .replace(/\ssizes="[^"]*"/g, ` sizes="${slideSizes(frame, scale, { eager })}"`)
-      .replace(/\sloading="lazy"/g, eager ? ' loading="eager"' : ' loading="lazy"');
+      .replace(/^<figure\b[^>]*>/, `<figure class="not-prose"${portrait}>`)
+      .replace(/\ssizes="[^"]*"/g, ` sizes="${slideSizes(frame, scale)}"`);
     return { html: out, fit };
   });
 
-  return { kind: "carousel", id: `carousel-${hash(html)}`, frame, slides };
+  return { kind: "carousel", id: `carousel-${hash(html)}`, frame, slides, warnings };
 }
 
 // Stable per carousel, so builds are reproducible and the buttons can name the strip they control.
@@ -118,7 +129,7 @@ export function lintCarousels(body) {
     warnings.push('Page imports its own carousel component; use <Carousel> from "@components/mdx" instead.');
   }
   if (blocks.length > CAROUSEL_MAX_PER_PAGE) {
-    warnings.push(`${blocks.length} carousels on one page; keep it to ${CAROUSEL_MAX_PER_PAGE} or fewer.`);
+    warnings.push(`${blocks.length} carousels on one page. ${CAROUSEL_TOO_MANY}`);
   }
   return warnings;
 }
