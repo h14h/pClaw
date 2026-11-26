@@ -381,7 +381,7 @@ function cmdReview(cfg, args) {
     "How to review:",
     "1. Read page.mdx once, top to bottom, as the reader would: frontmatter (title, subtitle, summary), lead, stats, table, sections, practical tips, Sources.",
     "2. Answer EDITORIAL.md's self-check for this page. Look hardest at: the subtitle giving a verdict, facts said twice across subtitle/lead/stats/table/sections, numbers without their scope or date, captions that lean on page order, and sources whose note claims more than the source says.",
-    "3. Spot-check the 2 or 3 riskiest factual claims (prices, durations, dates, superlatives, \"from\"/\"up to\" figures) against the URL the page cites for them, using your web fetch tool. Quote what the source actually says. If you can't fetch it, say so; don't guess.",
+    "3. Spot-check the 2 or 3 riskiest factual claims (prices, durations, dates, superlatives, \"from\"/\"up to\" figures) against the URL the page cites for them, using your web fetch tool. Quote what the source actually says. If you can't fetch it, or the figure may sit in a booking widget or page data your fetch doesn't show, say \"could not verify\"; never guess, and never call that \"not supported\".",
     lint.length ? `4. Lint already flags these; repeat one only if it matters to the reader:\n${lint.map((w) => `   - ${w}`).join("\n")}` : "4. Lint flags nothing mechanical.",
     "",
     "Rules: findings must be specific (quote the words, name the block) and fixable from facts already on the page or quoted from a source. Never suggest adding facts the page doesn't have. Skip layout and styling; the template owns those.",

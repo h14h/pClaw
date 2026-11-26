@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { isoDate, lintPage } from "../sites/grug-pages/lib/page-lint.mjs";
+import { REMOTE_PAGES_GUIDANCE } from "./prompts.ts";
 
 /** A page that passes every editorial lint rule; each test breaks one thing. */
 const GOOD = `---
@@ -188,4 +189,6 @@ test("grug-page skill: EDITORIAL.md is the one source of editorial rules; workfl
 	}
 	assert.equal((editorial.match(/^\d+\. /gm) ?? []).length, 11, "self-check questions");
 	assert.match(editorial, /Fjord Tours' "From 2,698 NOK" was the cheapest of 32 routes; Oslo → Bergen one way was 3,131 NOK\./);
+	// Remote workers get the same order in their prompt
+	assert.match(REMOTE_PAGES_GUIDANCE, /EDITORIAL\.md` rules -> `grug-page polish <slug>` -> `grug-page review <slug>`, then fix every MUST FIX yourself \(never inventing facts\) -> `grug-page build <slug>` \(fix its WARN lines\)/);
 });
