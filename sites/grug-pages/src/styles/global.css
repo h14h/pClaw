@@ -1002,7 +1002,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: --spacing(2);
+  gap: --spacing(1);
   padding: max(--spacing(2), env(safe-area-inset-top)) var(--lightbox-inset-r) 0 var(--lightbox-inset-l);
   pointer-events: none;
 
@@ -1018,7 +1018,8 @@
 }
 
 .lightbox-counter {
-  padding: --spacing(1.5) --spacing(3);
+  flex: none;
+  padding: --spacing(1.5) --spacing(2.5);
   border-radius: 9999px;
   font-size: var(--text-sm);
   line-height: --spacing(5);
@@ -1071,6 +1072,20 @@
     & svg {
       opacity: 0.4;
     }
+  }
+}
+
+/* Fit / Fill: a word, not an icon, so its state reads at a glance. */
+.lightbox-text {
+  width: auto;
+  min-width: --spacing(12);
+  padding-inline: --spacing(3.5);
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-medium);
+  line-height: --spacing(5);
+
+  & span {
+    position: relative;
   }
 }
 
@@ -1161,6 +1176,81 @@
   opacity: 1;
 }
 
+/* Waiting on a slide that isn't loaded yet: the current photo stays; a quiet pill says why nothing changed. */
+.lightbox-loading,
+.lightbox-status {
+  position: absolute;
+  left: 50%;
+  top: calc(max(--spacing(2), env(safe-area-inset-top)) + --spacing(14));
+  translate: -50% 0;
+  display: flex;
+  align-items: center;
+  gap: --spacing(2);
+  padding: --spacing(1.5) --spacing(3);
+  border-radius: 9999px;
+  font-size: var(--text-sm);
+  line-height: --spacing(5);
+  white-space: nowrap;
+  color: #fafaf9;
+  background: var(--lightbox-plate);
+}
+
+.lightbox-loading {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms ease;
+}
+
+.lightbox[data-loading] .lightbox-loading {
+  opacity: 1;
+}
+
+.lightbox[data-loading] .lightbox-hint {
+  opacity: 0;
+}
+
+.lightbox-spinner {
+  width: --spacing(3.5);
+  height: --spacing(3.5);
+  border: 2px solid rgb(255 255 255 / 0.3);
+  border-top-color: #fafaf9;
+  border-radius: 9999px;
+  animation: lightbox-spin 800ms linear infinite;
+}
+
+@keyframes lightbox-spin {
+  to {
+    rotate: 1turn;
+  }
+}
+
+.lightbox-status {
+  padding-block: --spacing(1);
+  padding-right: --spacing(1);
+
+  &[hidden] {
+    display: none;
+  }
+}
+
+.lightbox-retry {
+  min-height: --spacing(10);
+  padding-inline: --spacing(3.5);
+  border-radius: 9999px;
+  font-weight: var(--font-weight-medium);
+  color: rgb(10 9 8);
+  background: #fafaf9;
+
+  &:focus-visible {
+    outline: 2px solid var(--color-accent-dark);
+    outline-offset: 2px;
+  }
+
+  @media (pointer: coarse) {
+    min-height: --spacing(12);
+  }
+}
+
 /* Zoomed in, the caption steps aside (and out of the tab order); the controls stay. */
 .lightbox[data-zoomed] .lightbox-caption {
   visibility: hidden;
@@ -1169,8 +1259,13 @@
 
 @media (prefers-reduced-motion: reduce) {
   .lightbox-hint,
+  .lightbox-loading,
   .lightbox-button::before {
     transition: none;
+  }
+
+  .lightbox-spinner {
+    animation-duration: 2400ms;
   }
 }
 

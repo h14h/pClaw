@@ -1508,7 +1508,23 @@ test("grug-pages photo viewer: fit, panorama and tall openings, bounded zoom and
 	assert.match(client, /button\("in", "Zoom in"\)/);
 	assert.match(client, /button\("out", "Zoom out"\)/);
 	assert.match(client, /button\("reset", "Reset zoom"\)/);
-	assert.match(client, /"Fill screen" : "Show whole photo"/);
+	assert.match(client, /"Fill screen" : "Fit whole photo"/);
+	assert.match(client, /ui\.fitfillText\.textContent = whole \? "Fill" : "Fit";/);
+	// At the ceiling, + says so (name and tooltip)
+	assert.match(client, /atMax \? "Zoom in \(maximum zoom\)" : "Zoom in"/);
+	assert.match(client, /ui\.zoomIn\.title = atMax \? "Maximum zoom" : "Zoom in";/);
+	// Slides wait on a loading state (indicator after 300ms) instead of a timer; a failed load keeps the view and offers Retry
+	assert.doesNotMatch(client, /setTimeout\(done, 1500\)/);
+	assert.match(client, /loadingTimer = setTimeout\(\(\) => ui\.dialog\.setAttribute\("data-loading", ""\), 300\);/);
+	assert.match(client, /ui\.statusText\.textContent = items\.length > 1 \? `Couldn't load photo \$\{i \+ 1\}\.` : "Couldn't load this photo\.";/);
+	assert.match(client, /data-lb-retry>Retry<\/button>/);
+	// Resizes keep the picked view: Fit/Fill/opening recomputed, a manual zoom keeps the centre point
+	assert.match(client, /new ResizeObserver\(\(\) => dialog\.open && showing >= 0 && relayout\(\)\)\.observe\(stageEl\);/);
+	assert.match(client, /if \(selected === "fit"\) view = fit;/);
+	assert.match(client, /const ix = \(before\.w \/ 2 - old\.x\) \/ old\.scale;/);
+	// The pan hint shows only while the view can pan, and goes after real movement
+	assert.match(client, /const show = !userPanned && canPan\(stage, image, view\);/);
+	assert.match(client, /if \(userPanned \|\| \(Math\.abs\(view\.x - before\.x\) < 1 && Math\.abs\(view\.y - before\.y\) < 1\)\) return;/);
 	// One decode in flight; layout-sized image on whole device pixels (no transform scale seams)
 	assert.match(client, /if \(pick\.w <= shownWidth \|\| pick\.w <= pendingWidth\) return;/);
 	assert.match(client, /ui\.img\.style\.width = `\$\{snap\(image\.w \* view\.scale\)\}px`;/);

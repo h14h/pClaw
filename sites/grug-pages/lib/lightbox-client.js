@@ -44,6 +44,10 @@
   let loadToken = 0;
   let userPanned = false;
   let tapOpenedAt = -Infinity;
+  // Which view the reader picked, so a resize (rotation, a browser toolbar collapsing) keeps it:
+  // "opening" | "fit" | "fill" | "manual" (zoomed or panned by hand: the point at the centre stays put).
+  let selected = "opening";
+  let loadingTimer = 0;
 
   const dpr = () => window.devicePixelRatio || 1;
   const near = (a, b) => Math.abs(a - b) <= Math.max(a, b) * 0.01;
@@ -60,12 +64,15 @@
       button("out", "Zoom out") +
       button("in", "Zoom in") +
       button("reset", "Reset zoom") +
-      button("fitfill", "Show whole photo") +
+      '<button type="button" class="lightbox-button lightbox-text" aria-label="Fit whole photo" data-lb-fitfill><span data-lb-fitfill-text>Fit</span></button>' +
       button("close", "Close") +
       "</div></div>" +
       button("prev", "Previous photo", "lightbox-side lightbox-prev") +
       button("next", "Next photo", "lightbox-side lightbox-next") +
       '<p class="lightbox-hint" aria-hidden="true" data-lb-hint></p>' +
+      '<p class="lightbox-loading" aria-hidden="true" data-lb-loading><span class="lightbox-spinner"></span>Loading</p>' +
+      '<div class="lightbox-status" role="alert" hidden data-lb-status><span data-lb-status-text></span>' +
+      '<button type="button" class="lightbox-retry" data-lb-retry>Retry</button></div>' +
       '<div class="lightbox-caption" data-lb-caption></div>' +
       '<p class="sr-only" aria-live="polite" aria-atomic="true" data-lb-live></p>';
     document.body.append(dialog);
@@ -79,6 +86,10 @@
       zoomIn: $("in"),
       reset: $("reset"),
       fitfill: $("fitfill"),
+      fitfillText: $("fitfill-text"),
+      status: $("status"),
+      statusText: $("status-text"),
+      retry: $("retry"),
       close: $("close"),
       prev: $("prev"),
       next: $("next"),
@@ -113,23 +124,41 @@
     const isZoomed = zoomed();
     ui.dialog.toggleAttribute("data-zoomed", isZoomed);
     ui.dialog.toggleAttribute("data-pannable", canPan(stage, image, view));
-    setDisabled(ui.zoomIn, view.scale >= limits.max * 0.995);
-    setDisabled(ui.zoomOut, view.scale <= limits.min * 1.005);
+    // At the ceiling or floor, the buttons say why they do nothing (name, and a tooltip on fine pointers).
+    const atMax = view.scale >= limits.max * 0.995;
+    const atMin = view.scale <= limits.min * 1.005;
+    setDisabled(ui.zoomIn, atMax);
+    setDisabled(ui.zoomOut, atMin);
+    ui.zoomIn.setAttribute("aria-label", atMax ? "Zoom in (maximum zoom)" : "Zoom in");
+    ui.zoomOut.setAttribute("aria-label", atMin ? "Zoom out (whole photo shown)" : "Zoom out");
+    ui.zoomIn.title = atMax ? "Maximum zoom" : "Zoom in";
+    ui.zoomOut.title = atMin ? "Whole photo shown" : "Zoom out";
     setDisabled(ui.reset, near(view.scale, opening.scale) && Math.abs(view.x - opening.x) < 1 && Math.abs(view.y - opening.y) < 1);
     const whole = near(view.scale, fit.scale);
     const same = near(fit.scale, fill.scale);
     ui.fitfill.hidden = same;
-    ui.fitfill.setAttribute("aria-label", whole ? "Fill screen" : "Show whole photo");
-    ui.fitfill.innerHTML = icon(whole ? "fill" : "fit");
+    ui.fitfill.setAttribute("aria-label", whole ? "Fill screen" : "Fit whole photo");
+    ui.fitfillText.textContent = whole ? "Fill" : "Fit";
+    ui.fitfill.title = whole ? "Fill screen" : "Fit whole photo";
+    hint();
     // The caption steps aside while zoomed; anything focused in it moves to a control that stays visible.
     if (isZoomed && ui.caption.contains(document.activeElement)) ui.close.focus();
     upgrade();
   }
 
-  function setView(next, animate) {
+  function setView(next, animate, mode = "manual") {
     view = next;
+    selected = mode;
     render(animate);
   }
+
+  // A view's mode, for views that land exactly on one of the named ones (double-tap, keyboard 0).
+  const modeOf = (v) =>
+    near(v.scale, opening.scale) && Math.abs(v.x - opening.x) < 1 && Math.abs(v.y - opening.y) < 1
+      ? "opening"
+      : near(v.scale, fit.scale) && !canPan(stage, image, v)
+        ? "fit"
+        : "manual";
 
   // Swap in a sharper file once the view needs more pixels than the one showing. One decode in flight at a time;
   // the preview stays until the sharper file has decoded.
@@ -221,38 +250,81 @@
     ui.caption.hidden = !caption && !credit;
   }
 
-  function layout() {
-    measure();
+  function views() {
     opening = openingView(stage, image);
     fit = fitView(stage, image);
     fill = fillView(stage, image);
     limits = scaleLimits(stage, image, { dpr: dpr(), largest: candidates.at(-1)?.w ?? image.w });
-    view = { scale: opening.scale, x: opening.x, y: opening.y };
-    render(false);
-    hint();
   }
 
-  // Each panorama (or tall shot) says how to move around it, until the reader has panned once.
+  function layout() {
+    measure();
+    views();
+    view = { scale: opening.scale, x: opening.x, y: opening.y };
+    selected = "opening";
+    render(false);
+  }
+
+  // The stage changed size (rotation, window resize, a browser toolbar collapsing or expanding): keep the view the
+  // reader picked. Fit, Fill and the opening view are recomputed; a hand-picked zoom keeps the image point at the
+  // centre of the screen where it is, within the new bounds.
+  function relayout() {
+    const before = stage;
+    measure();
+    if (Math.abs(stage.w - before.w) < 0.5 && Math.abs(stage.h - before.h) < 0.5) return;
+    const old = view;
+    views();
+    if (selected === "fit") view = fit;
+    else if (selected === "fill") view = fill;
+    else if (selected === "opening") view = { scale: opening.scale, x: opening.x, y: opening.y };
+    else {
+      const ix = (before.w / 2 - old.x) / old.scale;
+      const iy = (before.h / 2 - old.y) / old.scale;
+      const scale = Math.min(limits.max, Math.max(limits.min, old.scale));
+      view = clampView(stage, image, { scale, x: stage.w / 2 - ix * scale, y: stage.h / 2 - iy * scale });
+    }
+    render(false);
+  }
+
+  // How to move around a photo that can move: shown while the view can pan, until the reader has moved it once.
   function hint() {
-    const show = opening.mode !== "fit" && !userPanned;
-    ui.hint.textContent = opening.mode === "pan-y" ? "Drag to scroll" : "Drag to pan";
+    const show = !userPanned && canPan(stage, image, view);
+    ui.hint.textContent = image.h * view.scale > stage.h + 0.5 && image.w * view.scale <= stage.w + 0.5 ? "Drag to scroll" : "Drag to pan";
     ui.dialog.toggleAttribute("data-hint", show);
   }
 
-  function panned() {
-    if (userPanned) return;
+  // Called with the view before a pan: the hint goes once the photo has actually moved.
+  function panned(before) {
+    if (userPanned || (Math.abs(view.x - before.x) < 1 && Math.abs(view.y - before.y) < 1)) return;
     userPanned = true;
     hint();
   }
 
-  // Show slide i. A preview not yet loaded is decoded first, so the old slide stays (whole: photo and counter)
-  // until the new one can replace it; the photo never goes blank or mismatches its caption.
+  function setLoading(on) {
+    clearTimeout(loadingTimer);
+    ui.dialog.removeAttribute("data-loading");
+    if (on) loadingTimer = setTimeout(() => ui.dialog.setAttribute("data-loading", ""), 300);
+  }
+
+  function clearStatus() {
+    ui.status.hidden = true;
+  }
+
+  // Show slide i. A slide whose preview isn't loaded yet is fetched first while the current photo, caption and
+  // counter stay together on screen (a quiet "Loading" after 300ms); only a decoded preview replaces them, so the
+  // photo never goes blank or mismatches its caption. If it fails, the current view stays and a Retry is offered.
+  // Rapid presses ask for the latest slide; earlier pending loads are dropped.
   function show(i, announce) {
     const token = ++showToken;
     index = i;
+    clearStatus();
+    setDisabled(ui.prev, i === 0);
+    setDisabled(ui.next, i === items.length - 1);
+    if (i === showing) return setLoading(false);
     const link = items[i];
     const apply = () => {
       if (token !== showToken || !ui.dialog.open) return;
+      setLoading(false);
       showing = i;
       present(link);
       const many = items.length > 1;
@@ -260,8 +332,6 @@
       ui.counter.hidden = !many;
       ui.prev.hidden = !many;
       ui.next.hidden = !many;
-      setDisabled(ui.prev, i === 0);
-      setDisabled(ui.next, i === items.length - 1);
       layout();
       if (announce) ui.live.textContent = `${i + 1} of ${items.length}: ${altOf(link)}`;
       warm(i + 1);
@@ -269,9 +339,23 @@
     };
     const thumb = link.querySelector("img");
     if (thumb && thumb.complete && thumb.naturalWidth > 0) return apply();
+    setLoading(true);
     const pre = new Image();
     pre.src = previewOf(link);
-    Promise.race([pre.decode().catch(() => {}), new Promise((done) => setTimeout(done, 1500))]).then(apply);
+    pre
+      .decode()
+      .then(apply)
+      .catch(() => {
+        if (token !== showToken || !ui.dialog.open) return;
+        setLoading(false);
+        ui.statusText.textContent = items.length > 1 ? `Couldn't load photo ${i + 1}.` : "Couldn't load this photo.";
+        ui.status.hidden = false;
+        ui.retry.onclick = () => {
+          ui.retry.blur();
+          show(i, announce);
+          ui.dialog.focus();
+        };
+      });
   }
 
   function step(delta) {
@@ -302,6 +386,8 @@
   function onClosed() {
     loadToken += 1;
     showToken += 1;
+    setLoading(false);
+    clearStatus();
     const target = items[showing] ?? origin;
     if (carousel && target !== origin && typeof carousel.goTo === "function") carousel.goTo(items.indexOf(target));
     target?.focus({ preventScroll: true });
@@ -322,10 +408,11 @@
     enabled(next, () => step(1));
     enabled(zoomIn, () => centreZoom(1.5));
     enabled(zoomOut, () => centreZoom(1 / 1.5));
-    enabled(reset, () => setView({ scale: opening.scale, x: opening.x, y: opening.y }, true));
-    fitfill.addEventListener("click", () => setView(near(view.scale, fit.scale) ? fill : fit, true));
+    enabled(reset, () => setView({ scale: opening.scale, x: opening.x, y: opening.y }, true, "opening"));
+    fitfill.addEventListener("click", () => (near(view.scale, fit.scale) ? setView(fill, true, "fill") : setView(fit, true, "fit")));
     dialog.addEventListener("close", onClosed);
-    window.addEventListener("resize", () => dialog.open && layout());
+    // Any change to the stage's size, including iOS and in-app browser toolbars sliding in and out.
+    new ResizeObserver(() => dialog.open && showing >= 0 && relayout()).observe(stageEl);
 
     // Tab and Shift+Tab cycle through the controls that are on screen.
     const focusables = () =>
@@ -347,13 +434,14 @@
       const overflowX = image.w * view.scale > stage.w + 0.5;
       const overflowY = image.h * view.scale > stage.h + 0.5;
       const move = (dx, dy) => {
-        panned();
+        const before = view;
         setView(panBy(stage, image, view, dx, dy), true);
+        panned(before);
       };
       const key = event.key;
       if (key === "+" || key === "=") centreZoom(1.5);
       else if (key === "-" || key === "_") centreZoom(1 / 1.5);
-      else if (key === "0") setView({ scale: opening.scale, x: opening.x, y: opening.y }, true);
+      else if (key === "0") setView({ scale: opening.scale, x: opening.x, y: opening.y }, true, "opening");
       else if (key === "ArrowLeft") overflowX ? move(stage.w * 0.2, 0) : step(-1);
       else if (key === "ArrowRight") overflowX ? move(-stage.w * 0.2, 0) : step(1);
       else if (key === "ArrowUp" && overflowY) move(0, stage.h * 0.2);
@@ -371,8 +459,9 @@
         if (event.ctrlKey) {
           setView(zoomAt(stage, image, view, view.scale * Math.exp(-event.deltaY * 0.01), event.clientX - rect.left, event.clientY - rect.top, limits));
         } else if (canPan(stage, image, view)) {
-          panned();
+          const before = view;
           setView(panBy(stage, image, view, -event.deltaX, -event.deltaY));
+          panned(before);
         }
       },
       { passive: false },
@@ -455,8 +544,9 @@
         ui.img.style.willChange = "transform";
       }
       if (gesture.kind === "pan") {
-        panned();
+        const before = view;
         setView(panBy(stage, image, gesture.start, dx, dy));
+        panned(before);
       } else if (gesture.kind === "nav") feedback(dx, 0);
       else if (gesture.kind === "dismiss") feedback(0, Math.max(0, dy));
     });
@@ -502,7 +592,8 @@
       if (lastTap && now - lastTap.time < 320 && Math.hypot(point.x - lastTap.x, point.y - lastTap.y) < 40) {
         lastTap = null;
         closePending = false;
-        setView(toggleZoom(stage, image, view, opening, point.x, point.y, limits), true);
+        const toggled = toggleZoom(stage, image, view, opening, point.x, point.y, limits);
+        setView(toggled, true, modeOf(toggled));
         return;
       }
       lastTap = { ...point, time: now };
