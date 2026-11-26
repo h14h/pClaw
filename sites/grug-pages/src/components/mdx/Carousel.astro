@@ -27,10 +27,17 @@ if (!label || !label.trim()) {
 
 const html = Astro.slots.has("default") ? await Astro.slots.render("default") : "";
 const carousel = buildCarousel(html, label);
-// `grug-page build` prints the same warnings from its own lint first; a bare `astro build` prints them here.
-if (carousel.kind === "carousel" && process.env.GRUG_PAGE_LINTED !== "1") {
+// `grug-page build` lints first and lists the carousels it fully checked; those stay quiet here so each warning
+// prints once. Anything it couldn't check (and every carousel under a bare `astro build`) warns here.
+if (carousel.kind === "carousel") {
   const slug = Astro.url.pathname.split("/").filter(Boolean).at(-1) ?? "";
-  for (const warning of carousel.warnings) console.warn(`\nWARN ${slug}: ${warning}`);
+  let linted: string[] = [];
+  try {
+    linted = JSON.parse(process.env.GRUG_PAGE_LINTED || "[]");
+  } catch {}
+  if (!linted.includes(`${slug}\n${label.trim()}`)) {
+    for (const warning of carousel.warnings) console.warn(`\nWARN ${slug}: ${warning}`);
+  }
 }
 // A 36px circle; on touch screens the button around it grows to a 48px target without the circle getting heavier.
 // The focus ring hugs the visible circle, not the larger touch target.
@@ -94,6 +101,9 @@ const circle =
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
   class GrugCarousel extends HTMLElement {
+    /** Jump straight to a slide (the photo viewer calls this when it closes on another slide). */
+    goTo?: (i: number) => void;
+
     connectedCallback() {
       if (this.hasAttribute("data-ready")) return;
       const strip = this.querySelector<HTMLElement>("[data-carousel-strip]");
@@ -287,6 +297,13 @@ const circle =
         { rootMargin: "400px 0px" },
       );
       near.observe(this);
+
+      this.goTo = (i: number) => {
+        const to = Math.max(0, Math.min(last, i));
+        strip.scrollTo({ left: offset(to), behavior: "instant" });
+        apply(to, false);
+        announced = to;
+      };
 
       apply(nearest(), false);
       announced = index;

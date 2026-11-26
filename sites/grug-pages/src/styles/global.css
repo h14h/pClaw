@@ -724,13 +724,6 @@
   .carousel {
     --carousel-gutter: --spacing(5);
     --carousel-peek: 3rem;
-    --carousel-ring: var(--color-accent);
-    --carousel-ring-gap: var(--color-paper);
-
-    @variant dark {
-      --carousel-ring: var(--color-accent-dark);
-      --carousel-ring-gap: var(--color-obsidian);
-    }
 
     @variant sm {
       --carousel-gutter: --spacing(8);
@@ -827,31 +820,90 @@
     }
   }
 
-  /* The strip bleeds past the screen edge on phones, where a ring around it would be cut off or painted over by the
-     peek. Keyboard focus on the strip shows instead as a double ring inside the current photo's frame (accent edge,
-     page-colored separator so it reads on dark and light photos) and an underlined accent counter. It is deliberately
-     heavier than a credit link's thin outline. */
-  .carousel[data-js] .carousel-slide picture {
+  /* Every Figure's image sits in a frame (a link to the viewer, or a plain span with zoom={false}). Its ::after
+     carries focus rings inside the image, where a strip's clipping or a carousel's peek can't cut them off. */
+  .figure-frame {
     position: relative;
     display: block;
+    border-radius: min(1vw, 12px);
+    -webkit-tap-highlight-color: transparent;
+
+    & picture {
+      display: block;
+    }
 
     &::after {
       content: "";
       position: absolute;
       inset: 0;
-      border-radius: min(1vw, 12px);
+      border-radius: inherit;
       pointer-events: none;
     }
   }
 
+  .figure-zoom {
+    cursor: zoom-in;
+    outline: none;
+
+    &:focus-visible::after {
+      box-shadow:
+        inset 0 0 0 3px var(--figure-ring),
+        inset 0 0 0 5px var(--figure-ring-gap);
+    }
+  }
+
+  :root {
+    --figure-ring: var(--color-accent);
+    --figure-ring-gap: var(--color-paper);
+  }
+
+  :root.dark {
+    --figure-ring: var(--color-accent-dark);
+    --figure-ring-gap: var(--color-obsidian);
+  }
+
+  /* A small expand badge in the corner: on hover with a mouse, and with keyboard focus. Touch needs no hint; the
+     photo itself is the target. */
+  .figure-zoom-icon {
+    position: absolute;
+    top: --spacing(2);
+    right: --spacing(2);
+    display: grid;
+    place-items: center;
+    width: --spacing(8);
+    height: --spacing(8);
+    border-radius: 9999px;
+    background: rgb(12 10 9 / 0.62);
+    color: #fff;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 150ms ease;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .figure-zoom:hover .figure-zoom-icon {
+      opacity: 1;
+    }
+  }
+
+  .figure-zoom:focus-visible .figure-zoom-icon {
+    opacity: 1;
+  }
+
+  /* A credit that wraps keeps one outline around all its lines. Touch keeps the Figure's 48px inline-flex target. */
+  .figure-credit {
+    display: inline-block;
+    max-width: 100%;
+  }
 }
 
-/* Unlayered so the counter cue beats its text-stone-600 utility. */
+/* Unlayered so the counter cue beats its text-stone-600 utility. Strip focus rings the current slide's frame (works
+   for GIFs too) and underlines the counter. */
 .carousel-section:has(.carousel-strip:focus-visible) {
-  .carousel-slide[data-current] picture::after {
+  .carousel-slide[data-current] .figure-frame::after {
     box-shadow:
-      inset 0 0 0 3px var(--carousel-ring),
-      inset 0 0 0 5px var(--carousel-ring-gap);
+      inset 0 0 0 3px var(--figure-ring),
+      inset 0 0 0 5px var(--figure-ring-gap);
   }
 
   .carousel-counter {
@@ -870,6 +922,199 @@
 .carousel .carousel-slide figcaption a:focus-visible {
   outline-offset: -2px;
 }
+
+/* Photo viewer (lib/lightbox-client.js). A full-screen dark <dialog>, the same in both themes: photos read best on
+   near-black. The stage takes all gestures (touch-action: none), so iOS never zooms the page instead. */
+.lightbox {
+  --lightbox-fade: 1;
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  overscroll-behavior: contain;
+  color: #f5f5f4;
+  background: rgb(10 9 8 / var(--lightbox-fade));
+  color-scheme: dark;
+
+  &::backdrop {
+    background: rgb(10 9 8 / 0.6);
+  }
+
+  &:focus {
+    outline: none;
+  }
+}
+
+.lightbox-stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  cursor: zoom-in;
+}
+
+.lightbox[data-zoomed] .lightbox-stage,
+.lightbox[data-pannable] .lightbox-stage {
+  cursor: grab;
+}
+
+.lightbox-img {
+  position: absolute;
+  top: 0;
+  left: 0;
+  max-width: none;
+  transform-origin: 0 0;
+  image-rendering: auto;
+}
+
+.lightbox-paper {
+  background: var(--color-stone-50);
+}
+
+.lightbox-top {
+  position: absolute;
+  inset: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: max(--spacing(2), env(safe-area-inset-top)) --spacing(2) 0 --spacing(5);
+  pointer-events: none;
+  background: linear-gradient(rgb(10 9 8 / 0.55), transparent);
+
+  & > * {
+    pointer-events: auto;
+  }
+}
+
+.lightbox-counter {
+  font-size: var(--text-sm);
+  line-height: --spacing(5);
+  font-variant-numeric: tabular-nums;
+  color: #e7e5e4;
+}
+
+.lightbox-button {
+  display: grid;
+  place-items: center;
+  width: --spacing(12);
+  height: --spacing(12);
+  border-radius: 9999px;
+  color: #fafaf9;
+  touch-action: manipulation;
+
+  & svg {
+    width: --spacing(6);
+    height: --spacing(6);
+  }
+
+  &:hover {
+    background: rgb(255 255 255 / 0.1);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-accent-dark);
+    outline-offset: -2px;
+  }
+
+  &[aria-disabled="true"] {
+    opacity: 0.35;
+    cursor: default;
+  }
+}
+
+.lightbox-prev,
+.lightbox-next {
+  position: absolute;
+  top: 50%;
+  translate: 0 -50%;
+  background: rgb(10 9 8 / 0.45);
+}
+
+.lightbox-prev {
+  left: --spacing(2);
+}
+
+.lightbox-next {
+  right: --spacing(2);
+}
+
+.lightbox-caption {
+  position: absolute;
+  inset: auto 0 0;
+  max-height: 40dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: --spacing(8) --spacing(5) max(--spacing(4), env(safe-area-inset-bottom));
+  font-size: var(--text-sm);
+  line-height: --spacing(5);
+  color: #e7e5e4;
+  background: linear-gradient(transparent, rgb(10 9 8 / 0.78) 35%);
+  text-wrap: pretty;
+
+  & > span + .lightbox-credit::before {
+    content: "·";
+    display: inline-block;
+    padding-inline: --spacing(1.5);
+    color: #a8a29e;
+    text-decoration: none;
+  }
+}
+
+.lightbox-credit {
+  color: #d6d3d1;
+  text-decoration: underline;
+  text-decoration-color: rgb(255 255 255 / 0.35);
+  text-underline-offset: 3px;
+
+  &:focus-visible {
+    outline: 2px solid var(--color-accent-dark);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+}
+
+.lightbox-hint {
+  position: absolute;
+  left: 50%;
+  bottom: --spacing(28);
+  translate: -50% 0;
+  padding: --spacing(1.5) --spacing(3);
+  border-radius: 9999px;
+  font-size: var(--text-sm);
+  line-height: --spacing(5);
+  color: #fafaf9;
+  background: rgb(10 9 8 / 0.7);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 300ms ease;
+}
+
+.lightbox[data-hint] .lightbox-hint {
+  opacity: 1;
+}
+
+.lightbox[data-zoomed] .lightbox-caption,
+.lightbox[data-zoomed] .lightbox-prev,
+.lightbox[data-zoomed] .lightbox-next {
+  opacity: 0;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lightbox-hint {
+    transition: none;
+  }
+}
+
 
 /* Print stylesheet: clean ink on white paper, hide interactive chrome */
 @media print {

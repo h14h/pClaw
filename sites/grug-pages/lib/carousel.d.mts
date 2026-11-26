@@ -23,7 +23,13 @@ export declare function createSettler(options: {
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (handle: unknown) => void;
 }): CarouselSettler;
-export declare function lintCarousels(body: string, options?: { sizeOf?: (src: string) => [number, number] | undefined }): string[];
+export declare function lintCarousels(
+  body: string,
+  options?: { sizeOf?: (src: string) => [number, number] | undefined; covered?: string[] },
+): string[];
+export declare function decodeEntities(text: string): string;
+export declare function readAttrs(tag: string): Record<string, string>;
+export declare function figureTags(body: string): Record<string, string>[];
 export type PointerLike = { pointerType: string; pointerId: number; clientX: number; clientY: number };
 export declare function createPressGate(options?: { now?: () => number; slop?: number; window?: number }): {
   pointerDown(event: PointerLike): void;

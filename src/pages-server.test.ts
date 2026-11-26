@@ -1118,8 +1118,19 @@ test("grug-pages Figure: portraits fit on screen, credits are 48px touch targets
 });
 
 test("grug-pages Carousel: stacked without JS, one settled slide with JS, lazy slot-true images, and build warnings", async () => {
-	const { buildCarousel, carouselFrame, createPressGate, createSettler, lintCarousels, slideSizes, CAROUSEL_MAX_SLIDES, CAROUSEL_SMALL_FILL, CAROUSEL_TOO_MANY } =
-		await import("../sites/grug-pages/lib/carousel.mjs");
+	const {
+		buildCarousel,
+		carouselFrame,
+		createPressGate,
+		createSettler,
+		figureTags,
+		lintCarousels,
+		readAttrs,
+		slideSizes,
+		CAROUSEL_MAX_SLIDES,
+		CAROUSEL_SMALL_FILL,
+		CAROUSEL_TOO_MANY,
+	} = await import("../sites/grug-pages/lib/carousel.mjs");
 	const figure = (width: number, height: number, alt: string) =>
 		`<figure class="not-prose my-8" style="--figure-ratio: 0.6; width: min(100%, 1rem);" data-portrait="true"><picture>` +
 		`<source srcset="a.avif 480w" type="image/avif" sizes="auto, (min-width: 48rem) 44rem, calc(100vw - 2.5rem)">` +
@@ -1182,8 +1193,17 @@ test("grug-pages Carousel: stacked without JS, one settled slide with JS, lazy s
 		"</Carousel>",
 	].join("\n");
 	const sizes: Record<string, [number, number]> = { "img/a.jpg": [1600, 1000], "img/b.jpg": [1600, 1000], "img/tall.jpg": [800, 1000], "img/pano.jpg": [4300, 1000] };
-	assert.deepEqual(lintCarousels(mdx, { sizeOf: (src: string) => sizes[src] }), fillLines);
-	assert.deepEqual(lintCarousels(mdx), []);
+	const covered: string[] = [];
+	assert.deepEqual(lintCarousels(mdx, { sizeOf: (src: string) => sizes[src], covered }), fillLines);
+	assert.deepEqual(covered, ["Leg 5"]);
+	const uncovered: string[] = [];
+	assert.deepEqual(lintCarousels(mdx, { covered: uncovered }), []);
+	assert.deepEqual(uncovered, []);
+	// Either quote style, spaces around "=", entities, and ">" inside values all read the same
+	const quoted = mdx.replace('src="img/tall.jpg"', "src = 'img/tall.jpg'").replace('<Carousel label="Leg 5">', "<Carousel label = 'Leg 5'>");
+	assert.deepEqual(lintCarousels(quoted, { sizeOf: (src: string) => sizes[src] }), fillLines);
+	assert.deepEqual(readAttrs(`<Figure src = 'img/c.png' alt="A &amp; B&#39;s &gt; x" caption={x} />`), { src: "img/c.png", alt: "A & B's > x" });
+	assert.deepEqual(figureTags('<Figure src="a" alt="x > y" />\n<Figure src=\'b\' />').map((a) => a.src), ["a", "b"]);
 	assert.equal(CAROUSEL_SMALL_FILL, "This photo fills less than 70% of the carousel frame. Use a standalone Figure if the full view matters.");
 
 	// Lint: too many slides, too many carousels, one-slide carousels, and page-local carousel components
@@ -1333,8 +1353,10 @@ test("grug-pages Carousel: stacked without JS, one settled slide with JS, lazy s
 	assert.match(css, /width: max\(0px, 100% - var\(--slide-width\) - --spacing\(3\)\);/);
 	assert.match(css, /aspect-ratio: var\(--frame\);/);
 	// Strip focus: a double ring inside the current frame plus an accent counter, never a ring the peek can cover
-	assert.match(css, /\.carousel-section:has\(\.carousel-strip:focus-visible\) \{\n {2}\.carousel-slide\[data-current\] picture::after \{\n {4}box-shadow:\n {6}inset 0 0 0 3px var\(--carousel-ring\),\n {6}inset 0 0 0 5px var\(--carousel-ring-gap\);/);
-	assert.match(css, /--carousel-ring: var\(--color-accent-dark\);\n {6}--carousel-ring-gap: var\(--color-obsidian\);/);
+	assert.match(css, /\.carousel-section:has\(\.carousel-strip:focus-visible\) \{\n {2}\.carousel-slide\[data-current\] \.figure-frame::after \{\n {4}box-shadow:\n {6}inset 0 0 0 3px var\(--figure-ring\),\n {6}inset 0 0 0 5px var\(--figure-ring-gap\);/);
+	assert.match(css, /:root\.dark \{\n {4}--figure-ring: var\(--color-accent-dark\);\n {4}--figure-ring-gap: var\(--color-obsidian\);/);
+	// Credits keep one outline when they wrap
+	assert.match(css, /\.figure-credit \{\n {4}display: inline-block;\n {4}max-width: 100%;/);
 	assert.match(css, /\.carousel-counter \{\n {4}color: var\(--color-accent\);\n {4}text-decoration: underline 2px;/);
 	assert.doesNotMatch(css, /outline-offset: 4px/);
 	// Button focus hugs the 36px circle, not the 48px touch target
@@ -1346,9 +1368,113 @@ test("grug-pages Carousel: stacked without JS, one settled slide with JS, lazy s
 	assert.match(cli, /await warnPageLint\(cfg\.pagesDir, slug \? \[slug\] : slugs\);/);
 	assert.match(cli, /if \(width && height\) writeSize\(imgDir, file, width, height\);/);
 	assert.match(cli, /const SIZES_FILE = "\.sizes\.json";/);
-	assert.match(cli, /GRUG_PAGE_LINTED: "1"/);
-	assert.match(component, /process\.env\.GRUG_PAGE_LINTED !== "1"/);
+	assert.match(cli, /GRUG_PAGE_LINTED: JSON\.stringify\(covered\),/);
+	assert.match(cli, /figureTags\(body\)/);
+	assert.match(component, /if \(!linted\.includes\(`\$\{slug\}\\n\$\{label\.trim\(\)\}`\)\)/);
+	assert.match(component, /this\.goTo = \(i: number\) => \{/);
 	assert.ok(skill.includes(CAROUSEL_TOO_MANY));
 	assert.match(skill, /One sentence, up to 100 characters for carousel captions\. Put route advice in the section text\./);
 	assert.match(skill, /Never write page-local components for UI the template owns/);
+});
+
+test("grug-pages photo viewer: fit, panorama and tall openings, bounded zoom and pan, swipes, and markup", async () => {
+	const { canPan, clampView, classifySwipe, openingView, panBy, pickSource, scaleLimits, toggleZoom, zoomAt } = await import(
+		"../sites/grug-pages/lib/lightbox.mjs"
+	);
+	const phone = { w: 390, h: 844 };
+	const desktop = { w: 1280, h: 800 };
+	const near = (a: number, b: number) => assert.ok(Math.abs(a - b) < 0.01, `${a} ≈ ${b}`);
+
+	// A 3:2 photo fits (whole photo, centred); on a big screen it never blows up past 2×
+	const photo = { w: 1024, h: 683 };
+	const fit = openingView(phone, photo);
+	assert.equal(fit.mode, "fit");
+	near(fit.scale, 390 / 1024);
+	near(fit.x, 0);
+	near(fit.y, (844 - 683 * fit.scale) / 2);
+	assert.equal(openingView({ w: 4000, h: 3000 }, photo).scale, 2);
+	// A 2:3 portrait fits on desktop (not a scroll strip)
+	assert.equal(openingView(desktop, { w: 800, h: 1200 }).mode, "fit");
+
+	// The 4.3:1 Bergen panorama opens at 80% of the phone's height, centred, ready to drag sideways
+	const pano = { w: 1024, h: 237 };
+	const open = openingView(phone, pano);
+	assert.equal(open.mode, "pan-x");
+	near(open.scale, (844 * 0.8) / 237);
+	near(open.x, (390 - 1024 * open.scale) / 2);
+	near(open.y, (844 - 844 * 0.8) / 2);
+	assert.ok(canPan(phone, pano, open));
+	// ...but on a wide desktop screen it is just a fit
+	assert.equal(openingView({ w: 1280, h: 800 }, { w: 2000, h: 900 }).mode, "fit");
+	// A very tall image on a landscape screen opens to scroll vertically
+	assert.equal(openingView(desktop, { w: 600, h: 2000 }).mode, "pan-y");
+
+	// Pan is bounded: no gap at either edge, and an axis that fits stays centred
+	const left = panBy(phone, pano, open, 1e6, 500);
+	near(left.x, 0);
+	near(left.y, open.y);
+	const right = panBy(phone, pano, open, -1e6, 0);
+	near(right.x, 390 - 1024 * open.scale);
+	assert.deepEqual(clampView(phone, photo, { scale: fit.scale, x: 50, y: -50 }), { scale: fit.scale, x: 0, y: fit.y });
+
+	// Zoom keeps the point under the finger, within limits (~4 device px per image px, at least 2.5× the opening)
+	const limits = scaleLimits(fit, 3);
+	near(limits.min, fit.scale);
+	near(limits.max, Math.max(fit.scale * 2.5, 4 / 3));
+	const zoomed = zoomAt(phone, photo, fit, fit.scale * 2, 195, 422, limits);
+	near(zoomed.scale, fit.scale * 2);
+	near((195 - zoomed.x) / zoomed.scale, (195 - fit.x) / fit.scale);
+	near((422 - zoomed.y) / zoomed.scale, (422 - fit.y) / fit.scale);
+	near(zoomAt(phone, photo, fit, 100, 0, 0, limits).scale, limits.max);
+	near(zoomAt(phone, photo, fit, 0.01, 0, 0, limits).scale, limits.min);
+	// Double-tap: opening → 2.5× at the tap, anything zoomed → back to the opening view
+	const doubled = toggleZoom(phone, photo, fit, fit, 100, 400, limits);
+	near(doubled.scale, fit.scale * 2.5);
+	assert.deepEqual(toggleZoom(phone, photo, doubled, fit, 100, 400, limits), { scale: fit.scale, x: fit.x, y: fit.y });
+
+	// Swipes at the opening view: sideways moves between slides, down closes, small or diagonal drags snap back
+	assert.equal(classifySwipe(-80, 10), "next");
+	assert.equal(classifySwipe(80, -10), "prev");
+	assert.equal(classifySwipe(10, 120), "close");
+	assert.equal(classifySwipe(30, 20), null);
+	assert.equal(classifySwipe(70, 70), null);
+
+	// Sources: the smallest file wide enough for the screen at device pixel ratio, else the largest
+	const sources = [{ w: 480 }, { w: 800 }, { w: 1024 }];
+	assert.equal(pickSource(sources, 700).w, 800);
+	assert.equal(pickSource(sources, 5000).w, 1024);
+
+	const figure = readFileSync(new URL("../sites/grug-pages/src/components/mdx/Figure.astro", import.meta.url), "utf8");
+	const layout = readFileSync(new URL("../sites/grug-pages/src/layouts/ReportLayout.astro", import.meta.url), "utf8");
+	const client = readFileSync(new URL("../sites/grug-pages/lib/lightbox-client.js", import.meta.url), "utf8");
+	const css = readFileSync(new URL("../sites/grug-pages/src/styles/global.css", import.meta.url), "utf8");
+	const skill = readFileSync(new URL("../bots/grug/skills/grug-page/SKILL.md", import.meta.url), "utf8");
+
+	// Every Figure links to its largest file (no-JS viewer) with an accessible name; zoom={false} opts out
+	assert.match(figure, /zoom = true/);
+	assert.match(figure, /"aria-label": `View full size: \$\{alt\}`/);
+	assert.match(figure, /const Frame = zoom \? "a" : "span";/);
+	assert.match(figure, /getImage\(\{ src: image, widths: zoomWidths, format: "webp" \}\)/);
+	assert.match(figure, /"data-zoom-srcset": zoomSrcset/);
+	assert.match(figure, /<span data-caption>/);
+	assert.match(figure, /data-credit\n\s+class="figure-credit/);
+	// One classic inline script per report page: tested math + wiring, no imports or external files
+	assert.match(layout, /<script is:inline set:html=\{lightboxScript\} \/>/);
+	assert.match(layout, /stripComments\(lightboxMath\.replace\(\/\^export \/gm, ""\)\)/);
+	assert.doesNotMatch(client, /\bimport\b|\bexport\b|fetch\(|https?:\/\//);
+	// Native modal dialog; Esc/X/backdrop/swipe-down close; focus and scroll come back; keyboard and wheel zoom
+	assert.match(client, /ui\.dialog\.showModal\(\);/);
+	assert.match(client, /aria-label="Close"/);
+	assert.match(client, /target\?\.focus\(\{ preventScroll: true \}\);\n\s*window\.scrollTo\(scroll\[0\], scroll\[1\]\);/);
+	assert.match(client, /carousel\.goTo\(items\.indexOf\(target\)\)/);
+	assert.match(client, /if \(key === "\+" \|\| key === "="\) zoomBy\(1\.5\);/);
+	assert.match(client, /if \(event\.ctrlKey\) \{\n\s*view = zoomAt\(/);
+	assert.match(client, /dialog\.addEventListener\("gesturestart"/);
+	assert.match(client, /aria-live="polite"/);
+	assert.match(client, /if \(action === "close" && finished\.type === "touch"\) return ui\.dialog\.close\(\);/);
+	assert.match(client, /reducedMotion\.matches/);
+	// The stage owns every gesture so iOS never zooms the page; 48px buttons
+	assert.match(css, /\.lightbox-stage \{[^}]*touch-action: none;/);
+	assert.match(css, /\.lightbox-button \{[^}]*width: --spacing\(12\);\n {2}height: --spacing\(12\);/);
+	assert.match(skill, /`zoom=\{false\}` only for logos and small marks\./);
 });

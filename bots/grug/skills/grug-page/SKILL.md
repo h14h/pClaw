@@ -73,7 +73,7 @@ import { Callout, StatGrid, Stat, Details, Sources, Tabs, Figure, Carousel } fro
 - `<StatGrid columns={3}><Stat label="Pick" value="Jonsbo N3" note="$150 at Amazon" />...</StatGrid>` — compact at-a-glance metrics (`columns`: `2`, `3`, or `4`).
 - `<Tabs client:load labels={["Option A", "Option B"]}><div>...</div><div>...</div></Tabs>` — interactive tabbed views (also accepts `tabs={[{ label, content }]}`). Always include `client:load` on Svelte islands (`Tabs` and any custom `components/*.svelte`).
 - `<Details summary="Methodology and assumptions" open={false}>...</Details>` — collapsible secondary detail.
-- `<Figure src="img/3f9a1c2b7d4e.jpg" alt="..." caption="..." credit="..." href="..." [background="paper"] />` — a real image saved with `grug-page image` (see Images below). Never hand-write `src`; paste the line the command prints.
+- `<Figure src="img/3f9a1c2b7d4e.jpg" alt="..." caption="..." credit="..." href="..." [background="paper"] [zoom={false}] />` — a real image saved with `grug-page image` (see Images below). Never hand-write `src`; paste the line the command prints. Readers tap any Figure to open full screen: zoom, pan, panoramas big. `zoom={false}` only for logos and small marks.
 - `<Carousel label="Leg 2 photos: Myrdal to Flåm">` wrapping 3–6 `<Figure />` lines — swipeable photo strip (see Carousels below). No `client:load`.
 - `<Sources checked="2026-11-24">` wrapping a numbered Markdown list of links — always include at the bottom.
 - Standard Markdown tables work out of the box (automatically wrapped for mobile horizontal scroll with `tabular-nums`).

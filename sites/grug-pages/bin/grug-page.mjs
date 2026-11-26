@@ -20,7 +20,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { lintCarousels } from "../lib/carousel.mjs";
+import { figureTags, lintCarousels } from "../lib/carousel.mjs";
 import { fetchImage } from "../lib/fetch-image.mjs";
 import { createStaticHandler } from "../lib/static-handler.mjs";
 
@@ -657,7 +657,13 @@ function writeSize(imgDir, file, width, height) {
 async function pageImageSizes(pageDir, body) {
   const imgDir = join(pageDir, "img");
   const sizes = readSizes(imgDir);
-  const wanted = [...new Set([...body.matchAll(/\ssrc="\.?\/?img\/([^"/]+)"/g)].map((m) => m[1]))];
+  const wanted = [
+    ...new Set(
+      figureTags(body)
+        .map((attrs) => /^(?:\.\/)?img\/([^/]+)$/.exec(attrs.src ?? "")?.[1])
+        .filter(Boolean),
+    ),
+  ];
   const missing = wanted.filter((file) => !sizes[file] && existsSync(join(imgDir, file)));
   const sharp = missing.length > 0 ? loadSharp() : null;
   for (const file of missing) {
@@ -676,27 +682,34 @@ async function pageImageSizes(pageDir, body) {
   return (src) => (src.startsWith("img/") ? sizes[src.slice(4)] : undefined);
 }
 
-/** Non-blocking advice: carousel slide counts, carousels per page, and photos that fill too little of the frame. */
+/**
+ * Non-blocking advice: carousel slide counts, carousels per page, and photos that fill too little of the frame.
+ * Returns the warning count and the carousels whose photo fit it checked ("<slug>\n<label>"), which the build
+ * passes on so <Carousel> repeats nothing the lint already said, and still speaks up about anything it couldn't check.
+ */
 async function warnPageLint(pagesDir, slugs) {
   let count = 0;
+  const covered = [];
   for (const slug of slugs) {
     const file = [join(pagesDir, slug, "index.mdx"), join(pagesDir, `${slug}.mdx`)].find((f) => existsSync(f));
     if (!file) continue;
     const body = readFileSync(file, "utf8");
     const sizeOf = await pageImageSizes(dirname(file) === pagesDir ? join(pagesDir, slug) : dirname(file), body);
-    for (const warning of lintCarousels(body, { sizeOf })) {
+    const labels = [];
+    for (const warning of lintCarousels(body, { sizeOf, covered: labels })) {
       process.stderr.write(`WARN ${slug}: ${warning}\n`);
       count += 1;
     }
+    covered.push(...labels.map((label) => `${slug}\n${label}`));
   }
-  return count;
+  return { count, covered };
 }
 
 async function cmdLint(cfg, args) {
   const slug = args.find((a) => !a.startsWith("-"));
   if (slug) validateSlug(slug);
   const slugs = slug ? [slug] : syncablePageSlugs(cfg.pagesDir);
-  const count = await warnPageLint(cfg.pagesDir, slugs);
+  const { count } = await warnPageLint(cfg.pagesDir, slugs);
   process.stdout.write(count ? `LINT ${count} warning${count === 1 ? "" : "s"}\n` : "LINT ok\n");
 }
 
@@ -729,7 +742,7 @@ async function cmdBuild(cfg, args) {
 
   const contentPagesDir = join(cfg.siteDir, "src", "content", "pages");
   const slugs = syncPagesToSite(cfg.pagesDir, contentPagesDir);
-  await warnPageLint(cfg.pagesDir, slug ? [slug] : slugs);
+  const { covered } = await warnPageLint(cfg.pagesDir, slug ? [slug] : slugs);
 
   const astroBin = join(cfg.siteDir, "node_modules", ".bin", "astro");
   if (!existsSync(astroBin)) {
@@ -744,8 +757,8 @@ async function cmdBuild(cfg, args) {
       ...process.env,
       GRUG_PAGES_BASE: basePath,
       GRUG_PAGES_SITE: cfg.siteUrl,
-      // The lint above already printed carousel warnings; <Carousel> stays quiet so each prints once.
-      GRUG_PAGE_LINTED: "1",
+      // Carousels the lint above fully checked; <Carousel> stays quiet about those so each warning prints once.
+      GRUG_PAGE_LINTED: JSON.stringify(covered),
       ASTRO_TELEMETRY_DISABLED: "1",
     },
   });

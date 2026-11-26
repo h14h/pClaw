@@ -2,6 +2,8 @@
 import type { MarkdownHeading } from "astro";
 import BaseLayout from "./BaseLayout.astro";
 import { formatDate, withBase } from "@lib/urls";
+import lightboxMath from "../../lib/lightbox.mjs?raw";
+import lightboxClient from "../../lib/lightbox-client.js?raw";
 
 interface Props {
   slug?: string;
@@ -20,6 +22,10 @@ const showToc = tocHeadings.length >= 4;
 const homeHref = withBase("/");
 const ogImagePath = slug ? `/og/${slug}.png` : "/og/index.png";
 const canonicalPath = slug ? `/${slug}/` : undefined;
+// The photo viewer: tested zoom/pan math plus the page wiring, as one classic inline script per page.
+// Comments are dropped from the inlined copy (the sources keep them).
+const stripComments = (source: string) => source.replace(/\/\*\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*\n/gm, "");
+const lightboxScript = `(() => {\n${stripComments(lightboxMath.replace(/^export /gm, ""))}\n${stripComments(lightboxClient)}\n})();`;
 ---
 
 <BaseLayout
@@ -102,6 +108,8 @@ const canonicalPath = slug ? `/${slug}/` : undefined;
   <article class="prose mt-7 sm:mt-8">
     <slot />
   </article>
+
+  <script is:inline set:html={lightboxScript} />
 
   <footer class="print-hide mt-14 flex items-center justify-between gap-4 border-t border-stone-950/8 pt-6 text-base/6 sm:text-sm/5 dark:border-white/8">
     <a

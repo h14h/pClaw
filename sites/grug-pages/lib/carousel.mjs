@@ -97,7 +97,7 @@ export function buildCarousel(html, label = "") {
   });
   const frame = carouselFrame(ratios);
 
-  const alts = figures.map((figure, i) => decode(/\salt="([^"]*)"/.exec(figure)?.[1] ?? `slide ${i + 1}`));
+  const alts = figures.map((figure, i) => decodeEntities(/\salt="([^"]*)"/.exec(figure)?.[1] ?? `slide ${i + 1}`));
   const warnings = fillWarnings(label, ratios.map((ratio, i) => ({ alt: alts[i], ratio })));
   const slides = figures.map((figure, i) => {
     const ratio = ratios[i];
@@ -115,15 +115,6 @@ export function buildCarousel(html, label = "") {
   return { kind: "carousel", id: `carousel-${hash(html)}`, frame, slides, warnings };
 }
 
-function decode(text) {
-  return text
-    .replace(/&quot;/g, '"')
-    .replace(/&#0*39;|&apos;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&amp;/g, "&");
-}
-
 // Stable per carousel, so builds are reproducible and the buttons can name the strip they control.
 function hash(text) {
   let h = 5381;
@@ -131,24 +122,57 @@ function hash(text) {
   return h.toString(36);
 }
 
+/** Decode the HTML entities JSX allows in string attributes (named basics and numeric). */
+export function decodeEntities(text) {
+  return text.replace(/&(#x[0-9a-f]+|#\d+|quot|apos|amp|lt|gt|nbsp);/gi, (whole, code) => {
+    const lower = code.toLowerCase();
+    if (lower.startsWith("#x")) return String.fromCodePoint(parseInt(lower.slice(2), 16));
+    if (lower.startsWith("#")) return String.fromCodePoint(parseInt(lower.slice(1), 10));
+    return { quot: '"', apos: "'", amp: "&", lt: "<", gt: ">", nbsp: "\u00a0" }[lower] ?? whole;
+  });
+}
+
+// A JSX opening tag, allowing ">" inside quoted or braced attribute values.
+const tagPattern = (name) => new RegExp(`<${name}\\b(?:"[^"]*"|'[^']*'|\\{[^}]*\\}|[^'"{}>])*>`, "g");
+
 /**
- * Advice for a page's MDX body: too many slides, too many carousels, or a carousel with one image. Returns
- * human-readable warnings; an empty list means nothing to fix.
+ * The string attributes of one MDX/JSX opening tag: either quote style, spaces around "=", entities decoded.
+ * Expression attributes ({...}) are skipped. Shared by the carousel lint and the CLI's image-size lookup.
  */
-export function lintCarousels(body, { sizeOf } = {}) {
+export function readAttrs(tag) {
+  const attrs = {};
+  for (const m of tag.matchAll(/([A-Za-z_:][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
+    attrs[m[1]] = decodeEntities(m[2] ?? m[3]);
+  }
+  return attrs;
+}
+
+/** Attributes of every <Figure> in an MDX body, in order. */
+export function figureTags(body) {
+  return (body.match(tagPattern("Figure")) ?? []).map(readAttrs);
+}
+
+/**
+ * Advice for a page's MDX body: too many slides, too many carousels, a carousel with one image, a page-local
+ * carousel, and (given image sizes, from img/.sizes.json) photos that fill too little of the frame. Returns
+ * human-readable warnings; an empty list means nothing to fix. Labels of carousels whose photo fit was fully
+ * checked are added to `covered`, so the build can stay quiet about exactly those.
+ */
+export function lintCarousels(body, { sizeOf, covered } = {}) {
   const warnings = [];
-  const blocks = [...body.matchAll(/<Carousel\b[^>]*>([\s\S]*?)<\/Carousel>/g)];
+  const blocks = [...body.matchAll(/(<Carousel\b(?:"[^"]*"|'[^']*'|\{[^}]*\}|[^'"{}>])*>)([\s\S]*?)<\/Carousel>/g)];
   blocks.forEach((block, i) => {
-    const label = /\blabel="([^"]*)"/.exec(block[0])?.[1] ?? `#${i + 1}`;
-    const figures = block[1].match(/<Figure\b[^>]*>/g) ?? [];
+    const label = (readAttrs(block[1]).label ?? `#${i + 1}`).trim();
+    const figures = figureTags(block[2]);
     const slides = figures.length;
-    // With image sizes (from the page's img/.sizes.json), the same photo warnings the build prints.
-    const photos = figures.map((tag) => {
-      const src = /\ssrc="([^"]*)"/.exec(tag)?.[1] ?? "";
-      const size = sizeOf?.(src.replace(/^\.?\//, ""));
-      return size ? { alt: /\salt="([^"]*)"/.exec(tag)?.[1] ?? src, ratio: size[0] / size[1] } : null;
+    const photos = figures.map((attrs) => {
+      const size = sizeOf?.((attrs.src ?? "").replace(/^\.?\//, ""));
+      return size ? { alt: attrs.alt ?? attrs.src ?? "", ratio: size[0] / size[1] } : null;
     });
-    if (slides >= 2 && photos.every(Boolean)) warnings.push(...fillWarnings(label, photos));
+    if (slides >= 2 && photos.every(Boolean)) {
+      warnings.push(...fillWarnings(label, photos));
+      covered?.push(label);
+    }
     if (slides > CAROUSEL_MAX_SLIDES) {
       warnings.push(`Carousel "${label}" has ${slides} slides; keep it to ${CAROUSEL_MAX_SLIDES} or fewer (3–6 reads best).`);
     } else if (slides < 2) {
