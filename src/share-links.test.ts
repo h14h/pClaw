@@ -324,6 +324,8 @@ test("templates render the copy-link placeholders and the copy script (clipboard
 	assert.doesNotMatch(rows, /<li class="flex/);
 	// Its whole 48px touch target is its own: no negative margin reaching under the next row
 	assert.doesNotMatch(rows, /pointer-coarse:-my-/);
+	// The tags beside it shrink and wrap, so a long tag never widens the page
+	assert.match(rows, /<p class="min-w-0 text-base\/6 \[overflow-wrap:anywhere\]/);
 	assert.match(rows, /aria-label=\{`Copy share link for \$\{page\.title\}`\}/);
 	assert.match(rows, /pointer-coarse:min-h-12/);
 	assert.match(base, /navigator\.clipboard\.writeText\(url\)\.then\(copied, \(\) => \{/);

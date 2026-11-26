@@ -246,7 +246,7 @@
           </p>
           <div class="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
             {#if page.tags.length > 0}
-              <p class="text-base/6 text-stone-500 sm:text-sm/5 dark:text-stone-400">
+              <p class="min-w-0 text-base/6 [overflow-wrap:anywhere] text-stone-500 sm:text-sm/5 dark:text-stone-400">
                 {#each page.tags as tag, index}
                   {#if index > 0}<span aria-hidden="true" class="mx-1.5 text-stone-300 dark:text-stone-700">&middot;</span>{/if}<span>{tag}</span>
                 {/each}
