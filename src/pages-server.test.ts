@@ -1525,6 +1525,11 @@ test("grug-pages photo viewer: fit, panorama and tall openings, bounded zoom and
 	// Every opening starts clean: the new photo's caption, counter and arrows, before showModal
 	assert.match(client, /reset\(link\);\n\s*ui\.dialog\.showModal\(\);/);
 	assert.match(client, /const toward = showing < 0 \? ui\.close : i > showing \? ui\.next : ui\.prev;/);
+	// ...including interaction state; while blank, image-only controls and gestures are off but slides still move
+	assert.match(client, /image = \{ w: 1, h: 1 \};\n\s*opening = \{ mode: "fit", scale: 1, x: 0, y: 0 \};/);
+	assert.match(client, /resetGestures\(\);\n\s*\/\/ Image-only controls wait for a photo\.\n\s*for \(const control of \[ui\.zoomIn, ui\.zoomOut, ui\.reset, ui\.fitfill\]\) setDisabled\(control, true\);/);
+	assert.match(client, /if \(blank\(\)\) return;\n\s*const \[a, b\] = \[\.\.\.pointers\.values\(\)\];/);
+	assert.match(client, /enabled\(fitfill, /);
 	assert.match(client, /ui\.loadingText\.textContent = items\.length > 1 \? `Loading photo \$\{n\}` : "Loading photo";/);
 	assert.match(client, /\(toward\.hidden \? ui\.close : toward\)\.focus\(\);/);
 	assert.match(client, /if \(showing >= 0\) \{\n\s*index = showing;/);

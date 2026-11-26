@@ -43,6 +43,8 @@
   let pendingWidth = 0;
   let loadToken = 0;
   let userPanned = false;
+  // Clears the gesture state that lives with the input handlers (pointers, locks, pinch, double-tap history).
+  let resetGestures = () => {};
   let tapOpenedAt = -Infinity;
   // Which view the reader picked, so a resize (rotation, a browser toolbar collapsing) keeps it:
   // "opening" | "fit" | "fill" | "manual" (zoomed or panned by hand: the point at the centre stays put).
@@ -118,7 +120,9 @@
     stage = { w: rect.width, h: rect.height };
   }
 
-  const zoomed = () => view.scale > Math.max(opening.scale, fit.scale) * 1.01;
+  // No photo on screen yet in this viewing: only moving between slides (and closing) means anything.
+  const blank = () => showing < 0;
+  const zoomed = () => !blank() && view.scale > Math.max(opening.scale, fit.scale) * 1.01;
   const atRest = () => !zoomed();
   const setDisabled = (el, off) => el.setAttribute("aria-disabled", String(off));
 
@@ -147,6 +151,7 @@
     const whole = near(view.scale, fit.scale);
     const same = near(fit.scale, fill.scale);
     ui.fitfill.hidden = same;
+    setDisabled(ui.fitfill, false);
     ui.fitfill.setAttribute("aria-label", whole ? "Fill screen" : "Fit whole photo");
     ui.fitfillText.textContent = whole ? "Fill" : "Fit";
     ui.fitfill.title = whole ? "Fill screen" : "Fit whole photo";
@@ -420,6 +425,23 @@
     loadToken += 1;
     showToken += 1;
     showing = -1;
+    // Interaction state too, not just what shows: the last photo's size, view, zoom range and gestures must not
+    // decide what a swipe on the blank stage means.
+    image = { w: 1, h: 1 };
+    opening = { mode: "fit", scale: 1, x: 0, y: 0 };
+    fit = fill = view = { scale: 1, x: 0, y: 0 };
+    limits = { min: 1, max: 1 };
+    candidates = [];
+    shownWidth = 0;
+    pendingWidth = 0;
+    selected = "opening";
+    userPanned = false;
+    resetGestures();
+    // Image-only controls wait for a photo.
+    for (const control of [ui.zoomIn, ui.zoomOut, ui.reset, ui.fitfill]) setDisabled(control, true);
+    ui.fitfill.hidden = false;
+    ui.fitfillText.textContent = "Fit";
+    ui.fitfill.setAttribute("aria-label", "Fit whole photo");
     setLoading(false);
     clearStatus();
     ui.live.textContent = "";
@@ -466,7 +488,7 @@
     enabled(zoomIn, () => centreZoom(1.5));
     enabled(zoomOut, () => centreZoom(1 / 1.5));
     enabled(reset, () => setView({ scale: opening.scale, x: opening.x, y: opening.y }, true, "opening"));
-    fitfill.addEventListener("click", () => (near(view.scale, fit.scale) ? setView(fill, true, "fill") : setView(fit, true, "fit")));
+    enabled(fitfill, () => (near(view.scale, fit.scale) ? setView(fill, true, "fill") : setView(fit, true, "fit")));
     dialog.addEventListener("close", onClosed);
     // Any change to the stage's size, including iOS and in-app browser toolbars sliding in and out.
     new ResizeObserver(() => dialog.open && showing >= 0 && relayout()).observe(stageEl);
@@ -496,7 +518,8 @@
         panned(before);
       };
       const key = event.key;
-      if (key === "+" || key === "=") centreZoom(1.5);
+      if ((key === "+" || key === "=" || key === "-" || key === "_" || key === "0") && blank()) event.preventDefault();
+      else if (key === "+" || key === "=") centreZoom(1.5);
       else if (key === "-" || key === "_") centreZoom(1 / 1.5);
       else if (key === "0") setView({ scale: opening.scale, x: opening.x, y: opening.y }, true, "opening");
       else if (key === "ArrowLeft") overflowX ? move(stage.w * 0.2, 0) : step(-1);
@@ -512,6 +535,7 @@
       "wheel",
       (event) => {
         event.preventDefault();
+        if (blank()) return;
         const rect = stageEl.getBoundingClientRect();
         if (event.ctrlKey) {
           setView(zoomAt(stage, image, view, view.scale * Math.exp(-event.deltaY * 0.01), event.clientX - rect.left, event.clientY - rect.top, limits));
@@ -528,7 +552,7 @@
     let gestureView = null;
     dialog.addEventListener("gesturestart", (event) => {
       event.preventDefault();
-      gestureView = pointers.size === 0 ? view : null;
+      gestureView = pointers.size === 0 && !blank() ? view : null;
     });
     dialog.addEventListener("gesturechange", (event) => {
       event.preventDefault();
@@ -542,6 +566,21 @@
     let gesture = null;
     let afterPinch = false;
     let lastTap = null;
+    resetGestures = () => {
+      for (const id of pointers.keys()) {
+        try {
+          stageEl.releasePointerCapture(id);
+        } catch {}
+      }
+      pointers.clear();
+      gesture = null;
+      afterPinch = false;
+      lastTap = null;
+      closePending = false;
+      gestureView = null;
+      ui.img.style.willChange = "";
+      dialog.style.removeProperty("--lightbox-fade");
+    };
     const at = (event) => {
       const rect = stageEl.getBoundingClientRect();
       return { x: event.clientX - rect.left, y: event.clientY - rect.top, type: event.pointerType };
@@ -560,6 +599,8 @@
       stageEl.setPointerCapture(event.pointerId);
       pointers.set(event.pointerId, at(event));
       if (pointers.size >= 2) {
+        // Nothing to pinch until a photo is on screen: the extra finger is ignored.
+        if (blank()) return;
         const [a, b] = [...pointers.values()];
         lastTap = null;
         afterPinch = true;
@@ -646,6 +687,8 @@
     // Close on the tap's own click (still aimed at the stage), so no follow-up mouse event reaches the page.
     stageEl.addEventListener("click", closeIfPending);
     function tap(point) {
+      // A tap on the blank stage (photo still loading) does nothing: no zoom to toggle, nothing to tap outside of.
+      if (blank()) return;
       const now = performance.now();
       if (lastTap && now - lastTap.time < 320 && Math.hypot(point.x - lastTap.x, point.y - lastTap.y) < 40) {
         lastTap = null;

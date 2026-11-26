@@ -1182,7 +1182,8 @@
   &[aria-disabled="true"] {
     cursor: default;
 
-    & svg {
+    & svg,
+    & span {
       opacity: 0.4;
     }
   }
