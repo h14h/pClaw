@@ -126,7 +126,7 @@ Real images make pages much better when they show something words can't: the pla
 
 ## Required workflow
 
-1. **Check existing pages and write/edit factual draft**: Run `grug-page list` first. If a page on the topic already exists (or the prompt specifies an existing slug), edit `~/work/pages/<slug>/index.mdx` in place (updating `updated: "YYYY-MM-DD"`). Otherwise scaffold with `grug-page init <slug> --title "..."`. Draft to `EDITORIAL.md`: anatomy in order, one fact one home, ~400–900 words (max ~1,200 words for multi-claim fact-checks), `<Details>` for raw IDs/methodology, `<Sources>`, and any custom Svelte 5 island in `components/`. Answer its self-check before moving on.
+1. **Check existing pages and write/edit factual draft**: Run `grug-page list` first. If a page on the topic already exists (or the prompt specifies an existing slug), edit `~/work/pages/<slug>/index.mdx` in place (updating `updated: "YYYY-MM-DD"`). Otherwise scaffold with `grug-page init <slug> --title "..."`. Save the request you were given, word for word, as `~/work/pages/<slug>/.brief.md` (a dotfile, never built); on a follow-up, append the new request to it. Draft to `EDITORIAL.md`: anatomy in order, one fact one home, ~400–900 words (max ~1,200 words for multi-claim fact-checks), `<Details>` for raw IDs/methodology, `<Sources>`, and any custom Svelte 5 island in `components/`. Answer its self-check before moving on.
 2. **Run two-stage editorial polish**:
    ```bash
    grug-page polish <slug>
@@ -136,8 +136,9 @@ Real images make pages much better when they show something words can't: the pla
    ```bash
    grug-page review <slug>
    ```
-   A fresh reviewer reads the polished page against `EDITORIAL.md`, spot-checks the riskiest claims against their cited URLs, and prints numbered `MUST FIX` and `NICE TO FIX` findings. It never edits the page.
-4. **Fix every MUST FIX yourself** in `index.mdx`, and NICE TO FIX where cheap. Fix from your sources only: never invent a fact, number, date or URL to satisfy a finding. If a claim can't be supported, cut it or mark it `<Callout type="warn" title="Not verified">`. Don't re-run polish.
+   A fresh reviewer reads `.brief.md` and the polished page, verifies the two decisions the reader will act on (current lineup and full prices, itinerary routes, thresholds), spot-checks the riskiest claims against their cited URLs, reviews the copy against `EDITORIAL.md`, and prints `DECISIONS`, numbered `MUST FIX` and `NICE TO FIX` findings, and `SPOT CHECKS`. It never edits the page.
+4. **Fix every MUST FIX yourself** in `index.mdx`, and NICE TO FIX where cheap. Fix from your sources only: never invent a fact, number, date or URL to satisfy a finding. If a claim can't be supported, cut it or mark it `<Callout type="warn" title="Not verified">`. A missing current model or a broken route means research it, not paper over it. Don't re-run polish.
+   Then reread the final subtitle, lead, share summary (`summary`), decision table, and action section together, and verify every change agrees across those blocks.
 5. **Lint, build and validate**:
    ```bash
    grug-page lint <slug>
@@ -150,6 +151,7 @@ Real images make pages much better when they show something words can't: the pla
    ```
    Open the printed `PREVIEW_URL` in `agent-browser`:
    - Check desktop (`1280x800`) and mobile (`390x844`) viewports for overflow, broken tables, or awkward layout.
+   - At `320` wide, check the first screen and the widest table. If an optional opening stat pushes the lead image or the first useful decision off screen, keep it only when it changes what the reader does.
    - Toggle dark mode (`#theme-toggle`) and verify contrast and custom islands look right in both light and dark themes.
    - Interact with any `<Tabs>`, `<Carousel>`, or custom Svelte island and check `agent-browser console` / `agent-browser errors` for **zero** console or CSP errors.
    - Fix anything broken and re-run `grug-page build <slug>` if needed.

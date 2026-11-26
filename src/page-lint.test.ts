@@ -84,12 +84,19 @@ test("page lint: captions stand alone, carousel captions under 100, credits with
 	}
 	assert.match(breakIt(' credit="B / Wikimedia Commons, CC BY 2.5" href="https://x/c"', "").join("\n"), /img\/c\.jpg has no credit/);
 	assert.match(breakIt(' href="https://x/c"', "").join("\n"), /img\/c\.jpg credit has no href/);
-	// Standalone figures may run longer than carousel captions
-	assert.deepEqual(breakIt("Nærøyfjord from Bakkanosi, farms for scale.", `Nærøyfjord ${"x".repeat(110)}.`), []);
+	// Every caption, standalone too, stays under 100
+	assert.match(breakIt("Nærøyfjord from Bakkanosi, farms for scale.", `Nærøyfjord ${"x".repeat(88)}.`).join("\n"), /^Caption for img\/a\.jpg is 100 characters; one sentence under 100\.$/m);
+	assert.deepEqual(breakIt("Nærøyfjord from Bakkanosi, farms for scale.", `Nærøyfjord ${"x".repeat(87)}.`), []);
+	// One priority image
+	assert.match(breakIt('<Figure src="img/b.jpg"', '<Figure priority src="img/b.jpg"').join("\n"), /2 Figures have priority; only the opening photo/);
 });
 
 test("page lint: stats, callouts, tables", () => {
 	assert.match(breakIt(' note="Oslo to Bergen, Seabound leg times"', "").join("\n"), /Stat "In one day" has no note/);
+	// A note that only re-says the value adds no scope; one with a source or basis does
+	assert.match(breakIt('note="Oslo to Bergen, Seabound leg times"', 'note="about 12 hours"').join("\n"), /Stat "In one day" note "about 12 hours" repeats its value/);
+	assert.match(breakIt('label="In one day" value="~12 hours" note="Oslo to Bergen, Seabound leg times"', 'label="Sunset" value="~20:00" note="Sunset about 20:00"').join("\n"), /Stat "Sunset" note "Sunset about 20:00" repeats its value/);
+	assert.deepEqual(breakIt('label="In one day" value="~12 hours" note="Oslo to Bergen, Seabound leg times"', 'label="Sunset" value="~20:00" note="Sunset about 20:00 on 1 Apr, per Weather-Atlas"'), []);
 	const many = GOOD.replace("</StatGrid>", `${'  <Stat label="x" value="1" note="n" />\n'.repeat(3)}</StatGrid>`);
 	assert.match(lintPage(many).join("\n"), /StatGrid has 5 stats; keep 4 or fewer/);
 	const callouts = GOOD.replace("## Route", `${'<Callout type="note">Caveat.</Callout>\n\n'.repeat(4)}## Route`);
@@ -106,6 +113,8 @@ test("page lint: Sources link only the title; checked is the latest check on the
 	const swallowed = breakIt("[The Bergen Line, Vy](https://www.vy.no/x). 471.25 km; about 6.5 to 7.5 hours.", "[The Bergen Line, Vy (471.25 km; about 6.5 to 7.5 hours Oslo–Bergen, day or night train)](https://www.vy.no/x)");
 	assert.match(swallowed.join("\n"), /Sources: 1 of 2 link texts run over 70 characters \(#2\)/);
 	assert.match(breakIt('<Sources checked="2026-11-26">', '<Sources checked="2026-11-25">').join("\n"), /Sources checked="2026-11-25" is older than "26 Nov 2026"/);
+	// A page-wide checked date that an item contradicts with its own, earlier, check
+	assert.match(breakIt("Route, season, luggage.", "Route, season, luggage; bundle checked on 2 November 2026.").join("\n"), /Sources checked="2026-11-26" says every link was opened then, but the page says "checked on 2 November 2026"/);
 	// Travel dates and publication dates are not check dates
 	assert.deepEqual(breakIt("Route, season, luggage.", "Route, Feb 3–10, 2027 fares (Nov 13, 2026)."), []);
 	assert.match(breakIt(/<Sources[\s\S]*<\/Sources>\n/.exec(GOOD)![0], "").join("\n"), /No <Sources> block/);
@@ -147,16 +156,37 @@ else {
 				env: { ...process.env, GRUG_PAGES_WORK_DIR: join(root, "work"), GRUG_MUSE_BIN: fake, GRUG_SKILLS_DIR: skillsDir, PROMPT_LOG: log, ...env },
 			});
 
+		const noBrief = run({});
+		assert.match(noBrief.stderr, /WARN norway: no brief \(save it as .*\.brief\.md\); reviewing without it\./);
+		assert.match(readFileSync(log, "utf8"), /--- NO BRIEF SAVED: infer what the reader asked for from the title and subtitle ---/);
+		writeFileSync(join(pageDir, ".brief.md"), "Research Norway in a Nutshell from Oslo and build a page.\n");
 		const ok = run({});
 		assert.equal(ok.status, 0, ok.stderr);
 		assert.match(ok.stdout, /^REVIEW norway \(\d+s\)\nMUST FIX\n1\. subtitle: missing/);
 		assert.match(ok.stdout, /SPOT CHECKS/);
 		assert.equal(readFileSync(join(pageDir, "index.mdx"), "utf8"), page, "the page is never edited");
 		const prompt = readFileSync(log, "utf8");
-		assert.match(prompt, /--- BEGIN EDITORIAL\.md ---\n# Grug page editorial rules/);
+		assert.match(prompt, /--- BEGIN ORIGINAL BRIEF \(what the reader asked for\) ---\nResearch Norway in a Nutshell from Oslo and build a page\.\n--- END ORIGINAL BRIEF ---/);
+		assert.match(prompt, /--- BEGIN EDITORIAL\.md \(the rubric\) ---\n# Grug page editorial rules/);
+		// Decisions before copy: verify what the reader will act on, the current lineup, routes and thresholds
+		assert.match(prompt, /1\. Decisions first\. Read the original brief\. Identify the two decisions the reader is most likely to act on\. Verify them end to end\./);
+		assert.match(prompt, /open the maker's current lineup and confirm the exact generation, market, configuration, availability, and complete price/);
+		assert.match(prompt, /trace each day in order, including the evening stop, and flag backtracking, transfers, and dates the plan depends on/);
+		assert.match(prompt, /Recalculate every threshold or total that supports a recommendation against each applicable rate\. Mark a material omission or contradiction MUST FIX\./);
+		assert.ok(prompt.indexOf("1. Decisions first") < prompt.indexOf("3. Then the copy"));
+		assert.match(prompt, /^DECISIONS$/m);
 		assert.match(prompt, /Review only; do not edit, create or delete any file\./);
-		assert.match(prompt, /Spot-check the 2 or 3 riskiest factual claims/);
-		assert.match(prompt, /Never suggest adding facts the page doesn't have\./);
+		assert.match(prompt, /Spot-check the riskiest remaining claims/);
+		assert.match(prompt, /Never invent a fact: a fix uses facts already on the page or quoted from a source you opened \(name the URL\)\./);
+		// --brief-file overrides the saved brief
+		const other = join(root, "brief.txt");
+		writeFileSync(other, "Compare e-ink tablets.\n");
+		const flagged = spawnSync(process.execPath, [bin, "review", "--brief-file", other, "norway"], {
+			encoding: "utf8",
+			env: { ...process.env, GRUG_PAGES_WORK_DIR: join(root, "work"), GRUG_MUSE_BIN: fake, GRUG_SKILLS_DIR: skillsDir, PROMPT_LOG: log },
+		});
+		assert.equal(flagged.status, 0, flagged.stderr);
+		assert.match(readFileSync(log, "utf8"), /--- BEGIN ORIGINAL BRIEF[^\n]*\nCompare e-ink tablets\./);
 		// The lint's findings go along, so the reviewer spends its time on judgment
 		assert.match(prompt, /Lint already flags these[^\n]*\n\s+- No subtitle\./);
 		assert.match(prompt, /^MUST FIX$/m);
@@ -187,8 +217,16 @@ test("grug-page skill: EDITORIAL.md is the one source of editorial rules; workfl
 	for (const heading of ["## Page anatomy, in order", "## Each block adds something new", "## Claim precision", "## Images", "## Components", "## Voice", "## Self-check before build"]) {
 		assert.ok(editorial.includes(heading), heading);
 	}
-	assert.equal((editorial.match(/^\d+\. /gm) ?? []).length, 11, "self-check questions");
+	assert.equal((editorial.match(/^\d+\. /gm) ?? []).length, 12, "self-check questions");
+	assert.match(editorial, /## Decision structure by page type/);
+	assert.match(editorial, /Put the qualifying configuration, the actionable total, and any sale expiry together/);
+	assert.match(editorial, /Each day gets one default route and one default evening stop/);
+	assert.match(editorial, /Opening stats: keep one only if it changes what the reader does, and only with a source or date in its note\./);
+	assert.match(skill, /Save the request you were given, word for word, as `~\/work\/pages\/<slug>\/\.brief\.md`/);
+	assert.match(skill, /reread the final subtitle, lead, share summary \(`summary`\), decision table, and action section together/);
+	assert.match(skill, /At `320` wide, check the first screen and the widest table/);
 	assert.match(editorial, /Fjord Tours' "From 2,698 NOK" was the cheapest of 32 routes; Oslo → Bergen one way was 3,131 NOK\./);
 	// Remote workers get the same order in their prompt
-	assert.match(REMOTE_PAGES_GUIDANCE, /EDITORIAL\.md` rules -> `grug-page polish <slug>` -> `grug-page review <slug>`, then fix every MUST FIX yourself \(never inventing facts\) -> `grug-page build <slug>` \(fix its WARN lines\)/);
+	assert.match(REMOTE_PAGES_GUIDANCE, /save the request you were given, word for word, as `~\/work\/pages\/<slug>\/\.brief\.md`, then write/);
+	assert.match(REMOTE_PAGES_GUIDANCE, /EDITORIAL\.md` rules -> `grug-page polish <slug>` -> `grug-page review <slug>`, then fix every MUST FIX yourself \(never inventing facts\) and reread the final subtitle, lead, share summary, decision table, and action section together so every change agrees -> `grug-page build <slug>` \(fix its WARN lines\)/);
 });

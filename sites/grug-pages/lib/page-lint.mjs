@@ -26,6 +26,12 @@ const SUMMARY_DEPENDENT = /\bthis (?:page|guide|report|article|post)\b|\bsee (?:
 /** Dates that say when something was checked, as opposed to travel dates or publication dates. */
 const CHECKED_DATE =
   /\b(?:checked|verified|accessed|retrieved|as of|data effective)\s*:?\s*(\d{4}-\d{2}-\d{2}|\d{1,2} [A-Za-z]{3,9}\.? \d{4}|[A-Za-z]{3,9}\.? \d{1,2},? \d{4})/gi;
+/** Explicit "checked on <date>" wording: an item someone says was checked on its own, earlier, date. */
+const OWN_CHECK_DATE =
+  /\b(?:checked|verified|accessed|retrieved)(?: on)?\s*:?\s*(\d{4}-\d{2}-\d{2}|\d{1,2} [A-Za-z]{3,9}\.? \d{4}|[A-Za-z]{3,9}\.? \d{1,2},? \d{4})/gi;
+/** Words a stat note can hold without adding scope to its value. */
+const FILLER = new Set(["a", "an", "the", "about", "around", "roughly", "approx", "approximately", "on", "in", "at", "of", "for", "to", "and", "or", "is", "it", "per", "each", "only", "just", "up", "from", "with", "by", "s"]);
+const words = (text) => (text.toLowerCase().normalize("NFKD").match(/[a-z]+|\d+/g) ?? []);
 
 function frontmatter(text) {
   const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
@@ -131,8 +137,8 @@ export function lintPage(text) {
     const name = attrs.src ?? "a Figure";
     const caption = attrs.caption ?? "";
     const inCarousel = carousels.some(([a, b]) => m.index > a && m.index < b);
-    if (inCarousel && caption.length > CAPTION_MAX) {
-      warnings.push(`Carousel caption for ${name} is ${caption.length} characters; one sentence under ${CAPTION_MAX}.`);
+    if (caption.length >= CAPTION_MAX) {
+      warnings.push(`${inCarousel ? "Carousel caption" : "Caption"} for ${name} is ${caption.length} characters; one sentence under ${CAPTION_MAX}.`);
     }
     const relative = RELATIVE_CAPTION.exec(caption);
     if (relative) {
@@ -148,7 +154,17 @@ export function lintPage(text) {
     if (stats.length > STATS_MAX) warnings.push(`StatGrid has ${stats.length} stats; keep ${STATS_MAX} or fewer, the ones that decide.`);
     const bare = stats.filter((s) => !s.note).map((s) => `"${s.label ?? s.value ?? "?"}"`);
     if (bare.length) warnings.push(`Stat ${bare.join(", ")} has no note. Give each number its scope: what it covers, source or date.`);
+    // A note that only re-says the label and value ("Sunset ~20:00" / "about 20:00") adds no scope
+    for (const s of stats.filter((s) => s.note)) {
+      const known = new Set(words(`${s.label ?? ""} ${s.value ?? ""}`));
+      const extra = words(s.note).filter((w) => !known.has(w) && !FILLER.has(w));
+      if (extra.length < 2) warnings.push(`Stat "${s.label ?? s.value}" note "${s.note}" repeats its value. Say its scope: what it covers, source or date.`);
+    }
   }
+
+  // One opening photo loads first; more than one priority image competes with it
+  const priorities = (body.match(tagPattern("Figure")) ?? []).filter((tag) => /\spriority(?=[\s/>=])/.test(tag)).length;
+  if (priorities > 1) warnings.push(`${priorities} Figures have priority; only the opening photo on screen one gets it.`);
 
   // Callouts: a few, for caveats
   const callouts = (body.match(/<Callout\b/g) ?? []).length;
@@ -183,6 +199,10 @@ export function lintPage(text) {
       const later = [...body.matchAll(CHECKED_DATE)].map((m) => ({ raw: m[1], iso: isoDate(m[1]) })).filter((d) => d.iso && d.iso > checked);
       if (later.length) {
         warnings.push(`Sources checked="${checked}" is older than "${later[0].raw}" on the page. Re-check the links and update checked, or fix the date.`);
+      }
+      const earlier = [...body.matchAll(OWN_CHECK_DATE)].map((m) => ({ raw: m[0], iso: isoDate(m[1]) })).filter((d) => d.iso && d.iso < checked);
+      if (earlier.length) {
+        warnings.push(`Sources checked="${checked}" says every link was opened then, but the page says "${earlier[0].raw}". Re-open that source and update the item, or set checked to the earliest date.`);
       }
     }
   } else {

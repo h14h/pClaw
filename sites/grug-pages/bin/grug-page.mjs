@@ -34,7 +34,7 @@ const MAX_DIST_BYTES = 25 * 1024 * 1024;
 const DEFAULT_SITE_URL = "https://grug.h14h.com";
 const DEFAULT_POLISH_MODEL = "muse-wonder-full-1.0";
 const DEFAULT_POLISH_TIMEOUT_MS = 180_000;
-const DEFAULT_REVIEW_TIMEOUT_MS = 180_000;
+const DEFAULT_REVIEW_TIMEOUT_MS = 240_000;
 const DEFAULT_PREVIEW_STATE = "/tmp/grug-page-preview.json";
 
 const EXTERNAL_HTML_PATTERNS = [
@@ -357,44 +357,60 @@ function runMusePolishStage({ cfg, stageName, skillPath, targetFile, instruction
 }
 
 /**
- * Editorial review: a fresh one-shot subagent reads the (polished) page against EDITORIAL.md, spot-checks the
- * riskiest claims against their cited URLs, and prints numbered MUST FIX / NICE TO FIX findings. It works on a
+ * Editorial review: a fresh one-shot subagent reads the original brief and the (polished) page, verifies the two
+ * decisions the reader will act on (current lineup and prices, itinerary routes, thresholds), spot-checks the riskiest
+ * claims against their cited URLs, then reviews the copy against EDITORIAL.md, and prints numbered MUST FIX /
+ * NICE TO FIX findings. It works on a
  * read-only copy in a temp dir, so it can't change the page. A timeout or crash prints a REVIEW SKIPPED line and
  * exits 0, so the page job carries on to lint and build.
  */
 function cmdReview(cfg, args) {
-  const slug = args.find((a) => !a.startsWith("-"));
+  const briefFlag = args.indexOf("--brief-file");
+  const briefArg = briefFlag >= 0 ? args[briefFlag + 1] : undefined;
+  const slug = args.find((a, i) => !a.startsWith("-") && (briefFlag < 0 || i !== briefFlag + 1));
   validateSlug(slug);
-  const indexPath = join(cfg.pagesDir, slug, "index.mdx");
+  const pageDir = join(cfg.pagesDir, slug);
+  const indexPath = join(pageDir, "index.mdx");
   if (!existsSync(indexPath)) fail(`Page not found: ${indexPath}`);
   const editorial = readFileSync(resolveSkillFile(cfg, "grug-page", "EDITORIAL.md"), "utf8").trim();
   const pageText = readFileSync(indexPath, "utf8");
   const lint = lintPage(pageText);
+  // The request the page answers: --brief-file, else the copy the worker saved as <slug>/.brief.md
+  const briefPath = briefArg ? resolve(expandHome(briefArg)) : join(pageDir, ".brief.md");
+  if (briefArg && !existsSync(briefPath)) fail(`Brief file not found: ${briefPath}`);
+  const brief = existsSync(briefPath) ? readFileSync(briefPath, "utf8").trim() : "";
+  if (!brief) process.stderr.write(`WARN ${slug}: no brief (save it as ${join(pageDir, ".brief.md")}); reviewing without it.\n`);
 
   const prompt = [
     `You are the editorial reviewer for one grug page ("${slug}"). The page is page.mdx in the current directory.`,
-    "Your rubric is EDITORIAL.md, below. Review only; do not edit, create or delete any file.",
-    "--- BEGIN EDITORIAL.md ---",
+    "Review only; do not edit, create or delete any file. You have web search and web fetch: use them.",
+    "",
+    brief ? "--- BEGIN ORIGINAL BRIEF (what the reader asked for) ---" : "--- NO BRIEF SAVED: infer what the reader asked for from the title and subtitle ---",
+    ...(brief ? [brief, "--- END ORIGINAL BRIEF ---"] : []),
+    "",
+    "--- BEGIN EDITORIAL.md (the rubric) ---",
     editorial,
     "--- END EDITORIAL.md ---",
     "",
-    "How to review:",
-    "1. Read page.mdx once, top to bottom, as the reader would: frontmatter (title, subtitle, summary), lead, stats, table, sections, practical tips, Sources.",
-    "2. Answer EDITORIAL.md's self-check for this page. Look hardest at: the subtitle giving a verdict, facts said twice across subtitle/lead/stats/table/sections, numbers without their scope or date, captions that lean on page order, and sources whose note claims more than the source says.",
-    "3. Spot-check the 2 or 3 riskiest factual claims (prices, durations, dates, superlatives, \"from\"/\"up to\" figures) against the URL the page cites for them, using your web fetch tool. Quote what the source actually says. If you can't fetch it, or the figure may sit in a booking widget or page data your fetch doesn't show, say \"could not verify\"; never guess, and never call that \"not supported\".",
+    "How to review, in this order:",
+    "1. Decisions first. Read the original brief. Identify the two decisions the reader is most likely to act on. Verify them end to end. For \"current\" or \"buy now\" comparisons, open the maker's current lineup and confirm the exact generation, market, configuration, availability, and complete price. For itineraries, trace each day in order, including the evening stop, and flag backtracking, transfers, and dates the plan depends on. Recalculate every threshold or total that supports a recommendation against each applicable rate. Mark a material omission or contradiction MUST FIX.",
+    "2. Spot-check the riskiest remaining claims (prices, durations, dates, superlatives, \"from\"/\"up to\" figures, deal terms) against the URL the page cites. Quote what the source says. If you can't fetch it, or the figure may sit in a booking widget or page data your fetch doesn't show, say \"could not verify\"; never guess, and never call that \"not supported\".",
+    "3. Then the copy: read page.mdx top to bottom as the reader would, and answer EDITORIAL.md's self-check. Look hardest at: the subtitle giving a verdict, the decision structure for this page type, facts said twice, numbers without scope or date, comparative judgments with no named basis, and captions that lean on page order.",
     lint.length ? `4. Lint already flags these; repeat one only if it matters to the reader:\n${lint.map((w) => `   - ${w}`).join("\n")}` : "4. Lint flags nothing mechanical.",
     "",
-    "Rules: findings must be specific (quote the words, name the block) and fixable from facts already on the page or quoted from a source. Never suggest adding facts the page doesn't have. Skip layout and styling; the template owns those.",
+    "Rules: findings must be specific (quote the words, name the block) and fixable. Never invent a fact: a fix uses facts already on the page or quoted from a source you opened (name the URL). A missing current model, cheaper or newer offer, or broken route found that way is MUST FIX. Skip layout and styling; the template owns those.",
     "",
     "Reply with exactly this plain-text shape and nothing else:",
+    "DECISIONS",
+    "- <decision the reader will act on>: holds / fails: <why, with the source>",
     "MUST FIX",
     "1. <block>: \"<quoted words>\" <what is wrong>. Fix: <the change>.",
-    "(at most 8; write (none) if nothing must change)",
+    "(at most 8, most important first; write (none) if nothing must change)",
     "NICE TO FIX",
     "1. ...",
     "(at most 6; (none) if nothing)",
     "SPOT CHECKS",
-    "- <claim> | <url> | supported / not supported / changed: <what the source says>",
+    "- <claim> | <url> | supported / not supported / changed / could not verify: <what the source says>",
   ].join("\n");
 
   const tmpDir = mkdtempSync(join(tmpdir(), "grug-review-"));
@@ -1249,7 +1265,8 @@ function printHelp() {
 Commands:
   init <slug> [--title "..."]         Scaffold ~/work/pages/<slug>/index.mdx
   polish <slug>                       Two-stage unslop -> ultracave editing pass
-  review <slug>                       Fresh editorial review against EDITORIAL.md (prints findings, never edits)
+  review <slug> [--brief-file <path>] Fresh review of decisions and copy against the brief and EDITORIAL.md
+                                      (brief defaults to <slug>/.brief.md; prints findings, never edits)
   build [slug]                        Sync pages into ~/site and run astro build (runs lint first)
   lint [slug]                         Editorial checks (EDITORIAL.md) and carousel slide counts and photo fit
   preview [slug] [--port 0] [--daemon] Serve dist/ locally with production CSP

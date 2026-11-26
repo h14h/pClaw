@@ -38,6 +38,22 @@ Norway examples:
   - Before: Route "Oslo → Bergen", Legs "5", In one day, From price.
   - After: only the two numbers the lead and table don't give: time and price.
 
+## Decision structure by page type
+
+The reader acts on one or two decisions. Shape the page so each one is easy to check and act on.
+
+- Buying comparison:
+  - Put the qualifying configuration, the actionable total, and any sale expiry together, in the table row.
+  - Give each criterion the reader asked about its own heading or consistently labeled entry, with the models in the same order every time.
+  - Name the basis of any comparative judgment ("closest to paper, per Android Authority's review"). No basis: cut the judgment.
+  - "Current" or "buy now": the maker's current lineup and generation, the reader's market, and the complete price.
+- Itinerary:
+  - Each day gets one default route and one default evening stop. No backtracking across town without saying why.
+  - Name the dates the plan depends on (closures, timed slots, opening days).
+  - Booking links and slot order go at the point of action, in the day that needs them.
+- Any threshold that drives advice ("4+ rides: buy the day pass") holds at every rate the page lists, or the page says which rate it assumes.
+- Use complete sentences whenever a fragment leaves the actor, action, or condition unclear.
+
 ## Claim precision
 
 Most deductions came from here.
@@ -67,6 +83,7 @@ Most deductions came from here.
 
 - Table: one job, short cells, headings of 1–2 words (under 14 characters). The name goes in column 1 ("1. Oslo S → Myrdal"); no standalone Rank column. Summary tables go in `<Table compact>`.
 - StatGrid: 2–4 stats, each with a `note` giving its scope.
+- Opening stats: keep one only if it changes what the reader does, and only with a source or date in its note.
 - Callout: at most 2–3, for real caveats (unverified, changed, risky). Never a copy of the prose.
 - Details: secondary material (methodology, raw IDs, add-ons).
 - Template components only. No page-local carousels, galleries, tabs or accordions.
@@ -89,4 +106,5 @@ Answer each yes or no. Any "no": fix it first.
 8. Does every caption stand alone in under 100 characters, with creator, license and link in the credit?
 9. Does each image sit next to the section it shows?
 10. Does each Sources entry link only "Title, Publisher", with a plain note of what it supports, and does `checked` match the latest check on the page?
-11. Read aloud: is any fragment unclear without its grammar?
+11. Does each decision follow its page type: comparison rows with configuration, total and expiry together; itinerary days with one route and one evening stop?
+12. Read aloud: is any fragment unclear without its grammar?
