@@ -948,22 +948,53 @@
     }
   }
 
-  .share-copy-field {
+  /* Manual fallback: its own full-width line under the button's row (flex-basis: 100% in the flex-wrap rows the
+     buttons sit in), with a visible instruction. 16px text so iOS web views don't zoom when the field takes focus. */
+  .share-copy-fallback {
+    display: flex;
+    flex-direction: column;
+    flex-basis: 100%;
+    gap: --spacing(1);
     width: 100%;
     margin-top: --spacing(2);
+    font-size: var(--text-sm);
+    line-height: --spacing(5);
+    color: var(--color-stone-600);
+
+    @variant dark {
+      color: var(--color-stone-400);
+    }
+  }
+
+  .share-copy-field {
+    width: 100%;
+    min-height: --spacing(11);
     padding: --spacing(2) --spacing(3);
     border-radius: var(--radius-md);
-    font-size: var(--text-sm);
+    font-size: 16px;
+    line-height: --spacing(6);
     color: var(--color-stone-800);
     background: white;
     box-shadow: 0 0 0 1px rgb(12 10 9 / 0.12);
+
+    &:focus-visible,
+    &:focus {
+      outline: 2px solid var(--color-accent);
+      outline-offset: 1px;
+    }
 
     @variant dark {
       color: var(--color-stone-100);
       background: var(--color-obsidian-raised);
       box-shadow: 0 0 0 1px rgb(255 255 255 / 0.12);
+
+      &:focus-visible,
+      &:focus {
+        outline-color: var(--color-accent-dark);
+      }
     }
   }
+
 
   /* A credit that wraps keeps one outline around all its lines. Touch keeps the Figure's 48px inline-flex target. */
   .figure-credit {

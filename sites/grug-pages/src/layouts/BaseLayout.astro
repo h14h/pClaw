@@ -167,6 +167,9 @@ const tableHeadingScript = `const grugTableHeading = (() => {\n${tableHeadingSou
       (() => {
         const status = document.getElementById("share-copy-status");
         const legacyCopy = (text) => {
+          // The copy needs a selected field to focus; focus then goes back to whatever had it (the button, by
+          // keyboard), so a successful copy never strands keyboard users.
+          const before = document.activeElement;
           const area = document.createElement("textarea");
           area.value = text;
           area.setAttribute("readonly", "");
@@ -180,23 +183,33 @@ const tableHeadingScript = `const grugTableHeading = (() => {\n${tableHeadingSou
             ok = document.execCommand("copy");
           } catch {}
           area.remove();
+          if (before instanceof HTMLElement && before !== document.body) before.focus({ preventScroll: true });
           return ok;
         };
+        // Last resort: the link in a field on its own full-width line under the button's row, fully selected,
+        // with a visible instruction. 16px text, so iOS web views don't zoom in when it takes focus.
         const showField = (link, url) => {
-          let field = link.nextElementSibling;
-          if (!field || !field.matches("input[data-share-field]")) {
-            field = document.createElement("input");
-            field.type = "text";
-            field.readOnly = true;
-            field.dataset.shareField = "";
-            field.setAttribute("aria-label", "Share link");
-            field.className = "share-copy-field";
-            link.after(field);
+          let box = link.nextElementSibling;
+          if (!box || !box.matches("[data-share-fallback]")) {
+            box = document.createElement("label");
+            box.dataset.shareFallback = "";
+            box.className = "share-copy-fallback";
+            const text = document.createElement("span");
+            text.textContent = "Copy this link:";
+            const input = document.createElement("input");
+            input.type = "text";
+            input.readOnly = true;
+            input.dataset.shareField = "";
+            input.className = "share-copy-field";
+            box.append(text, input);
+            link.after(box);
           }
+          const field = box.querySelector("input");
           field.value = url;
-          field.focus();
+          field.focus({ preventScroll: true });
           field.select();
-          if (status) status.textContent = "Copy the share link from the field";
+          field.setSelectionRange(0, url.length);
+          if (status) status.textContent = "Copy the share link from the field below";
         };
         const timers = new WeakMap();
         document.addEventListener("click", (event) => {
